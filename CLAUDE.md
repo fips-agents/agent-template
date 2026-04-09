@@ -1,0 +1,117 @@
+# CLAUDE.md
+
+This is the agent-template project -- a monorepo of agent templates for the `fips-agents` CLI. It scaffolds production-ready AI agents for OpenShift.
+
+## Project Status
+
+Architecture is designed and documented. Implementation has not started. The agent loop template (`templates/agent-loop/`) is the priority build. The agentic workflow template is designed but deferred.
+
+## Key Documents
+
+Read these before making any architectural decisions:
+
+- `docs/architecture.md` -- The authoritative design document. Covers BaseAgent, tool planes, skills, config, deployment, MemoryHub integration. All decisions here are final unless explicitly changed.
+- `planning/requirements.md` -- What the system must do.
+- `planning/scope.md` -- What is and is not in scope.
+- `planning/constraints.md` -- Non-negotiable technical constraints.
+
+## Architecture Decisions (Quick Reference)
+
+These are settled. Do not revisit without explicit discussion.
+
+- **BaseAgent** is pure Python, async throughout, no framework dependencies (no LangChain, no LangGraph)
+- **litellm** is the LLM client -- provides OpenAI-compatible interface to 100+ providers
+- **FastMCP v3** is the MCP client -- not v2
+- **Two tool planes**: agent-code tools (plane 1, invisible to LLM) and LLM-callable tools (plane 2). Both go through BaseAgent for logging/RBAC/retry. Visibility per tool: `agent_only`, `llm_only`, `both`.
+- **@tool decorator** for local tools, same convention as FastMCP. Auto-discovered from `tools/` directory.
+- **Prompts** are Markdown with YAML frontmatter, one file per prompt in `prompts/`
+- **Skills** follow the agentskills.io spec exactly -- directory per skill, SKILL.md with frontmatter, progressive disclosure
+- **Rules** are plain Markdown files in `rules/`, no frontmatter
+- **agent.yaml** with `${VAR:-default}` env var substitution for configuration
+- **Immutable container images** -- code, tools, prompts, skills, rules all baked in. Only env-specific config is external.
+- **MemoryHub** integration is optional and first-class -- dual path: MCP for LLM, SDK (`self.memory`) for agent code. Wired via `memoryhub config init`.
+- **Helm chart** bundles only the agent. Infrastructure (vLLM, LlamaStack, PGVector) is pre-deployed via rh-ai-quickstart/ai-architecture-charts.
+- **Red Hat UBI** base images for all containers
+- **`call_model_validated()`** is a first-class BaseAgent method -- call model, validate with a tool, retry with backoff
+
+## Repository Structure
+
+```
+agent-template/
+  docs/                    # User-facing: architecture, problem, vision
+  planning/                # In-flight: requirements, scope, constraints
+  research/                # Investigations: ecosystem research, session records
+  templates/
+    agent-loop/            # Priority build
+    agentic-workflow/      # Deferred
+```
+
+The template directory (what gets cloned by fips-agents) will contain:
+
+```
+.claude/commands/          # Slash commands: plan-agent, create-agent, etc.
+.claude/rules/             # AI assistant rules
+AGENTS.md                  # Open standard
+agent.yaml                 # Config with env var substitution
+prompts/                   # Markdown + YAML frontmatter
+tools/                     # @tool decorated Python files
+skills/                    # agentskills.io spec directories
+rules/                     # Plain Markdown
+evals/                     # Harness-agnostic eval cases
+src/base_agent/            # BaseAgent package
+src/agent.py               # ~20-30 line subclass
+Containerfile              # Red Hat UBI base
+chart/                     # Helm chart
+pyproject.toml
+Makefile
+```
+
+## Development Conventions
+
+- Python async throughout -- every I/O operation is async
+- Tools use `@tool` decorator with visibility parameter
+- One tool per file in `tools/`, one prompt per file in `prompts/`, one skill per directory in `skills/`
+- Keep files under 512 lines
+- Use pydantic for config validation and structured output schemas
+- pytest for testing
+- No mocking to hide errors -- let broken things stay visibly broken
+
+## Dependencies
+
+- litellm -- LLM client
+- fastmcp (v3) -- MCP client
+- memoryhub -- optional, MemoryHub SDK
+- pydantic -- config and schema validation
+- httpx -- async HTTP
+- python-frontmatter -- parsing prompt/skill files
+
+## Slash Commands (for scaffolded agents)
+
+These live in `.claude/commands/` within the template:
+
+- `/plan-agent` -- Design the agent before writing code. Produces AGENT_PLAN.md.
+- `/create-agent` -- Scaffold agent from AGENT_PLAN.md.
+- `/exercise-agent` -- Test agent behavior through role-play scenarios.
+- `/deploy-agent` -- Build container and deploy to OpenShift.
+- `/add-tool` -- Add a new tool with @tool decorator.
+- `/add-skill` -- Add a new skill directory (agentskills.io spec).
+- `/add-memory` -- Wire MemoryHub integration via memoryhub config init.
+
+## Infrastructure Context
+
+Agents consume services from rh-ai-quickstart/ai-architecture-charts:
+- vLLM for inference
+- LlamaStack for orchestration/guardrails (treated as an external endpoint)
+- PGVector for vector storage
+- MinIO for object storage
+
+The agent talks to these through configured URLs in agent.yaml. It does not deploy or manage them.
+
+## Common Mistakes to Avoid
+
+- Do not import LlamaStack libraries into agent code -- LlamaStack is an external endpoint
+- Do not use the openai SDK directly -- use litellm for provider portability
+- Do not put tool dispatch logic in agent subclasses -- use `self.use_tool()`
+- Do not hardcode model names or endpoints -- use agent.yaml with env var substitution
+- Do not create ConfigMaps for prompts -- prompts are baked into the image for traceability
+- Do not skip the `visibility` parameter on tools -- every tool must declare its plane
