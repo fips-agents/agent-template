@@ -1,23 +1,19 @@
 # Vision
 
-A developer runs `fips-agents create agent my-agent`, picks "agent loop" or "agentic workflow," and gets a project that:
-
-1. **Compiles and runs immediately** — no setup beyond configuring an LLM endpoint
-2. **Deploys to OpenShift via Helm** — `helm install` and it's running
-3. **Connects to vLLM/LlamaStack transparently** — OpenAI-compatible API, swap providers by changing a URL
-4. **Has all the scaffolding in place** — prompts/, tools/, evals/, AGENTS.md, skills, rules, commands
-5. **Lets the developer focus on what matters** — write 20-30 lines in their agent subclass, craft prompts, define tools, run evals
+A developer runs `fips-agents create agent my-agent`, selects a template variant, and gets a project that compiles, runs locally, and deploys to OpenShift. The scaffolded project includes an agent subclass of roughly 20-30 lines, a set of prompts, a tools directory, an evals directory, a Helm chart, and AI-assisted slash commands that guide development from design through deployment. The developer's job from that point forward is to write agent logic, craft prompts, define tools, and run evals. Everything else is handled.
 
 ## What Changes
 
-- Creating a new agent goes from "days of boilerplate" to "minutes to first working agent"
-- Agent code is tiny because BaseAgent handles all the common concerns
-- Switching between LlamaStack, raw vLLM, or a cloud model is a config change, not a code change
-- Teams standardize on a common agent structure, making it easier to review, share, and maintain agents
-- The ecosystem layers (memory-hub, LlamaStack guardrails, tracing) are opt-in infrastructure decisions, not agent code decisions
+**Time to first working agent drops from days to minutes.** Today, a developer starting a new agent project spends significant time on client setup, tool plumbing, deployment configuration, and container builds before the agent does anything useful. With this template, the first `fips-agents create agent` command produces a project that runs immediately against any configured LLM endpoint.
 
-## What Success Looks Like
+**Agent code stays small even as capability grows.** BaseAgent handles LLM communication, tool dispatch, MCP connections, prompt loading, skill management, memory access, and lifecycle. The subclass implements only the agent's unique behavior. Adding a new tool means writing a decorated function in `tools/`. Adding a new prompt means dropping a Markdown file in `prompts/`. Adding memory means running `memoryhub config init`. None of these changes require modifying the agent subclass.
 
-- A developer with no agent experience can scaffold and deploy a working agent in under an hour
-- Agent subclasses stay small (20-30 lines) even as agents grow in capability
-- The template is the default way agents get built in the fips-agents ecosystem
+**Switching LLM providers is a configuration change.** Through litellm, the same agent code works against vLLM, LlamaStack, Anthropic, OpenAI, Azure, Bedrock, and 100+ other providers. Moving from a local vLLM instance to a cloud-hosted model for comparison testing requires changing a model string and endpoint URL in `agent.yaml`, not rewriting code.
+
+**Teams converge on a shared structure.** When every agent follows the same directory layout, deployment pattern, and base class, code review becomes faster, onboarding becomes simpler, and agents become interchangeable in multi-agent architectures. A developer who has worked on one agent can immediately navigate any other.
+
+**Enterprise capabilities are infrastructure decisions, not code decisions.** MemoryHub, LlamaStack guardrails, tracing, and other enterprise layers are opt-in services that the agent consumes through configuration. Adding shared memory to an agent does not mean importing a library and writing integration code; it means running a config wizard and pointing the agent at an endpoint.
+
+## Success Criteria
+
+The template is successful when a developer with no prior agent-building experience can scaffold and deploy a working agent to OpenShift in under an hour. It is successful when agent subclasses remain 20-30 lines even for production agents with multiple tools, skills, and memory integration. It is successful when it becomes the default way agents are built in the fips-agents ecosystem -- not because it is mandated, but because it is easier than the alternatives.
