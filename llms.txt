@@ -1,0 +1,29 @@
+# agent-template
+
+> Agent templates for the fips-agents CLI. Scaffolds production-ready AI agents for OpenShift with litellm, FastMCP v3, and optional MemoryHub integration.
+
+This project provides two template variants (agent loop and agentic workflow) built on a shared BaseAgent class. Agents are pure Python, async, framework-free, and deploy as immutable container images via Helm.
+
+## Start here
+
+- [README](https://github.com/redhat-ai-americas/agent-template/blob/main/README.md): Project overview and getting started
+- [docs/](https://github.com/redhat-ai-americas/agent-template/tree/main/docs): User-facing documentation index
+
+## Architecture and design
+
+- [Architecture](https://github.com/redhat-ai-americas/agent-template/blob/main/docs/architecture.md): BaseAgent class, two tool planes, deployment model, and design rationale
+- [Problem](https://github.com/redhat-ai-americas/agent-template/blob/main/docs/problem.md): The ecosystem gap and who benefits
+- [Vision](https://github.com/redhat-ai-americas/agent-template/blob/main/docs/vision.md): Success criteria and desired end state
+
+## Planning
+
+- [Requirements](https://github.com/redhat-ai-americas/agent-template/blob/main/planning/requirements.md): High-level requirements (must/should/nice-to-have)
+- [Scope](https://github.com/redhat-ai-americas/agent-template/blob/main/planning/scope.md): What is in and out of scope
+- [Constraints](https://github.com/redhat-ai-americas/agent-template/blob/main/planning/constraints.md): Technical and organizational constraints
+- [Stakeholders](https://github.com/redhat-ai-americas/agent-template/blob/main/planning/stakeholders.md): Users and affected parties
+- [Next steps](https://github.com/redhat-ai-americas/agent-template/blob/main/planning/next-steps.md): Open questions and forward plan
+
+## Research
+
+- [Ecosystem research](https://github.com/redhat-ai-americas/agent-template/blob/main/research/ecosystem-research.md): GitHub and market research on similar projects
+- [Tool Hub side quest](https://github.com/redhat-ai-americas/agent-template/blob/main/research/side-quests/tool-hub.md): Future enterprise tool registry concept
