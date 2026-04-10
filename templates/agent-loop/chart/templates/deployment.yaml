@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-template.fullname" . }}
+  labels:
+    {{- include "agent-template.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agent-template.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll pods on ConfigMap changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "agent-template.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            # Agent writes temp files (logs, MCP state), so root fs
+            # is writable by default.  Uncomment if the image supports
+            # a fully read-only root filesystem with emptyDir mounts.
+            # readOnlyRootFilesystem: true
+          envFrom:
+            - configMapRef:
+                name: {{ include "agent-template.fullname" . }}-config
+          {{- if .Values.env }}
+          env:
+            {{- toYaml .Values.env | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          # Probes are commented out because the default agent-loop
+          # template is not an HTTP server.  Uncomment and configure
+          # when the agent exposes a health endpoint.
+          #
+          # livenessProbe:
+          #   httpGet:
+          #     path: /healthz
+          #     port: http
+          #   initialDelaySeconds: 10
+          #   periodSeconds: 30
+          # readinessProbe:
+          #   httpGet:
+          #     path: /readyz
+          #     port: http
+          #   initialDelaySeconds: 5
+          #   periodSeconds: 10

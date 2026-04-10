@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "memoryhub": {
+      "type": "http",
+      "url": "https://memory-hub-mcp-memory-hub-mcp.apps.cluster-n7pd5.n7pd5.sandbox5167.opentlc.com/mcp/"
+    }
+  }
+}

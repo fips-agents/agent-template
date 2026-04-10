@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-template"
+version = "0.1.0"
+description = "BaseAgent framework — production-ready AI agent for OpenShift"
+requires-python = ">=3.11"
+dependencies = [
+    "litellm",
+    "fastmcp>=2.0.0",
+    "pydantic>=2.0",
+    "pyyaml",
+    "httpx",
+    "python-frontmatter",
+]
+
+[project.optional-dependencies]
+memory = [
+    "memoryhub",
+]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
