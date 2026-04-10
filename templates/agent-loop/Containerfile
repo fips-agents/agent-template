@@ -6,8 +6,6 @@
 # is baked in. Only env-specific config is injected at deploy time via
 # OpenShift ConfigMaps and Secrets.
 #
-# Build:
-#   podman build --platform linux/amd64 -t agent-template:latest -f Containerfile .
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -36,7 +34,7 @@ FROM registry.redhat.io/ubi9/python-311:latest AS runtime
 LABEL io.opencontainers.image.title="agent-template" \
       io.opencontainers.image.version="0.1.0" \
       io.opencontainers.image.description="BaseAgent framework — production-ready AI agent for OpenShift" \
-      io.opencontainers.image.source="https://github.com/redhat-ai-americas/agent-template" \
+      io.opencontainers.image.source="https://github.com/OWNER/REPO" \
       io.opencontainers.image.vendor="Red Hat"
 
 # Unbuffered stdout/stderr so container logs appear immediately

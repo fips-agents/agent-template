@@ -10,7 +10,7 @@
 # ---------------------------------------------------------------------------
 VENV        ?= .venv
 PYTHON      ?= python3
-PROJECT     ?= agent-demo
+PROJECT     ?= agent-template
 IMAGE_NAME  ?= agent-template
 IMAGE_TAG   ?= latest
 
