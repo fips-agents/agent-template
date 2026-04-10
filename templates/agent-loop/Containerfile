@@ -23,6 +23,7 @@ WORKDIR /opt/app-root/src
 # source files used at runtime come from the COPY in the runtime stage.
 COPY pyproject.toml .
 COPY src/          src/
+USER 0
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir .
 
@@ -54,12 +55,8 @@ COPY skills/      skills/
 COPY rules/       rules/
 COPY agent.yaml   agent.yaml
 
-# AGENTS.md is optional; copy it when present. The dot-glob trick avoids
-# a build failure when the file doesn't exist yet.
-COPY AGENTS.m[d]  ./
-
-# .memoryhub.yaml is optional; same pattern
-COPY .memoryhub.yam[l] ./
+COPY AGENTS.md         ./
+COPY .memoryhub.yaml   ./
 
 # Ensure all copied files are readable by the non-root runtime user.
 # UBI s2i images run as UID 1001 by default; group 0 (root) has read

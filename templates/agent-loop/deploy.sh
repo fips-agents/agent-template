@@ -22,6 +22,10 @@ echo "NOTE: Ensure your container image is pushed to a registry accessible by Op
 echo "  podman push \${IMAGE_NAME}:\${IMAGE_TAG} quay.io/your-org/\${IMAGE_NAME}:\${IMAGE_TAG}"
 echo ""
 
+# NOTE: If using OpenShift BuildConfig instead of pre-built images, ensure
+# dockerfilePath is set:
+#   oc patch bc/<name> -p '{"spec":{"strategy":{"dockerStrategy":{"dockerfilePath":"Containerfile"}}}}' -n "$PROJECT"
+
 if ! command -v oc &>/dev/null; then
     echo "Error: oc CLI not found. Install it from https://mirror.openshift.com/pub/openshift-v4/clients/ocp/"
     exit 1
@@ -52,7 +56,8 @@ if [ -d "$CHART_DIR" ]; then
 
     # If helm is available and Chart.yaml exists, prefer helm install/upgrade
     if command -v helm &>/dev/null && [ -f "$CHART_DIR/Chart.yaml" ]; then
-        helm upgrade --install agent-template "$CHART_DIR" \
+        APP_NAME="$(basename "$(pwd)")"
+        helm upgrade --install "$APP_NAME" "$CHART_DIR" \
             -n "$PROJECT" \
             --wait
     else

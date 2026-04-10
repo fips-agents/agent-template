@@ -43,6 +43,9 @@ config:
 #           key: api-key
 env: []
 
+probes:
+  enabled: false
+
 service:
   port: 8080
 

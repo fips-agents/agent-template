@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from base_agent.skills import (
-    Skill,
     SkillError,
     SkillLoader,
     SkillManifestEntry,

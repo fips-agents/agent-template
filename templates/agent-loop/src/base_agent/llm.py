@@ -156,8 +156,9 @@ class LLMClient:
             "model": self._config.name,
             "temperature": self._config.temperature,
             "max_tokens": self._config.max_tokens,
-            "api_base": self._config.endpoint,
         }
+        if self._config.endpoint:
+            kwargs["api_base"] = self._config.endpoint
         kwargs.update(overrides)
         return kwargs
 

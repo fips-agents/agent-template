@@ -14,7 +14,7 @@ from base_agent.agent import BaseAgent, StepOutcome, StepResult
 from base_agent.config import AgentConfig, LLMConfig, LoopConfig, BackoffConfig
 from base_agent.llm import LLMClient, ModelResponse
 from base_agent.memory import NullMemoryClient
-from base_agent.tools import ToolRegistry, ToolResult, tool
+from base_agent.tools import tool
 
 
 # ---------------------------------------------------------------------------

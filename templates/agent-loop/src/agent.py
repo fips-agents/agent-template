@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
-
-logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
 from base_agent import BaseAgent, ModelResponse, StepResult
+
+logger = logging.getLogger(__name__)
 
 
 class ResearchReport(BaseModel):
@@ -107,3 +106,20 @@ class ResearchAssistant(BaseAgent):
                 report.citations = cite_result.result.splitlines()
 
         return StepResult.done(result=report)
+
+
+if __name__ == "__main__":
+    import asyncio
+    from base_agent import load_config
+
+    async def main():
+        config = load_config()
+        agent = ResearchAssistant(config=config)
+        await agent.setup()
+        try:
+            result = await agent.run()
+            print(result)
+        finally:
+            await agent.shutdown()
+
+    asyncio.run(main())

@@ -134,7 +134,7 @@ class TestParseYamlWithEnv:
 class TestLLMConfig:
     def test_defaults(self):
         cfg = LLMConfig()
-        assert cfg.endpoint == "http://llamastack:8321/v1"
+        assert cfg.endpoint is None
         assert cfg.name == "meta-llama/Llama-3.3-70B-Instruct"
         assert cfg.temperature == 0.7
         assert cfg.max_tokens == 4096
@@ -252,7 +252,7 @@ class TestAgentConfig:
         cfg = AgentConfig.model_validate({"model": {"temperature": 0.2}})
         assert cfg.model.temperature == 0.2
         # Other fields keep defaults
-        assert cfg.model.endpoint == "http://llamastack:8321/v1"
+        assert cfg.model.endpoint is None
 
     def test_mcp_servers_list(self):
         cfg = AgentConfig.model_validate({

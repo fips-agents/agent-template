@@ -6,11 +6,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from base_agent.agent import BaseAgent, StepOutcome, StepResult
+from base_agent.agent import BaseAgent, StepOutcome
 from base_agent.config import AgentConfig, LLMConfig, LoopConfig, BackoffConfig
 from base_agent.llm import LLMClient, ModelResponse
 from base_agent.prompts import PromptLoader
@@ -349,7 +349,7 @@ class TestFormatCitationsTool:
             titles=["A", "B", "C"],
         )
         assert not result.is_error
-        lines = [l for l in result.result.splitlines() if l.strip()]
+        lines = [line for line in result.result.splitlines() if line.strip()]
         assert len(lines) == 2  # empty URL skipped
 
     async def test_format_citations_not_in_llm_tools(self):
