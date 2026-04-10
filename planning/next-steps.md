@@ -35,10 +35,13 @@
 
 - **Slash command content** — What goes in each .claude/commands/*.md file? Need to write the actual command prompts.
 - **CLAUDE.md content** — What guidance does the template's CLAUDE.md provide? Needs to cover the full agent development workflow.
-- **BaseAgent package** — Does base_agent live in the template repo (copied into each agent) or as a pip-installable package that agents depend on? If it's copied, every agent has its own copy. If it's a package, agents share one version.
 - **Example agent** — What's the scaffolded example agent? A simple ReAct loop? A hello-world that calls one tool?
 - **Makefile targets** — What make commands does the template provide? (install, run-local, test, build, deploy, etc.)
 - **Testing strategy** — How do we test BaseAgent itself? How do we test scaffolded agents?
+
+## Resolved (Session 4, 2026-04-09)
+
+- **BaseAgent distribution** — BaseAgent is copied into each scaffolded agent (fork model, not pip package). This keeps each agent self-contained and deployable independently, with no shared runtime dependency on a central package. Easier testing, versioning, and multi-team independence.
 
 ## Ready for Proposal
 
