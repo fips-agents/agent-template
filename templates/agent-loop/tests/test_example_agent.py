@@ -1,4 +1,10 @@
-"""Tests for the Research Assistant example agent, tools, prompt, and skill."""
+"""Tests for the shipped ResearchAssistant example (tools, prompts, skills, rules).
+
+This file is intentionally coupled to the example agent. When /create-agent runs
+(Step 10), it replaces this file entirely with tests for the new agent. The generic
+framework test suite (test_agent.py, test_tools.py, test_config.py, etc.) is what
+survives scaffolding.
+"""
 
 from __future__ import annotations
 

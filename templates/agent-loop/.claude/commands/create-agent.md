@@ -137,7 +137,19 @@ Preserve the `${VAR:-default}` env var substitution pattern. Every value that mi
 
 If the plan mentions a specific agent name, update the project name and description in `pyproject.toml`. Ensure any new dependencies required by tools are listed.
 
-### Step 9: Update Tests
+### Step 9: Generate AGENTS.md
+
+Populate `AGENTS.md` using `AGENT_PLAN.md` as the source. Replace the placeholder content with:
+
+- **Agent name**: Use the agent name from the plan as the top-level heading.
+- **Version**: Set to `0.1.0`.
+- **Capabilities**: Write a short paragraph drawn from the Purpose section of the plan.
+- **Tools table**: List every tool with its name, visibility (`agent_only`, `llm_only`, or `both`), and a comma-separated list of its parameters. MCP-sourced tools should be noted as such.
+- **Input / Output**: Summarize the expected inputs and outputs from the Interaction Model section of the plan.
+
+Leave the Configuration, Dependencies, Deployment, and Development sections unchanged — they are generic and correct as-is.
+
+### Step 10: Update Tests
 
 Replace `tests/test_example_agent.py` with tests for the new agent. The example tests import `ResearchAssistant` and `ResearchReport` directly and will fail after Step 2 replaces them.
 
@@ -153,7 +165,7 @@ Name the test file after the agent (e.g., `tests/test_ticket_triager.py`), or ke
 
 Also update `evals/evals.yaml` to match the new agent's eval cases from AGENT_PLAN.md. Replace the example Research Assistant cases with cases appropriate for the new agent.
 
-### Step 10: Verify
+### Step 11: Verify
 
 Run through these checks:
 
@@ -164,7 +176,7 @@ Run through these checks:
 
 If any check fails, fix the issue before proceeding. Do not leave the project in a broken state.
 
-### Step 11: Summary
+### Step 12: Summary
 
 Present the developer with a summary of what was generated:
 

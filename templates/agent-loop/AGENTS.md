@@ -1,6 +1,6 @@
-# agent-template
+# Agent Name
 
-A BaseAgent built on the `agent-loop` template.
+<!-- This file is populated by /create-agent from AGENT_PLAN.md. -->
 
 ## Version
 
@@ -8,25 +8,21 @@ A BaseAgent built on the `agent-loop` template.
 
 ## Capabilities
 
-<!-- Describe what your agent does -->
+<!-- Populated by /create-agent from the Purpose section of AGENT_PLAN.md -->
 
 ## Tools
 
-<!-- Document your agent's tools here. Example:
+<!-- Populated by /create-agent. Format:
 
-### tool_name
-
-**Visibility:** `llm_only` | `agent_only` | `both`
-
-| Parameter | Type   | Description      |
-|-----------|--------|------------------|
-| `param`   | string | What it controls |
+| Tool | Visibility | Parameters |
+|------|------------|------------|
+| `tool_name` | `llm_only` | `param1`, `param2` |
 
 -->
 
 ## Input / Output
 
-<!-- Describe expected inputs and outputs -->
+<!-- Populated by /create-agent from the Interaction Model section of AGENT_PLAN.md -->
 
 ## Configuration
 
