@@ -30,10 +30,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
+import inspect
 import json
 import logging
 import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -53,11 +56,88 @@ _FIXTURES_DIR = _EVALS_DIR / "fixtures"
 sys.path.insert(0, str(_TEMPLATE_ROOT / "src"))
 sys.path.insert(0, str(_TEMPLATE_ROOT))
 
-from base_agent.agent import StepOutcome  # noqa: E402
+from base_agent.agent import BaseAgent, StepOutcome  # noqa: E402
 from base_agent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig  # noqa: E402
 from base_agent.llm import LLMClient, ModelResponse  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic agent / model discovery
+# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def _discover_agent_class() -> type:
+    """Find the single BaseAgent subclass in agent.py.
+
+    Raises RuntimeError with an actionable message when zero or multiple
+    subclasses are found.
+    """
+    agent_module = importlib.import_module("agent")
+    candidates = [
+        obj
+        for _name, obj in inspect.getmembers(agent_module, inspect.isclass)
+        if issubclass(obj, BaseAgent) and obj is not BaseAgent
+    ]
+    if len(candidates) == 0:
+        raise RuntimeError(
+            "No BaseAgent subclass found in agent.py. "
+            "Run /create-agent to generate your agent."
+        )
+    if len(candidates) > 1:
+        names = [c.__name__ for c in candidates]
+        raise RuntimeError(
+            f"Multiple BaseAgent subclasses in agent.py: {names}. "
+            "The eval runner expects exactly one."
+        )
+    return candidates[0]
+
+
+@lru_cache(maxsize=1)
+def _discover_output_model() -> type | None:
+    """Find a Pydantic BaseModel subclass in agent.py for structured output.
+
+    Returns None if the agent does not define one (i.e. does not use
+    structured output).
+    """
+    from pydantic import BaseModel as PydanticBaseModel
+
+    agent_module = importlib.import_module("agent")
+    candidates = [
+        obj
+        for _name, obj in inspect.getmembers(agent_module, inspect.isclass)
+        if issubclass(obj, PydanticBaseModel) and obj is not PydanticBaseModel
+    ]
+    if not candidates:
+        return None
+    # Most agents define a single output schema; return the first.
+    return candidates[0]
+
+
+def _build_mock_instance(model_class: type) -> Any:
+    """Create a plausible mock instance of a Pydantic model from its schema.
+
+    Uses ``model_json_schema()`` to inspect fields and populate them with
+    type-appropriate placeholder values.
+    """
+    schema = model_class.model_json_schema()
+    props = schema.get("properties", {})
+    mock_data: dict[str, Any] = {}
+    for field_name, field_schema in props.items():
+        field_type = field_schema.get("type", "string")
+        if field_type == "string":
+            mock_data[field_name] = f"Mock {field_name} for eval"
+        elif field_type in ("number", "integer"):
+            mock_data[field_name] = 0.85
+        elif field_type == "boolean":
+            mock_data[field_name] = True
+        elif field_type == "array":
+            mock_data[field_name] = ["https://example.com/eval-source"]
+        else:
+            mock_data[field_name] = f"mock_{field_name}"
+    return model_class(**mock_data)
 
 
 # ---------------------------------------------------------------------------
@@ -176,13 +256,16 @@ def _make_tool_call_obj(name: str, arguments: dict[str, Any]) -> Any:
 def _build_mock_responses(
     query: str,
     fixture_data: dict[str, Any] | None = None,
-) -> tuple[list[Any], Any, str]:
+) -> tuple[list[Any], Any | None, str]:
     """Produce the sequence of mock LLM responses for a single eval case.
 
-    Returns (call_model_side_effects, report_data, validation_text).
-    """
-    from agent import ResearchReport  # noqa: E402 — deferred to avoid circular
+    Returns (call_model_side_effects, report_or_none, validation_text).
 
+    The report is built from whatever Pydantic model the agent defines in
+    agent.py.  If no model is found (the agent does not use structured
+    output), *report* is None and callers should skip call_model_json
+    mocking.
+    """
     # Detect multi-step queries (comparisons, "vs", multiple topics).
     multi_step_keywords = {"compare", "vs", "versus", "difference", "between"}
     is_multi_step = any(kw in query.lower() for kw in multi_step_keywords)
@@ -222,30 +305,12 @@ def _build_mock_responses(
             )
         )
 
-    # Build a plausible report.  Use fixture data when available.
-    citations = ["https://example.com/source-1", "https://example.com/source-2"]
-    confidence = 0.85
-    answer_body = (
-        f"Research findings on {query}. Quantum computing uses qubits to perform "
-        "computations that exploit superposition and entanglement. Kubernetes "
-        "provides declarative container orchestration."
-    )
+    # Build a mock report from the agent's Pydantic output model.
+    output_model = _discover_output_model()
+    report: Any | None = None
+    if output_model is not None:
+        report = _build_mock_instance(output_model)
 
-    # Lower confidence for off-topic / edge cases.
-    off_topic_keywords = {"poem", "joke", "story", "recipe", "song"}
-    if any(kw in query.lower() for kw in off_topic_keywords):
-        confidence = 0.3
-        answer_body = (
-            "This query falls outside my research expertise. "
-            "I can attempt a response but with low confidence."
-        )
-        citations = []
-
-    report = ResearchReport(
-        answer=answer_body,
-        confidence=confidence,
-        citations=citations,
-    )
     validation_text = "The report addresses the query."
 
     return side_effects, report, validation_text
@@ -257,12 +322,12 @@ def _build_mock_responses(
 
 
 async def create_agent(*, use_real_llm: bool = False) -> Any:
-    """Create a configured ResearchAssistant.
+    """Create an agent instance by discovering the BaseAgent subclass in agent.py.
 
     When *use_real_llm* is False (the default), the LLM client is replaced
     with mocks so evals run without a live model endpoint.
     """
-    from agent import ResearchAssistant  # noqa: E402
+    agent_cls = _discover_agent_class()
 
     config = AgentConfig(
         model=LLMConfig(
@@ -276,7 +341,7 @@ async def create_agent(*, use_real_llm: bool = False) -> Any:
             backoff=BackoffConfig(initial=0.01, max=0.05, multiplier=2.0),
         ),
     )
-    agent = ResearchAssistant(config=config, base_dir=_TEMPLATE_ROOT)
+    agent = agent_cls(config=config, base_dir=_TEMPLATE_ROOT)
 
     if use_real_llm:
         await agent.setup()
@@ -311,8 +376,8 @@ def check_assertion(
 ) -> AssertionResult:
     """Evaluate one assertion against the agent's output.
 
-    *result* is expected to be a Pydantic model (e.g. ``ResearchReport``)
-    or ``None`` if the agent failed.
+    *result* is expected to be a Pydantic model or ``None`` if the agent
+    failed.
     """
     atype = assertion.type
     params = assertion.params
@@ -437,7 +502,8 @@ async def run_case(
                 case.input
             )
             agent.llm.call_model = AsyncMock(side_effect=side_effects)
-            agent.llm.call_model_json = AsyncMock(return_value=report)
+            if report is not None:
+                agent.llm.call_model_json = AsyncMock(return_value=report)
             agent.llm.call_model_validated = AsyncMock(
                 return_value=validation_text
             )
