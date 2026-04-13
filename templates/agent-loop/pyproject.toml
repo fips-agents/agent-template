@@ -9,7 +9,7 @@ description = "BaseAgent framework — production-ready AI agent for OpenShift"
 requires-python = ">=3.11"
 dependencies = [
     "litellm",
-    "fastmcp>=2.0.0",
+    "fastmcp>=3.0.0",
     "pydantic>=2.0",
     "pyyaml",
     "httpx",
