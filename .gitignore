@@ -58,5 +58,8 @@ htmlcov/
 .pytest_cache/
 .tox/
 
+# Session notes
+NEXT_SESSION.md
+
 # Containers
 *.tar
