@@ -32,6 +32,10 @@ PYTHON_VENV := $(VENV)/bin/python
 install: ## Create venv and install all dependencies (dev + memory extras)
 	$(PYTHON) -m venv $(VENV)
 	$(PIP) install --upgrade pip
+	# In the monorepo, install base-agent from the local package path.
+	# When cloned by fips-agents, base-agent comes from PyPI and this line
+	# is removed by the scaffolding step.
+	$(PIP) install -e "../../packages/base-agent[memory]"
 	$(PIP) install -e ".[dev,memory]"
 
 .PHONY: run-local
