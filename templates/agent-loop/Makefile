@@ -52,10 +52,10 @@ eval: ## Run eval cases against the agent (mock LLM)
 
 .PHONY: lint
 lint: ## Run ruff linter (install ruff into venv if missing)
-	@$(VENV)/bin/ruff check src/ tests/ 2>/dev/null \
+	@$(VENV)/bin/ruff check src/ tests/ evals/ 2>/dev/null \
 		|| (echo "ruff not found — installing into venv..." \
 		    && $(PIP) install ruff \
-		    && $(VENV)/bin/ruff check src/ tests/)
+		    && $(VENV)/bin/ruff check src/ tests/ evals/)
 
 # ---------------------------------------------------------------------------
 # Container
