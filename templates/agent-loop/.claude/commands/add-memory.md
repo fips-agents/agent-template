@@ -62,6 +62,24 @@ memory_hygiene:
 
 Adjust the `scopes` list based on what the developer said in Step 1.
 
+### Step 2b: Update the Containerfile
+
+Add `.memoryhub.yaml` to the container image so it is baked in at build time.
+
+In `Containerfile`, find the line `COPY AGENTS.md ./` and add the following line immediately after it:
+
+```dockerfile
+COPY .memoryhub.yaml   ./
+```
+
+Also extend the `chmod` RUN command to include `.memoryhub.yaml`:
+
+```dockerfile
+RUN chmod -R g=u,o=r src/ tools/ prompts/ skills/ rules/ agent.yaml .memoryhub.yaml \
+```
+
+Remove (or leave in place — it is harmless) the comment that `/add-memory` would add this line.
+
 ### Step 3: Update agent.yaml
 
 The `memory` section in `agent.yaml` should already point to `.memoryhub.yaml`:
