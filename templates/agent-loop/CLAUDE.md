@@ -82,6 +82,22 @@ class MyAgent(BaseAgent):
         # this is the LLM's dispatch path; for agent-code-initiated calls,
         # use self.use_tool() instead)
         while response.tool_calls:
+            # Append assistant message first -- tool_results must follow a tool_use.
+            self.messages.append({
+                "role": "assistant",
+                "content": response.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in response.tool_calls
+                ],
+            })
             for tc in response.tool_calls:
                 args = json.loads(tc.function.arguments) if tc.function.arguments else {}
                 result = await self.tools.execute(tc.function.name, **args)

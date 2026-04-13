@@ -213,6 +213,68 @@ class TestResearchAssistantStep:
         # The web_search tool was executed (real stub tool)
         assert agent.llm.call_model.call_count == 2
 
+    async def test_tool_call_message_ordering(self, tmp_path: Path):
+        """Assistant message with tool_calls must precede the tool result message."""
+        agent = await self._setup_agent(tmp_path)
+        agent.add_message("user", "What is container orchestration?")
+
+        search_tc = _make_tool_call("web_search", {"query": "container orchestration"})
+        first_response = ModelResponse(
+            _mock_litellm_response(content=None, tool_calls=[search_tc])
+        )
+        second_response = ModelResponse(
+            _mock_litellm_response(
+                content="Container orchestration manages containerized apps."
+            )
+        )
+        report_data = ResearchReport(
+            answer="Container orchestration automates deployment.",
+            confidence=0.9,
+            citations=["https://example.com/containers"],
+        )
+
+        agent.llm.call_model = AsyncMock(
+            side_effect=[first_response, second_response]
+        )
+        agent.llm.call_model_json = AsyncMock(return_value=report_data)
+        agent.llm.call_model_validated = AsyncMock(return_value="Relevant.")
+
+        await agent.step()
+
+        # Find the indices of the assistant tool-use message and the tool result
+        tool_use_idx = next(
+            (
+                i
+                for i, m in enumerate(agent.messages)
+                if m.get("role") == "assistant" and m.get("tool_calls")
+            ),
+            None,
+        )
+        tool_result_idx = next(
+            (
+                i
+                for i, m in enumerate(agent.messages)
+                if m.get("role") == "tool"
+            ),
+            None,
+        )
+
+        assert tool_use_idx is not None, "No assistant message with tool_calls found"
+        assert tool_result_idx is not None, "No tool result message found"
+        assert tool_use_idx < tool_result_idx, (
+            "assistant tool_calls message must precede tool result message"
+        )
+
+        # Verify the tool_call_id on the result matches the id in the preceding
+        # assistant message's tool_calls list.
+        assistant_msg = agent.messages[tool_use_idx]
+        tool_result_msg = agent.messages[tool_result_idx]
+        assistant_tc_ids = {tc["id"] for tc in assistant_msg["tool_calls"]}
+        assert tool_result_msg["tool_call_id"] in assistant_tc_ids, (
+            f"tool_call_id {tool_result_msg['tool_call_id']!r} not found in "
+            f"assistant tool_calls ids {assistant_tc_ids}"
+        )
+
     async def test_step_formats_citations(self, tmp_path: Path):
         """step() uses the format_citations agent-only tool."""
         agent = await self._setup_agent(tmp_path)

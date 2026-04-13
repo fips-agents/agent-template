@@ -43,6 +43,23 @@ class ResearchAssistant(BaseAgent):
         # 3. Handle any tool calls the LLM made (search, follow-ups).
         #    Include tool_call_id — required by the OpenAI-compatible API.
         while response.tool_calls:
+            # Append assistant message with tool_calls to conversation history.
+            # Required: each tool_result must follow an assistant tool_use message.
+            self.messages.append({
+                "role": "assistant",
+                "content": response.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in response.tool_calls
+                ],
+            })
             for tc in response.tool_calls:
                 fn = tc.function
                 args = json.loads(fn.arguments) if fn.arguments else {}
