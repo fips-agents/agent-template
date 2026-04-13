@@ -1,4 +1,4 @@
-"""Tests for base_agent.rules — plain Markdown rule loading."""
+"""Tests for fipsagents.baseagent.rules — plain Markdown rule loading."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from base_agent.rules import Rule, RuleLoadError, RuleLoader, RuleNotFoundError
+from fipsagents.baseagent.rules import Rule, RuleLoadError, RuleLoader, RuleNotFoundError
 
 
 # ── Rule data model ─────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-"""Tests for base_agent.config — env var substitution, YAML parsing, validation."""
+"""Tests for fipsagents.baseagent.config — env var substitution, YAML parsing, validation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from base_agent.config import (
+from fipsagents.baseagent.config import (
     AgentConfig,
     BackoffConfig,
     ConfigError,

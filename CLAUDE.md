@@ -4,7 +4,7 @@ This is the agent-template project -- a monorepo of agent templates for the `fip
 
 ## Project Status
 
-Both templates are implemented. The agent-loop template (`templates/agent-loop/`) handles single-agent loops. The workflow template (`templates/workflow/`) handles multi-node directed graphs with typed state. BaseAgent is extracted into a shared pip-installable package at `packages/base-agent/`.
+Both templates are implemented. The agent-loop template (`templates/agent-loop/`) handles single-agent loops. The workflow template (`templates/workflow/`) handles multi-node directed graphs with typed state. BaseAgent is extracted into a shared pip-installable package at `packages/fipsagents/`.
 
 ## Key Documents
 
@@ -33,7 +33,7 @@ These are settled. Do not revisit without explicit discussion.
 - **Helm chart** bundles only the agent. Infrastructure (vLLM, LlamaStack, PGVector) is pre-deployed via rh-ai-quickstart/ai-architecture-charts.
 - **Red Hat UBI** base images for all containers
 - **`call_model_validated()`** is a first-class BaseAgent method -- call model, validate with a tool, retry with backoff
-- **base-agent** is a shared pip-installable package at `packages/base-agent/`. Both templates depend on it.
+- **fipsagents** is the shared pip-installable package at `packages/fipsagents/`. Both templates depend on it. Import as `from fipsagents.baseagent import BaseAgent`.
 - **WorkflowNode** protocol (`typing.Protocol`) -- structural subtyping, no inheritance coupling. Both BaseNode and AgentNode satisfy it.
 - **BaseNode** for lightweight workflow nodes (routing, gating). **AgentNode** for full-agent workflow nodes (LLM, tools, MCP).
 - **Workflow state** is a typed Pydantic model with `extra="forbid"`. Data only -- execution metadata stays in structured logs.
@@ -47,7 +47,7 @@ agent-template/
   planning/                # In-flight: requirements, scope, constraints
   research/                # Investigations: ecosystem research, session records
   packages/
-    base-agent/            # Shared BaseAgent package (pip-installable)
+    fipsagents/            # Shared BaseAgent package (pip-installable)
   templates/
     agent-loop/            # Single-agent loop template
     workflow/              # Multi-node workflow template
@@ -65,7 +65,7 @@ tools/                     # @tool decorated Python files
 skills/                    # agentskills.io spec directories
 rules/                     # Plain Markdown
 evals/                     # Harness-agnostic eval cases
-src/base_agent/            # BaseAgent package
+src/fipsagents/baseagent/  # BaseAgent package (installed via fipsagents pip package)
 src/agent.py               # ~20-30 line subclass
 Containerfile              # Red Hat UBI base
 chart/                     # Helm chart

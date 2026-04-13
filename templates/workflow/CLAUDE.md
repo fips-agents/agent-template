@@ -141,7 +141,7 @@ Same as the agent-loop template. Every tool declares its visibility:
 | `both` | Either | Rare -- only when genuinely needed by both |
 
 ```python
-from base_agent.tools import tool
+from fipsagents.baseagent.tools import tool
 
 @tool(description="Search the web", visibility="llm_only")
 async def web_search(query: str) -> str:

@@ -1,4 +1,4 @@
-"""Tests for base_agent.skills — progressive-disclosure skill loading."""
+"""Tests for fipsagents.baseagent.skills — progressive-disclosure skill loading."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from base_agent.skills import (
+from fipsagents.baseagent.skills import (
     SkillError,
     SkillLoader,
     SkillManifestEntry,

@@ -156,7 +156,7 @@ async def run_case(
 
             # Patch AgentNode instances in the graph to use mock LLM.
             from workflow.agent_node import AgentNode
-            from base_agent.llm import LLMClient
+            from fipsagents.baseagent.llm import LLMClient
 
             effect_iter = iter(side_effects)
             for node_obj in graph._nodes.values():

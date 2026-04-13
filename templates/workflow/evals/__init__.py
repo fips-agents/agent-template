@@ -1,6 +1,6 @@
 """Eval package for workflow agents.
 
-Sets up sys.path so that ``base_agent``, ``workflow``, and the template root
+Sets up sys.path so that ``fipsagents.baseagent``, ``workflow``, and the template root
 are importable from any submodule, and exports the shared path constants used
 throughout the eval suite.
 """

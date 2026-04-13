@@ -17,13 +17,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar
 
-from base_agent.config import AgentConfig, load_config
-from base_agent.llm import LLMClient, ModelResponse
-from base_agent.memory import MemoryClientBase, NullMemoryClient, create_memory_client
-from base_agent.prompts import PromptLoader, PromptNotFoundError
-from base_agent.rules import RuleLoader
-from base_agent.skills import SkillLoader
-from base_agent.tools import ToolRegistry, ToolResult
+from fipsagents.baseagent.config import AgentConfig, load_config
+from fipsagents.baseagent.llm import LLMClient, ModelResponse
+from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, create_memory_client
+from fipsagents.baseagent.prompts import PromptLoader, PromptNotFoundError
+from fipsagents.baseagent.rules import RuleLoader
+from fipsagents.baseagent.skills import SkillLoader
+from fipsagents.baseagent.tools import ToolRegistry, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -421,7 +421,7 @@ def _register_mcp_tool(
     registry: ToolRegistry, client: Any, mcp_tool: Any,
 ) -> None:
     """Wrap an MCP tool as a local callable and register it (llm_only)."""
-    from base_agent.tools import ToolMeta, _TOOL_MARKER
+    from fipsagents.baseagent.tools import ToolMeta, _TOOL_MARKER
 
     tool_name = mcp_tool.name
     tool_desc = getattr(mcp_tool, "description", "") or tool_name

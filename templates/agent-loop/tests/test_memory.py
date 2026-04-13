@@ -1,4 +1,4 @@
-"""Tests for base_agent.memory — optional MemoryHub integration."""
+"""Tests for fipsagents.baseagent.memory — optional MemoryHub integration."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from base_agent.memory import (
+from fipsagents.baseagent.memory import (
     MemoryClient,
     MemoryClientBase,
     NullMemoryClient,
@@ -237,7 +237,7 @@ class TestCreateMemoryClient:
 
         with (
             patch.dict("sys.modules", {"memoryhub": mock_memoryhub}),
-            patch("base_agent.memory.Path.home", return_value=tmp_path),
+            patch("fipsagents.baseagent.memory.Path.home", return_value=tmp_path),
         ):
             client = await create_memory_client(config_file)
 

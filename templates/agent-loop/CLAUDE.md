@@ -57,7 +57,7 @@ Each command enforces prerequisites from the previous step and tells you what to
 
 ```
 src/agent.py           # YOUR agent subclass — most work happens here
-src/base_agent/        # Framework — do not edit
+src/fipsagents/baseagent/        # Framework — do not edit
 tools/                 # One @tool-decorated .py file per tool
 prompts/system.md      # System prompt (required). Add more prompts as needed.
 skills/<name>/SKILL.md # One directory per skill, agentskills.io spec
@@ -72,7 +72,7 @@ evals/                 # Eval cases and runner
 Your agent is a subclass of `BaseAgent` that implements `step()`. Everything else is inherited.
 
 ```python
-from base_agent import BaseAgent, StepResult
+from fipsagents.baseagent import BaseAgent, StepResult
 
 class MyAgent(BaseAgent):
     async def step(self) -> StepResult:
@@ -139,7 +139,7 @@ Every tool declares its visibility:
 | `both` | Either | Rare — only when genuinely needed by both |
 
 ```python
-from base_agent import tool
+from fipsagents.baseagent import tool
 
 @tool(description="Search the web for information", visibility="llm_only")
 async def web_search(query: str) -> str:
@@ -216,7 +216,7 @@ The agent runs locally with zero external config using the defaults.
 - **Do not create ConfigMaps for prompts.** Prompts are baked into the image for traceability.
 - **Do not build on macOS without `--platform linux/amd64`.** Use `make build` (sets it automatically).
 - **Do not use `self.use_tool()` for LLM-originated tool calls.** Those go through `self.tools.execute()` in the tool-call loop. `self.use_tool()` is for agent-code-initiated calls (plane 1).
-- **Do not edit `src/base_agent/`.** It is the framework. Your code goes in `src/agent.py`, `tools/`, `prompts/`, `skills/`, and `rules/`.
+- **Do not edit `src/fipsagents/baseagent/`.** It is the framework. Your code goes in `src/agent.py`, `tools/`, `prompts/`, `skills/`, and `rules/`.
 
 ## Deployment
 

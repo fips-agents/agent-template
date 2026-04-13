@@ -1,4 +1,4 @@
-"""Tests for base_agent.agent — BaseAgent lifecycle, dispatch, and integration."""
+"""Tests for fipsagents.baseagent.agent — BaseAgent lifecycle, dispatch, and integration."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from base_agent.agent import BaseAgent, StepOutcome, StepResult
-from base_agent.config import AgentConfig, LLMConfig, LoopConfig, BackoffConfig
-from base_agent.llm import LLMClient, ModelResponse
-from base_agent.memory import NullMemoryClient
-from base_agent.tools import tool
+from fipsagents.baseagent.agent import BaseAgent, StepOutcome, StepResult
+from fipsagents.baseagent.config import AgentConfig, LLMConfig, LoopConfig, BackoffConfig
+from fipsagents.baseagent.llm import LLMClient, ModelResponse
+from fipsagents.baseagent.memory import NullMemoryClient
+from fipsagents.baseagent.tools import tool
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ class TestSetup:
     async def test_setup_discovers_tools(self, tmp_path: Path):
         """setup() discovers @tool-decorated functions from the tools dir."""
         _write_tool(tmp_path, "greet.py", (
-            "from base_agent.tools import tool\n\n"
+            "from fipsagents.baseagent.tools import tool\n\n"
             "@tool(description='Say hello', visibility='both')\n"
             "async def greet(name: str) -> str:\n"
             "    return f'hello {name}'\n"

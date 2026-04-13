@@ -10,8 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TypeVar
 
-from base_agent import BaseAgent, StepResult
-from base_agent.config import AgentConfig
+from fipsagents.baseagent import BaseAgent, StepResult
+from fipsagents.baseagent.config import AgentConfig
 
 T = TypeVar("T")
 

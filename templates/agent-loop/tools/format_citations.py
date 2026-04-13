@@ -5,7 +5,7 @@ the LLM.  Demonstrates the ``agent_only`` tool plane: the agent decides
 when to format citations as a post-processing step.
 """
 
-from base_agent.tools import tool
+from fipsagents.baseagent.tools import tool
 
 
 # Intentionally synchronous: this is pure CPU string formatting with no I/O.

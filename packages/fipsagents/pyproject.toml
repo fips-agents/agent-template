@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "base-agent"
+name = "fipsagents"
 version = "0.1.0"
-description = "BaseAgent framework for production-ready AI agents"
+description = "Production-ready AI agent framework for FIPS/OpenShift environments"
 requires-python = ">=3.11"
 dependencies = [
     "litellm>=1.83.0",

@@ -1,4 +1,4 @@
-"""Tests for base_agent.tools — decorator, registry, schema generation, dispatch."""
+"""Tests for fipsagents.baseagent.tools — decorator, registry, schema generation, dispatch."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Optional
 
 import pytest
 
-from base_agent.tools import (
+from fipsagents.baseagent.tools import (
     ToolCall,
     ToolMeta,
     ToolRegistry,
@@ -268,7 +268,7 @@ class TestDiscovery:
         """Create temp .py files with @tool functions and discover them."""
         tool_file = tmp_path / "search.py"
         tool_file.write_text(textwrap.dedent("""\
-            from base_agent.tools import tool
+            from fipsagents.baseagent.tools import tool
 
             @tool(description="Search things", visibility="llm_only")
             async def web_search(query: str) -> str:
@@ -288,7 +288,7 @@ class TestDiscovery:
 
     def test_discover_skips_underscored_files(self, tmp_path: Path):
         (tmp_path / "_internal.py").write_text(textwrap.dedent("""\
-            from base_agent.tools import tool
+            from fipsagents.baseagent.tools import tool
 
             @tool(description="hidden", visibility="both")
             def hidden() -> None:
@@ -306,7 +306,7 @@ class TestDiscovery:
     def test_discover_skips_files_with_errors(self, tmp_path: Path):
         (tmp_path / "broken.py").write_text("raise RuntimeError('boom')")
         (tmp_path / "good.py").write_text(textwrap.dedent("""\
-            from base_agent.tools import tool
+            from fipsagents.baseagent.tools import tool
 
             @tool(description="works", visibility="both")
             def good_tool() -> str:
@@ -319,7 +319,7 @@ class TestDiscovery:
 
     def test_discover_does_not_duplicate(self, tmp_path: Path):
         (tmp_path / "dup.py").write_text(textwrap.dedent("""\
-            from base_agent.tools import tool
+            from fipsagents.baseagent.tools import tool
 
             @tool(description="dup", visibility="both")
             def my_fn() -> None:

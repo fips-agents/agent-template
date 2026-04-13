@@ -12,7 +12,7 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from base_agent import BaseAgent, ModelResponse, StepResult
+from fipsagents.baseagent import BaseAgent, ModelResponse, StepResult
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ class ResearchAssistant(BaseAgent):
 
 if __name__ == "__main__":
     import asyncio
-    from base_agent import load_config
+    from fipsagents.baseagent import load_config
 
     async def main():
         config = load_config()

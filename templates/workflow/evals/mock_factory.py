@@ -6,8 +6,8 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-from base_agent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig
-from base_agent.llm import ModelResponse
+from fipsagents.baseagent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig
+from fipsagents.baseagent.llm import ModelResponse
 
 from evals.discovery import (
     _discover_llm_tool_name,

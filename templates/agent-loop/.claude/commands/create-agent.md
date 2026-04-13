@@ -52,7 +52,7 @@ For each tool listed in AGENT_PLAN.md, create a file in `tools/`:
 Example structure:
 
 ```python
-from base_agent.tools import tool
+from fipsagents.baseagent.tools import tool
 
 @tool(
     description="What this tool does in one sentence",
@@ -170,7 +170,7 @@ Also update `evals/evals.yaml` to match the new agent's eval cases from AGENT_PL
 Run through these checks:
 
 1. **Syntax**: Run `python -c "import src.agent"` to verify the agent module imports cleanly.
-2. **Tools**: Run `python -c "from base_agent.tools import ToolRegistry; r = ToolRegistry(); r.discover('./tools'); print([t.name for t in r.get_all()])"` to confirm tools are discoverable.
+2. **Tools**: Run `python -c "from fipsagents.baseagent.tools import ToolRegistry; r = ToolRegistry(); r.discover('./tools'); print([t.name for t in r.get_all()])"` to confirm tools are discoverable.
 3. **Tests**: Run `make test` to execute the existing test suite. Fix any failures caused by replacing the example agent.
 4. **Lint**: Run `make lint` if ruff is available.
 

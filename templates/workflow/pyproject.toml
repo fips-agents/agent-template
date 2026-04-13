@@ -8,12 +8,12 @@ version = "0.1.0"
 description = "Workflow template — compose AI agents into directed graphs"
 requires-python = ">=3.11"
 dependencies = [
-    "base-agent",
+    "fipsagents",
 ]
 
 [project.optional-dependencies]
 memory = [
-    "base-agent[memory]",
+    "fipsagents[memory]",
 ]
 dev = [
     "pytest",

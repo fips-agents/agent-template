@@ -62,7 +62,7 @@ def _discover_llm_tool_name() -> str | None:
     will skip tool call simulation and return text directly.
     """
     try:
-        from base_agent.tools import ToolRegistry
+        from fipsagents.baseagent.tools import ToolRegistry
         registry = ToolRegistry()
         registry.discover(_TEMPLATE_ROOT / "tools")
         for t in registry.get_all():

@@ -1,4 +1,4 @@
-"""Tests for base_agent.prompts — loading, parsing, rendering prompt templates."""
+"""Tests for fipsagents.baseagent.prompts — loading, parsing, rendering prompt templates."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from base_agent.prompts import (
+from fipsagents.baseagent.prompts import (
     Prompt,
     PromptError,
     PromptLoader,

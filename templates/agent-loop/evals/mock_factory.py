@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
-from base_agent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig
-from base_agent.llm import LLMClient, ModelResponse
+from fipsagents.baseagent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig
+from fipsagents.baseagent.llm import LLMClient, ModelResponse
 
 from evals import _TEMPLATE_ROOT
 from evals.discovery import (

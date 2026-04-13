@@ -13,7 +13,7 @@ visibility, so you can delete this file entirely once a search MCP server
 is configured.
 """
 
-from base_agent.tools import tool
+from fipsagents.baseagent.tools import tool
 
 
 @tool(

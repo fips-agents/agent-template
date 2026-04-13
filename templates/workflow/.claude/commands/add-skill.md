@@ -105,7 +105,7 @@ Confirm the skill is discovered by the SkillLoader:
 
 ```bash
 python -c "
-from base_agent.skills import SkillLoader
+from fipsagents.baseagent.skills import SkillLoader
 loader = SkillLoader()
 stubs = loader.load_all('./skills')
 for s in stubs:

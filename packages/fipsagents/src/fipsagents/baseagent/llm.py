@@ -21,7 +21,7 @@ from typing import Any, AsyncIterator, Callable, TypeVar
 import litellm
 from pydantic import BaseModel
 
-from base_agent.config import LLMConfig
+from fipsagents.baseagent.config import LLMConfig
 
 logger = logging.getLogger(__name__)
 

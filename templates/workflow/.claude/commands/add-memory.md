@@ -110,7 +110,7 @@ Add `memoryhub` to the project dependencies if not already present:
 2. If missing, add it to the appropriate dependency group.
 3. Install: `pip install -e ".[memory]"` or `pip install memoryhub`.
 
-The memory module (`src/base_agent/memory.py`) lazy-imports `memoryhub`, so the agent runs fine without it installed — it just falls back to `NullMemoryClient`. But for the integration to actually work, the package must be present.
+The memory module (`src/fipsagents/baseagent/memory.py`) lazy-imports `memoryhub`, so the agent runs fine without it installed — it just falls back to `NullMemoryClient`. But for the integration to actually work, the package must be present.
 
 ### Step 5: Show Usage Patterns
 
@@ -175,7 +175,7 @@ Run a quick check to see if the memory client initializes:
 ```bash
 python -c "
 import asyncio
-from base_agent.memory import create_memory_client
+from fipsagents.baseagent.memory import create_memory_client
 
 async def check():
     client = await create_memory_client('.memoryhub.yaml')

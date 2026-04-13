@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 from functools import lru_cache
-from base_agent.agent import BaseAgent
+from fipsagents.baseagent.agent import BaseAgent
 
 from evals import _TEMPLATE_ROOT
 
@@ -66,7 +66,7 @@ def _discover_llm_tool_name() -> str | None:
     will skip tool call simulation and return text directly.
     """
     try:
-        from base_agent.tools import ToolRegistry
+        from fipsagents.baseagent.tools import ToolRegistry
         registry = ToolRegistry()
         registry.discover(_TEMPLATE_ROOT / "tools")
         for t in registry.get_all():

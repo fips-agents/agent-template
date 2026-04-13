@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from base_agent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig
-from base_agent.llm import LLMClient, ModelResponse
-from base_agent.memory import NullMemoryClient
+from fipsagents.baseagent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig
+from fipsagents.baseagent.llm import LLMClient, ModelResponse
+from fipsagents.baseagent.memory import NullMemoryClient
 from workflow.agent_node import AgentNode
 from workflow.state import WorkflowState
 

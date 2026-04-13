@@ -1,4 +1,4 @@
-"""Tests for base_agent.llm — LLM client wrapper around litellm."""
+"""Tests for fipsagents.baseagent.llm — LLM client wrapper around litellm."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from base_agent.config import LLMConfig
-from base_agent.llm import (
+from fipsagents.baseagent.config import LLMConfig
+from fipsagents.baseagent.llm import (
     LLMClient,
     LLMError,
     ModelResponse,
@@ -177,7 +177,7 @@ class TestConfigPassthrough:
             max_tokens=512,
         )
         client = LLMClient(config)
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response()
             )
@@ -192,7 +192,7 @@ class TestConfigPassthrough:
     @pytest.mark.asyncio
     async def test_extra_kwargs_forwarded(self):
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response()
             )
@@ -205,7 +205,7 @@ class TestConfigPassthrough:
     async def test_kwargs_override_config(self):
         """Caller-provided kwargs take precedence over config defaults."""
         client = LLMClient(_make_config(temperature=0.5))
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response()
             )
@@ -223,7 +223,7 @@ class TestCallModel:
     @pytest.mark.asyncio
     async def test_returns_model_response(self):
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content="hi there")
             )
@@ -235,7 +235,7 @@ class TestCallModel:
     async def test_tool_schemas_passed(self):
         client = LLMClient(_make_config())
         tools = [{"type": "function", "function": {"name": "get_weather"}}]
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response()
             )
@@ -246,7 +246,7 @@ class TestCallModel:
     @pytest.mark.asyncio
     async def test_tools_omitted_when_none(self):
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response()
             )
@@ -259,7 +259,7 @@ class TestCallModel:
         """When model returns tool calls, they are accessible on the response."""
         tc = [{"id": "call_99", "function": {"name": "do_thing", "arguments": '{"a": 1}'}}]
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content=None, tool_calls=tc)
             )
@@ -270,7 +270,7 @@ class TestCallModel:
     @pytest.mark.asyncio
     async def test_litellm_exception_wrapped(self):
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 side_effect=RuntimeError("connection refused")
             )
@@ -293,7 +293,7 @@ class TestCallModelJson:
             temp_f: float
 
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(
                     content='{"city": "Portland", "temp_f": 55.0}'
@@ -313,7 +313,7 @@ class TestCallModelJson:
     async def test_dict_schema(self):
         schema = {"title": "Coord", "type": "object", "properties": {"x": {"type": "integer"}}}
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content='{"x": 7}')
             )
@@ -323,7 +323,7 @@ class TestCallModelJson:
     @pytest.mark.asyncio
     async def test_no_content_raises(self):
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content=None)
             )
@@ -335,7 +335,7 @@ class TestCallModelJson:
     @pytest.mark.asyncio
     async def test_invalid_json_from_model(self):
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content="{broken json")
             )
@@ -348,7 +348,7 @@ class TestCallModelJson:
     async def test_tools_forwarded(self):
         client = LLMClient(_make_config())
         tools = [{"type": "function", "function": {"name": "helper"}}]
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content='{}')
             )
@@ -378,7 +378,7 @@ class TestCallModelStream:
             return _gen()
 
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = fake_acompletion
             collected = []
             async for chunk in client.call_model_stream(SAMPLE_MESSAGES):
@@ -401,7 +401,7 @@ class TestCallModelStream:
             return _gen()
 
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = fake_acompletion
             collected = []
             async for chunk in client.call_model_stream(SAMPLE_MESSAGES):
@@ -420,7 +420,7 @@ class TestCallModelStream:
             return _gen()
 
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = fake_acompletion
             async for _ in client.call_model_stream(SAMPLE_MESSAGES):
                 pass
@@ -439,7 +439,7 @@ class TestCallModelStream:
             return _gen()
 
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = fake_acompletion
             async for _ in client.call_model_stream(SAMPLE_MESSAGES, tools=tools):
                 pass
@@ -447,7 +447,7 @@ class TestCallModelStream:
     @pytest.mark.asyncio
     async def test_stream_exception_wrapped(self):
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 side_effect=ConnectionError("timeout")
             )
@@ -465,7 +465,7 @@ class TestCallModelValidated:
     @pytest.mark.asyncio
     async def test_succeeds_on_first_try(self):
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content="42")
             )
@@ -490,8 +490,8 @@ class TestCallModelValidated:
 
         client = LLMClient(_make_config())
         with (
-            patch("base_agent.llm.litellm") as mock_litellm,
-            patch("base_agent.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("fipsagents.baseagent.llm.litellm") as mock_litellm,
+            patch("fipsagents.baseagent.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
         ):
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content="data")
@@ -516,8 +516,8 @@ class TestCallModelValidated:
 
         client = LLMClient(_make_config())
         with (
-            patch("base_agent.llm.litellm") as mock_litellm,
-            patch("base_agent.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("fipsagents.baseagent.llm.litellm") as mock_litellm,
+            patch("fipsagents.baseagent.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
         ):
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content="x")
@@ -534,8 +534,8 @@ class TestCallModelValidated:
     async def test_all_retries_exhausted(self):
         client = LLMClient(_make_config())
         with (
-            patch("base_agent.llm.litellm") as mock_litellm,
-            patch("base_agent.llm.asyncio.sleep", new_callable=AsyncMock),
+            patch("fipsagents.baseagent.llm.litellm") as mock_litellm,
+            patch("fipsagents.baseagent.llm.asyncio.sleep", new_callable=AsyncMock),
         ):
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content="bad")
@@ -553,7 +553,7 @@ class TestCallModelValidated:
     async def test_max_retries_zero(self):
         """With max_retries=0, only one attempt is made."""
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content="ok")
             )
@@ -569,7 +569,7 @@ class TestCallModelValidated:
     async def test_tools_forwarded(self):
         tools = [{"type": "function", "function": {"name": "validate"}}]
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 return_value=_make_litellm_response(content="ok")
             )
@@ -585,7 +585,7 @@ class TestCallModelValidated:
     async def test_llm_error_propagates_immediately(self):
         """If the LLM call itself fails, the error propagates without retry."""
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 side_effect=RuntimeError("provider down")
             )
@@ -618,7 +618,7 @@ class TestErrorWrapping:
     @pytest.mark.asyncio
     async def test_exception_types_wrapped(self, exc_class, exc_msg):
         client = LLMClient(_make_config())
-        with patch("base_agent.llm.litellm") as mock_litellm:
+        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
             mock_litellm.acompletion = AsyncMock(
                 side_effect=exc_class(exc_msg)
             )

@@ -1,6 +1,6 @@
 """The @node decorator for marking functions as workflow nodes.
 
-Mirrors the @tool pattern from base_agent.tools, which uses a sentinel
+Mirrors the @tool pattern from fipsagents.baseagent.tools, which uses a sentinel
 attribute to attach metadata to decorated functions.
 """
 

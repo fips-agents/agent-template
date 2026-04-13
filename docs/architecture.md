@@ -18,13 +18,13 @@ The agent template sits in a specific layer of a broader stack. Understanding th
 
 The repository contains two template directories and a shared package:
 
-**`packages/base-agent/`** is the shared BaseAgent framework, distributed as a pip-installable Python package. Both templates depend on it. Extracting BaseAgent into a shared package eliminates code duplication and ensures a single source of truth for the core agent abstraction.
+**`packages/fipsagents/`** is the shared BaseAgent framework, distributed as a pip-installable Python package (`fipsagents` on PyPI). Both templates depend on it. Extracting BaseAgent into a shared package eliminates code duplication and ensures a single source of truth for the core agent abstraction.
 
 **`templates/agent-loop/`** scaffolds a single-agent loop: read context, call model, act on response, repeat. This covers the majority of agent use cases. The developer subclasses BaseAgent, implements `step()`, and gets LLM communication, tool dispatch, MCP connections, and all other common concerns for free.
 
 **`templates/workflow/`** scaffolds a directed graph of nodes with typed state. Nodes are either lightweight `BaseNode` instances (for routing, transformation, gating) or `AgentNode` instances (BaseAgent subclasses with full LLM/tools/MCP capabilities). The `WorkflowRunner` manages graph traversal, node lifecycle, per-node retry, error edges, and structured logging. State is a Pydantic model that flows through the graph -- execution metadata stays in logs, not on state.
 
-Both templates share BaseAgent via the `base-agent` package, follow the same directory conventions (tools, prompts, skills, rules, evals), and use the same deployment model (immutable container images on OpenShift).
+Both templates share BaseAgent via the `fipsagents` package, follow the same directory conventions (tools, prompts, skills, rules, evals), and use the same deployment model (immutable container images on OpenShift).
 
 ## BaseAgent
 
@@ -67,7 +67,7 @@ Each tool declares a visibility attribute controlling which plane(s) can access 
 Tools use the `@tool` decorator, following the same convention as FastMCP. They are auto-discovered from the `tools/` directory at startup:
 
 ```python
-from base_agent.tools import tool
+from fipsagents.baseagent.tools import tool
 
 @tool(visibility="agent_only")
 async def validate_schema(data: dict, schema_name: str) -> bool:
@@ -302,16 +302,17 @@ my-agent/
     run_evals.py
     fixtures/
   src/
-    base_agent/
-      __init__.py
-      agent.py
-      tools.py
-      prompts.py
-      skills.py
-      rules.py
-      config.py
-      memory.py
-      llm.py
+    fipsagents/
+      baseagent/
+        __init__.py
+        agent.py
+        tools.py
+        prompts.py
+        skills.py
+        rules.py
+        config.py
+        memory.py
+        llm.py
     agent.py
   Containerfile
   chart/
@@ -322,7 +323,7 @@ my-agent/
   Makefile
 ```
 
-The `src/base_agent/` package contains the framework. `src/agent.py` is the developer's subclass -- the only file most developers need to edit for a basic agent. Each concern (tools, prompts, skills, rules, config, memory, LLM) has its own module within base_agent, keeping files small and focused.
+The `src/fipsagents/baseagent/` package contains the framework (installed via the `fipsagents` pip package). `src/agent.py` is the developer's subclass -- the only file most developers need to edit for a basic agent. Each concern (tools, prompts, skills, rules, config, memory, LLM) has its own module within the baseagent package, keeping files small and focused.
 
 ## Dependencies
 

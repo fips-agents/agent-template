@@ -40,7 +40,7 @@ Create `tools/<tool_name>.py` with this structure:
 <Optional longer description explaining when and how this tool is used.>
 """
 
-from base_agent.tools import tool
+from fipsagents.baseagent.tools import tool
 
 
 @tool(
@@ -84,7 +84,7 @@ Confirm the tool is picked up by the registry:
 
 ```bash
 python -c "
-from base_agent.tools import ToolRegistry
+from fipsagents.baseagent.tools import ToolRegistry
 r = ToolRegistry()
 discovered = r.discover('./tools')
 for t in discovered:

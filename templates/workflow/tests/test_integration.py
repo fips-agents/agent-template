@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from base_agent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig
-from base_agent.llm import LLMClient, ModelResponse
-from base_agent.memory import NullMemoryClient
+from fipsagents.baseagent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig
+from fipsagents.baseagent.llm import LLMClient, ModelResponse
+from fipsagents.baseagent.memory import NullMemoryClient
 from workflow.agent_node import AgentNode
 from workflow.graph import Graph
 from workflow.node import BaseNode

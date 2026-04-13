@@ -16,12 +16,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from base_agent.agent import BaseAgent, StepOutcome
-from base_agent.config import AgentConfig, LLMConfig, LoopConfig, BackoffConfig
-from base_agent.llm import LLMClient, ModelResponse
-from base_agent.prompts import PromptLoader
-from base_agent.skills import SkillLoader
-from base_agent.tools import ToolRegistry
+from fipsagents.baseagent.agent import BaseAgent, StepOutcome
+from fipsagents.baseagent.config import AgentConfig, LLMConfig, LoopConfig, BackoffConfig
+from fipsagents.baseagent.llm import LLMClient, ModelResponse
+from fipsagents.baseagent.prompts import PromptLoader
+from fipsagents.baseagent.skills import SkillLoader
+from fipsagents.baseagent.tools import ToolRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +541,7 @@ class TestSummarizeSkill:
 
 class TestCitationRule:
     def test_rule_loads(self):
-        from base_agent.rules import RuleLoader
+        from fipsagents.baseagent.rules import RuleLoader
 
         loader = RuleLoader()
         loader.load_all(_RULES_DIR)
@@ -549,7 +549,7 @@ class TestCitationRule:
         assert rule.name == "citation_required"
 
     def test_rule_content(self):
-        from base_agent.rules import RuleLoader
+        from fipsagents.baseagent.rules import RuleLoader
 
         loader = RuleLoader()
         loader.load_all(_RULES_DIR)

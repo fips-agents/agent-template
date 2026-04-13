@@ -1,6 +1,6 @@
 """Eval package for BaseAgent agents.
 
-Sets up sys.path so that ``base_agent`` and the template root are importable
+Sets up sys.path so that ``fipsagents.baseagent`` and the template root are importable
 from any submodule, and exports the shared path constants used throughout the
 eval suite.
 """
