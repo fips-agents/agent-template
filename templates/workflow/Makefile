@@ -1,0 +1,115 @@
+# =============================================================================
+# Workflow Template — Makefile
+# =============================================================================
+# Developer-facing targets for the workflow template.
+# Run `make` or `make help` to see available commands.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Variables (override on the command line: make deploy PROJECT=my-workflow)
+# ---------------------------------------------------------------------------
+VENV        ?= .venv
+PYTHON      ?= python3
+PROJECT     ?= workflow-template
+IMAGE_NAME  ?= workflow-template
+IMAGE_TAG   ?= latest
+
+# Derived
+PIP         := $(VENV)/bin/pip
+PYTEST      := $(VENV)/bin/pytest
+PYTHON_VENV := $(VENV)/bin/python
+
+# ---------------------------------------------------------------------------
+# Default target
+# ---------------------------------------------------------------------------
+.DEFAULT_GOAL := help
+
+# ---------------------------------------------------------------------------
+# Development
+# ---------------------------------------------------------------------------
+
+.PHONY: install
+install: ## Create venv and install all dependencies (dev + memory extras)
+	$(PYTHON) -m venv $(VENV)
+	$(PIP) install --upgrade pip
+	# In the monorepo, install base-agent from the local package path.
+	# When cloned by fips-agents, base-agent comes from PyPI and this line
+	# is removed by the scaffolding step.
+	$(PIP) install -e "../../packages/base-agent[memory]"
+	$(PIP) install -e ".[dev,memory]"
+
+.PHONY: run-local
+run-local: ## Run the workflow locally
+	$(PYTHON_VENV) -m src.agent
+
+.PHONY: test
+test: ## Run tests with verbose output
+	$(PYTEST) -v
+
+.PHONY: test-cov
+test-cov: ## Run tests with coverage report
+	$(PYTEST) -v --cov=src --cov-report=term-missing --cov-report=html
+
+.PHONY: eval
+eval: ## Run eval cases against the workflow (mock LLM)
+	$(PYTHON_VENV) -m evals.run_evals
+
+.PHONY: lint
+lint: ## Run ruff linter (install ruff into venv if missing)
+	@$(VENV)/bin/ruff check src/ tests/ evals/ 2>/dev/null \
+		|| (echo "ruff not found — installing into venv..." \
+		    && $(PIP) install ruff \
+		    && $(VENV)/bin/ruff check src/ tests/ evals/)
+
+# ---------------------------------------------------------------------------
+# Container
+# ---------------------------------------------------------------------------
+
+.PHONY: build
+build: ## Build container image with podman (linux/amd64 for OpenShift)
+	podman build \
+		--platform linux/amd64 \
+		-t $(IMAGE_NAME):$(IMAGE_TAG) \
+		-f Containerfile . \
+		--no-cache
+
+# ---------------------------------------------------------------------------
+# Deployment
+# ---------------------------------------------------------------------------
+
+.PHONY: deploy
+deploy: ## Deploy to OpenShift (make deploy PROJECT=<name>)
+	./deploy.sh $(PROJECT)
+
+.PHONY: clean
+clean: ## Remove workflow resources from OpenShift (make clean PROJECT=<name>)
+	@if [ -z "$(PROJECT)" ]; then \
+		echo "Error: PROJECT is required.  Usage: make clean PROJECT=my-workflow"; \
+		exit 1; \
+	fi
+	@echo "Removing workflow resources from project $(PROJECT)..."
+	oc delete deployment $(IMAGE_NAME) -n $(PROJECT) --ignore-not-found
+	oc delete service $(IMAGE_NAME) -n $(PROJECT) --ignore-not-found
+	oc delete configmap $(IMAGE_NAME)-config -n $(PROJECT) --ignore-not-found
+	oc delete route $(IMAGE_NAME) -n $(PROJECT) --ignore-not-found
+	@echo "Done."
+
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
+
+.PHONY: help
+help: ## Show this help message
+	@echo ""
+	@echo "Workflow Template — available targets"
+	@echo "======================================"
+	@echo ""
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "Variables (override on CLI):"
+	@echo "  PROJECT     OpenShift project/namespace  (default: $(PROJECT))"
+	@echo "  IMAGE_NAME  Container image name         (default: $(IMAGE_NAME))"
+	@echo "  IMAGE_TAG   Container image tag          (default: $(IMAGE_TAG))"
+	@echo "  VENV        Virtual-env directory         (default: $(VENV))"
+	@echo ""

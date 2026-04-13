@@ -16,13 +16,15 @@ The agent template sits in a specific layer of a broader stack. Understanding th
 
 ## Template Variants
 
-The repository contains two template directories:
+The repository contains two template directories and a shared package:
 
-**`templates/agent-loop/`** is the priority build. It scaffolds a single-agent loop: read context, call model, act on response, repeat. This covers the majority of agent use cases and ships first.
+**`packages/base-agent/`** is the shared BaseAgent framework, distributed as a pip-installable Python package. Both templates depend on it. Extracting BaseAgent into a shared package eliminates code duplication and ensures a single source of truth for the core agent abstraction.
 
-**`templates/agentic-workflow/`** is deferred. It implements a state-graph execution model inspired by LangGraph's concepts -- nodes as agent subclasses, conditional edges, typed state flowing through the graph -- but without the LangGraph package dependency. The design is settled; the implementation waits until the agent loop template is proven in production.
+**`templates/agent-loop/`** scaffolds a single-agent loop: read context, call model, act on response, repeat. This covers the majority of agent use cases. The developer subclasses BaseAgent, implements `step()`, and gets LLM communication, tool dispatch, MCP connections, and all other common concerns for free.
 
-Both templates share the same BaseAgent class, directory conventions, and deployment model.
+**`templates/workflow/`** scaffolds a directed graph of nodes with typed state. Nodes are either lightweight `BaseNode` instances (for routing, transformation, gating) or `AgentNode` instances (BaseAgent subclasses with full LLM/tools/MCP capabilities). The `WorkflowRunner` manages graph traversal, node lifecycle, per-node retry, error edges, and structured logging. State is a Pydantic model that flows through the graph -- execution metadata stays in logs, not on state.
+
+Both templates share BaseAgent via the `base-agent` package, follow the same directory conventions (tools, prompts, skills, rules, evals), and use the same deployment model (immutable container images on OpenShift).
 
 ## BaseAgent
 
@@ -335,10 +337,39 @@ The dependency footprint is deliberately minimal:
 
 Everything else comes from the Python standard library. There are no agent framework dependencies. This is intentional: frameworks impose opinions about control flow, state management, and composition that conflict with keeping the BaseAgent abstraction simple and the developer's subclass small.
 
-## Workflow Manager (Deferred)
+## Workflow Template
 
-The agentic-workflow template will implement a state-graph execution model. Nodes are BaseAgent subclasses. Edges are conditional routing functions. State is a typed dictionary that flows through the graph. The engine supports conditional branching, cycles, and checkpointing.
+The workflow template (`templates/workflow/`) implements a state-graph execution model for composing multiple agents and lightweight nodes into directed workflows.
 
-This provides LangGraph-like orchestration capabilities without the package dependency. The key insight is that the graph execution engine is simple -- the complexity lives in the individual agent nodes, which are already handled by BaseAgent. The workflow manager's job is routing and state management, not agent logic.
+### Core Abstractions
 
-This component is designed but not yet built. The agent loop template ships first, and the workflow manager will be implemented once the core BaseAgent class and its supporting infrastructure are proven in production.
+**WorkflowNode** is a `typing.Protocol` defining the minimal contract: `async def process(self, state: T) -> T` and a `name` attribute. Both BaseNode and AgentNode satisfy this protocol through structural subtyping -- no inheritance coupling.
+
+**BaseNode** is a minimal node class for routing, transformation, validation, and gating. It has a logger and a name but no LLM, tools, or MCP. Use it when a node's logic is pure Python without model calls.
+
+**AgentNode** bridges BaseAgent into the workflow context. It extends BaseAgent, implements `step()` as a guard (raises NotImplementedError if called outside a workflow), and provides `process(state) -> state` as the method developers override. A workflow AgentNode has full access to `self.call_model()`, `self.use_tool()`, `self.memory`, `self.prompts`, and all other BaseAgent capabilities.
+
+**WorkflowState** is a Pydantic BaseModel with `extra="forbid"` that developers subclass to define typed state. State carries only data -- execution metadata (timings, node history, retry counts) belongs in structured logs, not on the state object. This separation was a deliberate design decision based on prior experience with state objects that accumulated metadata and became unmanageable.
+
+**Graph** provides a fluent API for wiring nodes and edges: `add_node()`, `add_edge()`, `add_conditional_edge()`, `add_error_edge()`, `set_entry_point()`. All mutation methods return `self` for chaining. The graph validates structural integrity before execution.
+
+**WorkflowRunner** traverses the graph, passing state between nodes. It manages AgentNode lifecycle (calling `setup()` and `shutdown()` on all AgentNodes), applies per-node retry logic, routes to error edges when retries are exhausted, enforces a max-steps guard, and emits structured log events at every node transition.
+
+The `@node` decorator marks classes for workflow registration, mirroring the `@tool` decorator pattern from BaseAgent.
+
+### Current Scope (v1)
+
+- Linear chains: A → B → C → END
+- Conditional routing: A → (if condition) B else C
+- Error edges: if node X fails after retries, route to node Y
+- Per-node retry with configurable retry count
+- Structured logging at every node transition
+- Typed Pydantic state with extra-field rejection
+
+### Deferred to v2
+
+- Fan-out/fan-in (parallel node execution)
+- Cycles (loop back to previous node) -- max-steps guard is already in place
+- Checkpointing and resume
+- Subgraph composition
+- Event-driven wait (same shape as HITL -- a node's `process()` can await anything; this is an implementation detail, not a different paradigm)

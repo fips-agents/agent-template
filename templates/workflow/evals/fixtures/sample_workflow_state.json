@@ -1,0 +1,17 @@
+{
+  "simple_query": {
+    "query": "What is quantum computing?",
+    "expected_complexity": "simple",
+    "expected_path": ["classify", "summarize"]
+  },
+  "complex_query": {
+    "query": "Explain the applications of quantum computing in modern cryptography and how it affects current encryption standards",
+    "expected_complexity": "complex",
+    "expected_path": ["classify", "research", "summarize"]
+  },
+  "minimal_query": {
+    "query": "Kubernetes",
+    "expected_complexity": "simple",
+    "expected_path": ["classify", "summarize"]
+  }
+}
