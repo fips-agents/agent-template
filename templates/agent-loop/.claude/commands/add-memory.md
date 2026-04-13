@@ -2,6 +2,8 @@
 
 Wire MemoryHub integration into the agent for persistent memory across runs. This command configures both the SDK path (`self.memory` for agent code) and the MCP path (MemoryHub tools for the LLM).
 
+**Prerequisite: `/create-agent` must have been run first.** Verify `src/agent.py` exists and contains a BaseAgent subclass before proceeding.
+
 **This is optional.** Not every agent needs persistent memory. If the agent handles stateless, one-shot tasks, skip this. Memory is valuable when:
 - The agent needs to remember things between separate runs or conversations
 - The agent shares context with other agents via scoped memories
@@ -72,11 +74,14 @@ In `Containerfile`, find the line `COPY AGENTS.md ./` and add the following line
 COPY .memoryhub.yaml   ./
 ```
 
-Also extend the `chmod` RUN command to include `.memoryhub.yaml`:
+Also extend the `chmod` RUN command to include `.memoryhub.yaml`. Replace the entire multi-line `RUN chmod ...` block with:
 
 ```dockerfile
 RUN chmod -R g=u,o=r src/ tools/ prompts/ skills/ rules/ agent.yaml .memoryhub.yaml \
+    && find src/ tools/ prompts/ skills/ rules/ -type d -exec chmod g=u,o=rx {} +
 ```
+
+**Important**: Keep both lines of the `RUN` command. The `find` line sets directory execute bits, which are required for directory traversal in the container.
 
 Remove (or leave in place — it is harmless) the comment that `/add-memory` would add this line.
 

@@ -2,6 +2,8 @@
 
 Add a new skill directory following the agentskills.io specification. Skills are capabilities that are too large to keep in context all the time — they load on demand via progressive disclosure.
 
+**Prerequisite: `/create-agent` must have been run first.** Verify `src/agent.py` exists and contains a BaseAgent subclass before proceeding.
+
 **Before adding a skill, consider whether a tool or prompt would be simpler.** Skills are for capabilities that have their own instructions, scripts, or reference material. If the capability is just a function call, use `/add-tool`. If it is just a prompt template, add a file to `prompts/`.
 
 ## Process

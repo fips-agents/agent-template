@@ -2,6 +2,8 @@
 
 Add a new tool to the agent with the `@tool` decorator. This command walks through designing the tool, generating the code, and verifying it integrates with the tool registry.
 
+**Prerequisite: `/create-agent` must have been run first.** Verify `src/agent.py` exists and contains a BaseAgent subclass before proceeding.
+
 ## Process
 
 ### Step 1: Understand the Tool

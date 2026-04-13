@@ -83,25 +83,37 @@ For each scenario, assess:
 Compile the scenarios and their expected outcomes into `evals/evals.yaml`. Use this structure:
 
 ```yaml
-evals:
+cases:
   - name: descriptive_test_name
-    description: One sentence explaining what this tests
-    category: happy_path | edge_case | failure
-    input:
-      role: user
-      content: "The simulated user message"
-    expected:
-      tools_called:
-        - tool_name_1
-        - tool_name_2
-      output_contains:
-        - "key phrase or pattern"
-      output_excludes:
-        - "pattern that should NOT appear"
-      should_succeed: true | false
+    description: >
+      One sentence explaining what this tests.
+    input: "The simulated user message as a plain string"
+    expected_behavior: >
+      Prose description of what the agent should do: which tools it should
+      call, what the output should contain, and how it should behave.
+    tags: [smoke]        # Use tags to reflect scenario category:
+                         #   smoke / happy_path — core workflow
+                         #   edge_case          — boundary conditions
+                         #   failure            — graceful error handling
+    assertions:
+      - type: tool_called        # Verify a specific tool was invoked
+        tool: tool_name
+      - type: field_exists       # Verify a field is present in the response
+        field: answer
+      - type: contains           # Verify a field contains a substring
+        field: answer
+        value: "expected phrase"
+      - type: not_contains       # Verify a field does not contain a substring
+        field: answer
+        value: "phrase that must not appear"
+      - type: field_gte          # Verify a numeric field meets a minimum
+        field: result_count
+        value: 1
 ```
 
-If `evals/evals.yaml` already exists, merge the new scenarios in rather than overwriting.
+Available assertion types: `tool_called` (params: `tool`, optional `min_calls`), `field_exists` (params: `field`), `contains` (params: `field`, `value`), `not_contains` (params: `field`, `value`), `field_gte` (params: `field`, `value`), `field_lte` (params: `field`, `value`), `custom` (for external harnesses).
+
+If `evals/evals.yaml` already exists, merge the new cases in under the top-level `cases:` key rather than overwriting the file.
 
 ### Step 6: Report
 
