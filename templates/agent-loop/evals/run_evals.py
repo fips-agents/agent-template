@@ -56,7 +56,7 @@ _FIXTURES_DIR = _EVALS_DIR / "fixtures"
 sys.path.insert(0, str(_TEMPLATE_ROOT / "src"))
 sys.path.insert(0, str(_TEMPLATE_ROOT))
 
-from base_agent.agent import BaseAgent, StepOutcome  # noqa: E402
+from base_agent.agent import BaseAgent  # noqa: E402
 from base_agent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig  # noqa: E402
 from base_agent.llm import LLMClient, ModelResponse  # noqa: E402
 
@@ -130,7 +130,10 @@ def _build_mock_instance(model_class: type) -> Any:
         if field_type == "string":
             mock_data[field_name] = f"Mock {field_name} for eval"
         elif field_type in ("number", "integer"):
-            mock_data[field_name] = 0.85
+            # Respect JSON Schema constraints if present.
+            minimum = field_schema.get("minimum", field_schema.get("exclusiveMinimum", 0))
+            maximum = field_schema.get("maximum", field_schema.get("exclusiveMaximum", 1))
+            mock_data[field_name] = round((minimum + maximum) / 2, 2)
         elif field_type == "boolean":
             mock_data[field_name] = True
         elif field_type == "array":
@@ -253,6 +256,25 @@ def _make_tool_call_obj(name: str, arguments: dict[str, Any]) -> Any:
     )
 
 
+@lru_cache(maxsize=1)
+def _discover_llm_tool_name() -> str | None:
+    """Find the name of an LLM-visible tool for mock tool call responses.
+
+    Falls back to None if no tools are found, in which case mock responses
+    will skip tool call simulation and return text directly.
+    """
+    try:
+        from base_agent.tools import ToolRegistry
+        registry = ToolRegistry()
+        registry.discover(_TEMPLATE_ROOT / "tools")
+        for t in registry.get_all():
+            if t.visibility in ("llm_only", "both"):
+                return t.name
+    except Exception:
+        pass
+    return None
+
+
 def _build_mock_responses(
     query: str,
     fixture_data: dict[str, Any] | None = None,
@@ -272,14 +294,25 @@ def _build_mock_responses(
 
     side_effects: list[Any] = []
 
-    if is_multi_step:
-        # Simulate multiple search rounds.
-        tc1 = _make_tool_call_obj("web_search", {"query": query})
+    tool_name = _discover_llm_tool_name()
+
+    if tool_name is None:
+        # No LLM-visible tools — skip tool call simulation, just return text.
+        side_effects.append(
+            ModelResponse(
+                _build_mock_litellm_response(
+                    content=f"Based on analysis of '{query}', here are the findings."
+                )
+            )
+        )
+    elif is_multi_step:
+        # Simulate multiple tool call rounds.
+        tc1 = _make_tool_call_obj(tool_name, {"query": query})
         side_effects.append(
             ModelResponse(_build_mock_litellm_response(tool_calls=[tc1]))
         )
         tc2 = _make_tool_call_obj(
-            "web_search", {"query": f"{query} detailed comparison"}
+            tool_name, {"query": f"{query} detailed comparison"}
         )
         side_effects.append(
             ModelResponse(_build_mock_litellm_response(tool_calls=[tc2]))
@@ -292,8 +325,8 @@ def _build_mock_responses(
             )
         )
     else:
-        # Single search round.
-        search_tc = _make_tool_call_obj("web_search", {"query": query})
+        # Single tool call round.
+        search_tc = _make_tool_call_obj(tool_name, {"query": query})
         side_effects.append(
             ModelResponse(_build_mock_litellm_response(tool_calls=[search_tc]))
         )

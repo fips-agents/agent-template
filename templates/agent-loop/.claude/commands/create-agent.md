@@ -137,7 +137,23 @@ Preserve the `${VAR:-default}` env var substitution pattern. Every value that mi
 
 If the plan mentions a specific agent name, update the project name and description in `pyproject.toml`. Ensure any new dependencies required by tools are listed.
 
-### Step 9: Verify
+### Step 9: Update Tests
+
+Replace `tests/test_example_agent.py` with tests for the new agent. The example tests import `ResearchAssistant` and `ResearchReport` directly and will fail after Step 2 replaces them.
+
+At minimum, the new test file should:
+
+- Import the new agent class and any Pydantic models from `src/agent.py`
+- Test that the agent can be instantiated with a mock config
+- Test each tool's happy path and error cases
+- Test that prompts load correctly
+- Test that rules load correctly
+
+Name the test file after the agent (e.g., `tests/test_ticket_triager.py`), or keep the `test_example_agent.py` name if you prefer — just replace the contents.
+
+Also update `evals/evals.yaml` to match the new agent's eval cases from AGENT_PLAN.md. Replace the example Research Assistant cases with cases appropriate for the new agent.
+
+### Step 10: Verify
 
 Run through these checks:
 
@@ -148,7 +164,7 @@ Run through these checks:
 
 If any check fails, fix the issue before proceeding. Do not leave the project in a broken state.
 
-### Step 10: Summary
+### Step 11: Summary
 
 Present the developer with a summary of what was generated:
 
