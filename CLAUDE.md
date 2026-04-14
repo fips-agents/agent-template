@@ -48,6 +48,7 @@ agent-template/
   research/                # Investigations: ecosystem research, session records
   packages/
     fipsagents/            # Shared BaseAgent package (pip-installable)
+  sandbox/                 # Code execution sandbox sidecar (FastAPI, UBI)
   templates/
     agent-loop/            # Single-agent loop template
     workflow/              # Multi-node workflow template

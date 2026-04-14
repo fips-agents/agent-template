@@ -4,7 +4,7 @@ Agent templates for the `fips-agents` CLI. Scaffolds production-ready AI agents 
 
 ## Status
 
-Early development. Architecture is designed; implementation has not started.
+Both templates (agent-loop and workflow) are implemented, along with the shared `fipsagents` package (on PyPI) and an optional code execution sandbox sidecar.
 
 ## How It Works
 

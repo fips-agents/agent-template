@@ -56,3 +56,24 @@ route:
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
+
+# -- Code execution sandbox sidecar (optional) --------------------------------
+# Enable to run LLM-generated Python code safely.  The sidecar shares the pod
+# network namespace, so the code_executor tool reaches it at localhost:8000.
+#
+# Prerequisites:
+#   1. Add tools/code_executor.py to your agent (see /add-tool).
+#   2. Build and push the sandbox image from sandbox/ at the repo root.
+sandbox:
+  enabled: false
+  image:
+    repository: code-sandbox
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

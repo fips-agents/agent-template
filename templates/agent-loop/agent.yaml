@@ -99,3 +99,28 @@ logging:
 # simply omit .memoryhub.yaml from the project and this section is ignored.
 memory:
   config_path: .memoryhub.yaml
+
+# -- Code execution sandbox (optional) ----------------------------------------
+#
+# The code_executor tool sends LLM-generated Python code to a sandbox sidecar
+# for safe execution.  The sidecar runs in the same pod and is reachable at
+# localhost:8000.  Enable it in your Helm values:
+#
+#   sandbox:
+#     enabled: true
+#     image:
+#       repository: quay.io/yourorg/code-sandbox
+#       tag: latest
+#
+# The tool reads SANDBOX_URL from the environment (set automatically by the
+# Helm chart when sandbox.enabled=true).  For local development, start the
+# sidecar manually:
+#
+#   cd sandbox && uvicorn sandbox.app:app --port 8000
+#
+# Available modules in the sandbox:
+#   math, statistics, itertools, functools, re, datetime, collections,
+#   json, csv, string, textwrap, decimal, fractions, random, operator, typing
+#
+# Production env vars:
+#   SANDBOX_URL -- override the sidecar URL (default: http://localhost:8000)

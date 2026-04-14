@@ -236,7 +236,7 @@ The Containerfile (Red Hat UBI base) packages the complete agent:
 
 ### Helm Chart
 
-The Helm chart bundles only the agent itself: a Deployment, Service, ConfigMap, and optional Route. It does not deploy any infrastructure. The expectation is that vLLM, LlamaStack, PGVector, and other services are already running, deployed by `rh-ai-quickstart/ai-architecture-charts` or equivalent.
+The Helm chart bundles only the agent itself: a Deployment, Service, ConfigMap, and optional Route. When the code execution sandbox is enabled (`sandbox.enabled: true`), the chart adds a sidecar container, an emptyDir volume for temporary code files, and a `SANDBOX_URL` environment variable pointing the agent at the sidecar. The chart does not deploy any infrastructure. The expectation is that vLLM, LlamaStack, PGVector, and other services are already running, deployed by `rh-ai-quickstart/ai-architecture-charts` or equivalent.
 
 This separation keeps the agent chart simple and avoids version-coupling between the agent and its infrastructure. An agent upgrade does not force an infrastructure upgrade, and vice versa.
 
@@ -374,3 +374,33 @@ The `@node` decorator marks classes for workflow registration, mirroring the `@t
 - Checkpointing and resume
 - Subgraph composition
 - Event-driven wait (same shape as HITL -- a node's `process()` can await anything; this is an implementation detail, not a different paradigm)
+
+## Code Execution Sandbox
+
+Agents sometimes need to execute LLM-generated Python code -- solving math problems, transforming data, or validating logic. Running arbitrary code in the agent process is unacceptable, so the template provides an optional sandbox sidecar that agents opt into by adding a single tool.
+
+### Architecture
+
+The sandbox runs as a sidecar container in the same pod as the agent. The `code_executor` tool (a standard `@tool(visibility="llm_only")` in the agent's `tools/` directory) sends code to the sidecar over localhost. The sidecar validates the code, executes it in an isolated subprocess, and returns stdout/stderr/exit_code.
+
+This is a tool, not a framework feature. Agents that don't need code execution don't carry the sidecar. Agents that do need it add the tool file and set `sandbox.enabled: true` in their Helm values.
+
+### Pre-execution Guardrails
+
+Before any code runs, an AST-based validator walks the parse tree and collects all violations in a single pass. Two checks are applied:
+
+**Import allowlist.** Only 17 safe standard-library modules are permitted: math, statistics, itertools, functools, re, datetime, collections, json, csv, string, textwrap, decimal, fractions, random, operator, typing. Any other import is rejected with a message naming the blocked module.
+
+**Pattern scanner.** The AST visitor blocks dangerous calls (`eval`, `exec`, `compile`, `open`, `__import__`, `getattr`, `setattr`, `delattr`, `breakpoint`, `input`), dangerous module attribute access (`subprocess.*`, `socket.*`, `importlib.*`, `os.system`, `os.popen`), and dangerous dunder attribute access (`__subclasses__`, `__globals__`, `__builtins__`).
+
+All violations are returned at once so the LLM can fix everything in a single retry rather than playing whack-a-mole with one error at a time.
+
+### Runtime Isolation
+
+Code that passes guardrails is written to a temporary file and executed via `python3 -I` (isolated mode: no user site-packages, PYTHON* environment variables ignored) in a separate subprocess. The sidecar enforces a configurable timeout (default 10 seconds, max 30) and kills the process on expiry. Output is capped at 50 KB per stream.
+
+The sidecar container runs with `readOnlyRootFilesystem: true` and an emptyDir mount at `/tmp` (10 Mi limit) for temporary code files. It drops all Linux capabilities and runs as non-root.
+
+### Limitations (v1)
+
+AST guardrails are a defense-in-depth layer, not a hard security boundary. Python's dynamic nature means a sufficiently creative attacker can find bypass vectors. The real security comes from layering: AST validation teaches the LLM what is allowed, while container-level constraints (non-root, read-only filesystem, dropped capabilities, resource limits) provide the actual enforcement. Issue #26 tracks v2 hardening, including running the sandbox in a separate pod with a deny-all-egress NetworkPolicy.

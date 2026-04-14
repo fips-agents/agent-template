@@ -1,0 +1,20 @@
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+LABEL name="code-sandbox" \
+      version="0.1.0" \
+      description="Code execution sandbox sidecar" \
+      io.openshift.expose-services="8000:http"
+
+# UBI Python images use /opt/app-root as home; src is the conventional app dir
+WORKDIR /opt/app-root/src
+
+# Install deps first for layer caching (explicit list avoids needing source)
+COPY --chmod=644 pyproject.toml .
+RUN pip install --no-cache-dir "fastapi>=0.115.0" "uvicorn[standard]>=0.32.0"
+
+# Copy source into sandbox/ package directory
+COPY --chmod=644 __init__.py app.py executor.py guardrails.py sandbox/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "sandbox.app:app", "--host", "0.0.0.0", "--port", "8000"]
