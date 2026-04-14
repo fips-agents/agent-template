@@ -104,10 +104,20 @@ class MemoryClient(MemoryClientBase):
 
     async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         try:
-            result = await self._sdk.search_memory(query=query, **kwargs)
+            # SDK v0.5.0 uses .search(); earlier versions used .search_memory()
+            _search = getattr(self._sdk, "search", None) or self._sdk.search_memory
+            result = await _search(query=query, **kwargs)
             if isinstance(result, list):
                 return result
-            # Some SDK versions return a wrapper object with a .memories attr
+            # SDK v0.5.0 returns SearchResult with .results attribute
+            results = getattr(result, "results", None)
+            if results is not None:
+                # Convert Pydantic models to dicts if needed
+                return [
+                    r.model_dump() if hasattr(r, "model_dump") else r
+                    for r in results
+                ]
+            # Fallback for older SDK versions
             return getattr(result, "memories", [])
         except Exception:
             logger.warning(
@@ -119,8 +129,15 @@ class MemoryClient(MemoryClientBase):
 
     async def write(self, content: str, **kwargs: Any) -> dict[str, Any] | None:
         try:
-            result = await self._sdk.write_memory(content=content, **kwargs)
-            return result if isinstance(result, dict) else None
+            # SDK v0.5.0 uses .write(); earlier versions used .write_memory()
+            _write = getattr(self._sdk, "write", None) or self._sdk.write_memory
+            result = await _write(content=content, **kwargs)
+            if isinstance(result, dict):
+                return result
+            # SDK v0.5.0 returns WriteResult Pydantic model
+            if hasattr(result, "model_dump"):
+                return result.model_dump()
+            return None
         except Exception:
             logger.warning(
                 "MemoryHub write failed — memory not persisted",
@@ -132,9 +149,9 @@ class MemoryClient(MemoryClientBase):
         self, memory_id: str, content: str, **kwargs: Any
     ) -> dict[str, Any] | None:
         try:
-            result = await self._sdk.update_memory(
-                memory_id=memory_id, content=content, **kwargs
-            )
+            # SDK v0.5.0 uses .update(); earlier versions used .update_memory()
+            _update = getattr(self._sdk, "update", None) or self._sdk.update_memory
+            result = await _update(memory_id=memory_id, content=content, **kwargs)
             return result if isinstance(result, dict) else None
         except Exception:
             logger.warning(
@@ -235,9 +252,11 @@ async def create_memory_client(
 
         sdk = memoryhub.MemoryHubClient(**sdk_kwargs)
 
-        # If the SDK supports async session registration, do it now.
-        # register_session takes only api_key per the MemoryHub loading rule.
-        if hasattr(sdk, "register_session"):
+        # SDK v0.5.0 registers via __aenter__ (auto-calls register_session).
+        # Older SDKs may expose register_session directly.
+        if hasattr(sdk, "__aenter__"):
+            await sdk.__aenter__()
+        elif hasattr(sdk, "register_session"):
             await sdk.register_session(api_key=api_key)
 
         logger.info("MemoryHub integration enabled (config: %s)", path)
