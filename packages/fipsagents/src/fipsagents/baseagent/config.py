@@ -207,6 +207,29 @@ class MemoryConfig(BaseModel):
         return v
 
 
+class ToolInspectionConfig(BaseModel):
+    """Tool call inspection settings."""
+
+    enabled: bool = True
+    mode: Literal["enforce", "observe"] | None = None  # None = inherit from security.mode
+
+
+class GuardrailsConfig(BaseModel):
+    """Code execution guardrails settings."""
+
+    mode: Literal["enforce", "observe"] | None = None
+
+
+class SecurityConfig(BaseModel):
+    """Security settings controlling inspection and audit behavior."""
+
+    mode: Literal["enforce", "observe"] = "enforce"
+    tool_inspection: ToolInspectionConfig = Field(
+        default_factory=ToolInspectionConfig
+    )
+    guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
+
+
 class NodeConfig(BaseModel):
     """Configuration for a single workflow node's deployment topology."""
 
@@ -233,6 +256,7 @@ class AgentConfig(BaseModel):
     loop: LoopConfig = Field(default_factory=LoopConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)
 
 

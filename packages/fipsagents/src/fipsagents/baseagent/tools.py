@@ -311,6 +311,13 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, ToolMeta] = {}
+        self._inspector: Any | None = None
+        self._security_mode: str = "enforce"
+
+    def set_inspector(self, inspector: Any, *, mode: str = "enforce") -> None:
+        """Configure the pre-execution tool call inspector."""
+        self._inspector = inspector
+        self._security_mode = mode
 
     def register(self, tool_fn: Any) -> ToolMeta:
         """Register a ``@tool``-decorated function.
@@ -434,6 +441,30 @@ class ToolRegistry:
             )
 
         logger.debug("Executing tool %r (call_id=%s)", name, call_id)
+
+        # Pre-execution inspection
+        if self._inspector is not None:
+            inspection = self._inspector.inspect(name, kwargs)
+            if not inspection.is_clean:
+                audit_logger = logging.getLogger("fipsagents.security.audit")
+                for finding in inspection.findings:
+                    audit_logger.warning(
+                        "tool_inspection_finding tool=%s call_id=%s category=%s "
+                        "severity=%s argument=%s description=%s",
+                        name, call_id, finding.category,
+                        finding.severity, finding.argument_name,
+                        finding.description,
+                    )
+                if self._security_mode == "enforce":
+                    descriptions = "; ".join(
+                        f.description for f in inspection.findings
+                    )
+                    return ToolResult(
+                        call_id=call_id,
+                        name=name,
+                        error=f"Tool call blocked by security inspection: {descriptions}",
+                    )
+                # observe mode: log but continue execution
 
         try:
             if meta.is_async:

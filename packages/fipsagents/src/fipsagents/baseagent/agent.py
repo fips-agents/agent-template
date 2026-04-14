@@ -129,6 +129,20 @@ class BaseAgent(abc.ABC):
         discovered = self.tools.discover(tools_dir)
         logger.info("Discovered %d local tool(s)", len(discovered))
 
+        # 4b. Tool inspection
+        if self.config.security.tool_inspection.enabled:
+            from fipsagents.baseagent.tool_inspector import ToolInspector
+
+            inspector = ToolInspector()
+            effective_mode = (
+                self.config.security.tool_inspection.mode
+                or self.config.security.mode
+            )
+            self.tools.set_inspector(inspector, mode=effective_mode)
+            logger.info(
+                "Tool inspection enabled (mode=%s)", effective_mode
+            )
+
         # 5. Prompts
         prompts_dir = base / self.config.prompts.dir
         if prompts_dir.is_dir():

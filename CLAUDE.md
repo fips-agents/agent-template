@@ -39,6 +39,7 @@ These are settled. Do not revisit without explicit discussion.
 - **NodeConfig** in `AgentConfig` maps node names to deployment topology (`local` or `remote`). `WorkflowRunner` auto-wraps remote nodes transparently -- the graph definition stays topology-agnostic.
 - **Workflow state** is a typed Pydantic model with `extra="forbid"`. Data only -- execution metadata stays in structured logs.
 - **@node decorator** marks classes for workflow registration, mirroring the @tool pattern.
+- **SecurityConfig** in `AgentConfig` -- global `mode` (`enforce`/`observe`) with per-layer override (`tool_inspection.mode`, `guardrails.mode`). `ToolInspector` scans tool call arguments for secrets, C2 patterns, and prompt injection before execution. Audit findings log to `fipsagents.security.audit`. Wired in `setup()` step 4b.
 
 ## Repository Structure
 

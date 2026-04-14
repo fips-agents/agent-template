@@ -115,6 +115,22 @@ memory:
   config_path: .memoryhub.yaml
   # backend_class: null
 
+# -- Security ------------------------------------------------------------------
+#
+# Controls security inspection, audit logging, and enforcement behavior.
+# Global mode sets the default; per-layer mode overrides it.
+#
+#   mode: enforce      -- block on findings (production default)
+#   mode: observe      -- log findings but allow execution (for tuning)
+#
+security:
+  mode: ${SECURITY_MODE:-enforce}
+  tool_inspection:
+    enabled: ${TOOL_INSPECTION_ENABLED:-true}
+#    mode: observe     # override global mode for this layer
+#  guardrails:
+#    mode: observe     # override global mode for guardrails
+
 # -- Node deployment topology (optional) -------------------------------------
 #
 # Maps workflow node names to their deployment topology.  Nodes default to
