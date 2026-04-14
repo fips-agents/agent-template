@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from fipsagents.baseagent.config import MemoryConfig
 from fipsagents.baseagent.memory import (
     MemoryClient,
+    MemoryClientBase,
     NullMemoryClient,
     create_memory_client,
 )
@@ -255,3 +257,131 @@ class TestCreateMemoryClientFactory:
         with patch.dict(sys.modules, {"memoryhub": mock_memoryhub}):
             client = await create_memory_client(config_file)
         assert isinstance(client, MemoryClient)
+
+
+# ---------------------------------------------------------------------------
+# Backend dispatch via MemoryConfig
+# ---------------------------------------------------------------------------
+
+
+class TestBackendDispatch:
+    @pytest.mark.asyncio
+    async def test_null_backend_returns_null_client(self):
+        client = await create_memory_client(config=MemoryConfig(backend="null"))
+        assert isinstance(client, NullMemoryClient)
+
+    @pytest.mark.asyncio
+    async def test_memoryhub_backend_dispatches_to_memoryhub(self, tmp_path):
+        # Nonexistent config file causes _create_memoryhub_client to return Null,
+        # but it proves dispatch reached the memoryhub path (not the sqlite/pgvector
+        # paths) — if it had hit a different branch we would get a different log msg.
+        nonexistent = tmp_path / "no-such-file.yaml"
+        client = await create_memory_client(
+            config=MemoryConfig(backend="memoryhub", config_path=str(nonexistent))
+        )
+        assert isinstance(client, NullMemoryClient)
+
+    @pytest.mark.asyncio
+    async def test_sqlite_backend_falls_back_when_module_missing(self):
+        # memory_sqlite does not exist yet; ImportError must produce NullMemoryClient.
+        with patch.dict(
+            sys.modules,
+            {"fipsagents.baseagent.memory_sqlite": None},
+        ):
+            client = await create_memory_client(config=MemoryConfig(backend="sqlite"))
+        assert isinstance(client, NullMemoryClient)
+
+    @pytest.mark.asyncio
+    async def test_pgvector_backend_falls_back_when_module_missing(self):
+        with patch.dict(
+            sys.modules,
+            {"fipsagents.baseagent.memory_pgvector": None},
+        ):
+            client = await create_memory_client(
+                config=MemoryConfig(backend="pgvector")
+            )
+        assert isinstance(client, NullMemoryClient)
+
+    @pytest.mark.asyncio
+    async def test_custom_backend_without_class_returns_null(self):
+        # backend_class defaults to None — factory must return Null immediately.
+        client = await create_memory_client(config=MemoryConfig(backend="custom"))
+        assert isinstance(client, NullMemoryClient)
+
+    @pytest.mark.asyncio
+    async def test_custom_backend_loads_valid_class(self):
+        class MyMemClient(MemoryClientBase):
+            async def search(self, query, **kwargs):
+                return []
+
+            async def write(self, content, **kwargs):
+                return None
+
+            async def update(self, memory_id, content, **kwargs):
+                return None
+
+            async def report_contradiction(self, memory_id, description):
+                return None
+
+        mock_module = MagicMock()
+        mock_module.MyMemClient = MyMemClient
+
+        with patch("importlib.import_module", return_value=mock_module):
+            client = await create_memory_client(
+                config=MemoryConfig(
+                    backend="custom", backend_class="mymod.MyMemClient"
+                )
+            )
+
+        assert isinstance(client, MyMemClient)
+
+    @pytest.mark.asyncio
+    async def test_custom_backend_rejects_non_subclass(self):
+        class NotAMemClient:
+            """Does NOT inherit from MemoryClientBase."""
+
+        mock_module = MagicMock()
+        mock_module.NotAMemClient = NotAMemClient
+
+        with patch("importlib.import_module", return_value=mock_module):
+            client = await create_memory_client(
+                config=MemoryConfig(
+                    backend="custom", backend_class="mymod.NotAMemClient"
+                )
+            )
+
+        assert isinstance(client, NullMemoryClient)
+
+    @pytest.mark.asyncio
+    async def test_no_backend_falls_through_to_autodetect(self, tmp_path):
+        # backend=None means auto-detect; nonexistent config_path yields Null.
+        nonexistent = tmp_path / "no-memoryhub.yaml"
+        client = await create_memory_client(
+            config=MemoryConfig(config_path=str(nonexistent))
+        )
+        assert isinstance(client, NullMemoryClient)
+
+    @pytest.mark.asyncio
+    async def test_legacy_call_without_config_still_works(self, tmp_path):
+        # Backward-compat: no config kwarg at all, positional path only.
+        client = await create_memory_client(tmp_path / "nonexistent.yaml")
+        assert isinstance(client, NullMemoryClient)
+
+
+# ---------------------------------------------------------------------------
+# MemoryConfig field validation
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryConfigValidation:
+    def test_empty_string_backend_coerced_to_none(self):
+        cfg = MemoryConfig(backend="")
+        assert cfg.backend is None
+
+    def test_whitespace_backend_coerced_to_none(self):
+        cfg = MemoryConfig(backend="  ")
+        assert cfg.backend is None
+
+    def test_valid_backend_preserved(self):
+        cfg = MemoryConfig(backend="sqlite")
+        assert cfg.backend == "sqlite"

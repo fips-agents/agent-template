@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import tempfile
 import textwrap
-from pathlib import Path
 from typing import Optional
 
 import pytest

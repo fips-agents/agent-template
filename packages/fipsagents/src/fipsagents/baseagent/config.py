@@ -179,14 +179,32 @@ class LoggingConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    """MemoryHub integration settings (optional).
+    """Memory backend settings.
 
-    Memory is enabled by detecting ``.memoryhub.yaml`` at ``setup()`` time,
-    not via a flag here.  This model exists so agent code has a typed place
-    to learn where that file lives.
+    Controls which memory backend the agent uses.  When ``backend`` is
+    unset (the default), the factory auto-detects by looking for
+    ``.memoryhub.yaml`` — preserving backward compatibility.
+
+    Supported backends:
+      - ``memoryhub`` — MemoryHub SDK (requires ``memoryhub`` package)
+      - ``sqlite``    — Local SQLite with FTS5 (zero dependencies)
+      - ``pgvector``  — PostgreSQL + pgvector (requires ``asyncpg``)
+      - ``custom``    — Bring your own: set ``backend_class`` to a dotted
+                        import path for a ``MemoryClientBase`` subclass
+      - ``null``      — Explicitly disable memory
     """
 
+    backend: Literal["memoryhub", "sqlite", "pgvector", "custom", "null"] | None = None
     config_path: str = ".memoryhub.yaml"
+    backend_class: str | None = None
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _coerce_empty_backend(cls, v: Any) -> Any:
+        """Coerce empty strings to None (from ``${MEMORY_BACKEND:-}``)."""
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
 
 
 class AgentConfig(BaseModel):

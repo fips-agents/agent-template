@@ -1,19 +1,32 @@
-"""Optional MemoryHub integration for BaseAgent.
+"""Pluggable memory backends for BaseAgent.
 
-Provides ``MemoryClient`` for programmatic read/write of agent memories
-through the MemoryHub SDK, and ``NullMemoryClient`` as a silent no-op
-fallback when MemoryHub is not configured or unavailable.
+Provides a common ``MemoryClientBase`` interface and multiple backend
+implementations.  ``NullMemoryClient`` is the silent no-op fallback used
+when no backend is configured or any backend fails to initialise.
 
-The ``create_memory_client`` factory handles detection, lazy import, and
-graceful degradation so that agent code can unconditionally call
-``self.memory.search(...)`` without caring whether MemoryHub is active.
+``create_memory_client`` is the factory entry point.  It accepts an
+optional ``MemoryConfig`` object to select a specific backend; without
+one it auto-detects by looking for ``.memoryhub.yaml`` (backward compat).
+
+The factory **never** raises — the agent always gets a usable client.
+
+Supported backends:
+  - ``memoryhub``  — MemoryHub SDK (auto-detected or explicit)
+  - ``sqlite``     — Local SQLite with FTS5 (via ``memory_sqlite`` module)
+  - ``pgvector``   — PostgreSQL + pgvector (via ``memory_pgvector`` module)
+  - ``custom``     — Any ``MemoryClientBase`` subclass at a dotted import path
+  - ``null``       — Explicitly disabled
 """
 
 from __future__ import annotations
 
+import importlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fipsagents.baseagent.config import MemoryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -183,34 +196,69 @@ class MemoryClient(MemoryClientBase):
 
 async def create_memory_client(
     config_path: str | Path = ".memoryhub.yaml",
+    *,
+    config: MemoryConfig | None = None,
 ) -> MemoryClientBase:
     """Create the appropriate memory client based on configuration.
 
-    Detection logic:
-
-    1. If *config_path* does not exist on disk, return ``NullMemoryClient``.
-    2. Try to ``import memoryhub``.  If the package is missing, log a
-       warning and return ``NullMemoryClient``.
-    3. Read the YAML config, build a real SDK client, and return a
-       ``MemoryClient`` wrapper.  If anything fails during SDK
-       initialisation (bad config, unreachable server, etc.), log a
-       warning and return ``NullMemoryClient``.
+    When *config* is provided and ``config.backend`` is set, dispatches
+    directly to the named backend.  Otherwise falls back to auto-detection
+    via the ``.memoryhub.yaml`` file (backward compatible).
 
     This function **never** raises — the agent always gets a usable client.
 
     Parameters
     ----------
     config_path:
-        Path to the ``.memoryhub.yaml`` file.  Defaults to the
-        conventional location at the project root.
+        Path to the ``.memoryhub.yaml`` file.  Used only when *config* is
+        not provided (legacy call sites).
+    config:
+        Optional ``MemoryConfig`` from ``agent.yaml``.  When present,
+        ``config.backend`` and ``config.config_path`` drive selection.
 
     Returns
     -------
     MemoryClientBase:
-        Either a live ``MemoryClient`` or a ``NullMemoryClient``.
+        A live backend client or ``NullMemoryClient``.
     """
-    path = Path(config_path)
+    # Resolve effective backend and config path.
+    backend = config.backend if config else None
+    effective_path = Path(config.config_path if config else config_path)
 
+    # Explicit dispatch when backend is set.
+    if backend == "null":
+        logger.debug("Memory backend explicitly set to 'null' — disabled")
+        return NullMemoryClient()
+
+    if backend == "memoryhub":
+        return await _create_memoryhub_client(effective_path)
+
+    if backend == "sqlite":
+        return await _create_sqlite_client(effective_path)
+
+    if backend == "pgvector":
+        return await _create_pgvector_client(effective_path)
+
+    if backend == "custom":
+        if not config or not config.backend_class:
+            logger.error(
+                "Memory backend is 'custom' but no backend_class specified "
+                "in memory config"
+            )
+            return NullMemoryClient()
+        return await _create_custom_client(config.backend_class)
+
+    # No explicit backend — auto-detect (backward compat).
+    return await _create_memoryhub_client(effective_path)
+
+
+# ---------------------------------------------------------------------------
+# Backend helpers
+# ---------------------------------------------------------------------------
+
+
+async def _create_memoryhub_client(path: Path) -> MemoryClientBase:
+    """Create a MemoryHub-backed memory client."""
     if not path.exists():
         logger.debug(
             "No MemoryHub config at %s — memory integration disabled", path
@@ -233,20 +281,20 @@ async def create_memory_client(
         import yaml
 
         raw = path.read_text(encoding="utf-8")
-        config = yaml.safe_load(raw) or {}
+        hub_config = yaml.safe_load(raw) or {}
 
-        # Read the API key from the conventional location if not in config
-        api_key = config.get("api_key")
+        # Read the API key from the conventional location if not in config.
+        api_key = hub_config.get("api_key")
         if not api_key:
             key_path = Path.home() / ".config" / "memoryhub" / "api-key"
             if key_path.exists():
                 api_key = key_path.read_text(encoding="utf-8").strip()
 
-        # Build the SDK client — exact kwargs depend on the memoryhub SDK
+        # Build the SDK client — exact kwargs depend on the memoryhub SDK.
         sdk_kwargs: dict[str, Any] = {}
         if api_key:
             sdk_kwargs["api_key"] = api_key
-        server_url = config.get("server_url") or config.get("url")
+        server_url = hub_config.get("server_url") or hub_config.get("url")
         if server_url:
             sdk_kwargs["server_url"] = server_url
 
@@ -267,6 +315,63 @@ async def create_memory_client(
             "Failed to initialise MemoryHub from %s — falling back to "
             "NullMemoryClient.  The agent will run without memory.",
             path,
+            exc_info=True,
+        )
+        return NullMemoryClient()
+
+
+async def _create_sqlite_client(config_path: Path) -> MemoryClientBase:
+    """Create a SQLite-backed memory client."""
+    try:
+        from fipsagents.baseagent.memory_sqlite import create_sqlite_client
+
+        return await create_sqlite_client(config_path)
+    except ImportError:
+        logger.error(
+            "SQLite memory backend requested but memory_sqlite module "
+            "not found — falling back to NullMemoryClient"
+        )
+        return NullMemoryClient()
+
+
+async def _create_pgvector_client(config_path: Path) -> MemoryClientBase:
+    """Create a PGVector-backed memory client."""
+    try:
+        from fipsagents.baseagent.memory_pgvector import create_pgvector_client
+
+        return await create_pgvector_client(config_path)
+    except ImportError:
+        logger.error(
+            "PGVector memory backend requested but memory_pgvector module "
+            "not found — falling back to NullMemoryClient. "
+            "Install with: pip install fipsagents[pgvector]"
+        )
+        return NullMemoryClient()
+
+
+async def _create_custom_client(dotted_path: str) -> MemoryClientBase:
+    """Import and instantiate a custom MemoryClientBase subclass."""
+    try:
+        module_path, class_name = dotted_path.rsplit(".", 1)
+        module = importlib.import_module(module_path)
+        cls = getattr(module, class_name)
+        if not (isinstance(cls, type) and issubclass(cls, MemoryClientBase)):
+            logger.error(
+                "Custom memory backend class %s is not a MemoryClientBase "
+                "subclass — falling back to NullMemoryClient",
+                dotted_path,
+            )
+            return NullMemoryClient()
+        instance = cls()
+        # If the custom class has an async setup method, call it.
+        if hasattr(instance, "setup") and callable(instance.setup):
+            await instance.setup()
+        return instance
+    except Exception:
+        logger.warning(
+            "Failed to load custom memory backend from %s — "
+            "falling back to NullMemoryClient",
+            dotted_path,
             exc_info=True,
         )
         return NullMemoryClient()
