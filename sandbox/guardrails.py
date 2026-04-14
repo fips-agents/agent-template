@@ -15,6 +15,7 @@ Usage::
 """
 
 import ast
+import re
 
 # Modules the sandbox is allowed to import.
 ALLOWED_IMPORTS: frozenset[str] = frozenset(
@@ -64,6 +65,60 @@ _BLOCKED_MODULE_ATTRS: frozenset[tuple[str, str]] = frozenset(
 _BLOCKED_DUNDERS: frozenset[str] = frozenset(
     {"__subclasses__", "__globals__", "__builtins__"}
 )
+
+# Unsafe deserialization: (module, method) pairs.  These modules are already
+# blocked by ALLOWED_IMPORTS, but explicit checks give clearer error messages
+# (defense-in-depth).
+_UNSAFE_DESER: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("pickle", "loads"),
+        ("pickle", "load"),
+        ("pickle", "Unpickler"),
+        ("yaml", "unsafe_load"),
+        ("yaml", "load"),
+        ("marshal", "loads"),
+        ("marshal", "load"),
+        ("shelve", "open"),
+    }
+)
+
+# Weak cryptographic hash functions.
+_WEAK_CRYPTO_CALLS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("hashlib", "md5"),
+        ("hashlib", "sha1"),
+    }
+)
+
+# Compiled regexes for credential / secret detection in string literals.
+_SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("AWS access key ID", re.compile(r"AKIA[0-9A-Z]{16}")),
+    (
+        "generic secret assignment",
+        re.compile(
+            r"(?:api[_-]?key|api[_-]?secret|token|secret[_-]?key"
+            r"|password|passwd|auth[_-]?token)"
+            r"""\s*[:=]\s*['"][A-Za-z0-9+/=_-]{16,}['"]"""
+        ),
+    ),
+    (
+        "PEM private key",
+        re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
+    ),
+    (
+        "high-entropy hex string",
+        re.compile(r"\b[0-9a-fA-F]{32,}\b"),
+    ),
+]
+
+# SQL keyword pattern for injection detection.
+_SQL_KEYWORD_RE: re.Pattern[str] = re.compile(
+    r"\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|UNION)\b",
+    re.IGNORECASE,
+)
+
+# Path traversal pattern — any string containing "../".
+_PATH_TRAVERSAL_RE: re.Pattern[str] = re.compile(r"\.\./")
 
 
 class _GuardrailVisitor(ast.NodeVisitor):
@@ -127,6 +182,32 @@ class _GuardrailVisitor(ast.NodeVisitor):
                         f"(module '{obj.id}' is blocked)"
                     )
 
+                # Unsafe deserialization: pickle.loads(), yaml.load(), etc.
+                if (obj.id, attr) in _UNSAFE_DESER:
+                    self.violations.append(
+                        f"Line {node.lineno}: call to '{obj.id}.{attr}()' is unsafe "
+                        f"deserialization"
+                    )
+
+                # Weak crypto: hashlib.md5(), hashlib.sha1()
+                if (obj.id, attr) in _WEAK_CRYPTO_CALLS:
+                    self.violations.append(
+                        f"Line {node.lineno}: call to '{obj.id}.{attr}()' uses weak "
+                        f"cryptography"
+                    )
+
+            # str.format() SQL injection: "SELECT ...".format(...)
+            if (
+                attr == "format"
+                and isinstance(obj, ast.Constant)
+                and isinstance(obj.value, str)
+                and _SQL_KEYWORD_RE.search(obj.value)
+            ):
+                self.violations.append(
+                    f"Line {node.lineno}: potential SQL injection via "
+                    f".format() on a string containing SQL keywords"
+                )
+
         self.generic_visit(node)
 
     # ------------------------------------------------------------------
@@ -140,6 +221,79 @@ class _GuardrailVisitor(ast.NodeVisitor):
         if attr in _BLOCKED_DUNDERS:
             self.violations.append(
                 f"Line {node.lineno}: access to '{attr}' attribute is not allowed"
+            )
+
+        self.generic_visit(node)
+
+    # ------------------------------------------------------------------
+    # String literal checking (credentials, path traversal)
+    # ------------------------------------------------------------------
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        if not isinstance(node.value, str) or len(node.value) < 16:
+            self.generic_visit(node)
+            return
+
+        value = node.value
+
+        # Credential / secret patterns
+        for name, pattern in _SECRET_PATTERNS:
+            if pattern.search(value):
+                self.violations.append(
+                    f"Line {node.lineno}: string literal matches {name} pattern"
+                )
+                break  # one credential violation per string is enough
+
+        # Path traversal
+        if _PATH_TRAVERSAL_RE.search(value):
+            self.violations.append(
+                f"Line {node.lineno}: string literal contains path traversal "
+                f"sequence ('../')"
+            )
+
+        self.generic_visit(node)
+
+    # ------------------------------------------------------------------
+    # SQL injection — f-strings
+    # ------------------------------------------------------------------
+
+    def visit_JoinedStr(self, node: ast.JoinedStr) -> None:
+        # Reconstruct the static text portions of the f-string and check
+        # for SQL keywords.
+        static_parts: list[str] = []
+        has_interpolation = False
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                static_parts.append(part.value)
+            else:
+                has_interpolation = True
+
+        # Only flag if there is actual interpolation (otherwise it's just a
+        # regular string that happens to use f"" syntax).
+        if has_interpolation:
+            combined = " ".join(static_parts)
+            if _SQL_KEYWORD_RE.search(combined):
+                self.violations.append(
+                    f"Line {node.lineno}: potential SQL injection via f-string "
+                    f"containing SQL keywords"
+                )
+
+        self.generic_visit(node)
+
+    # ------------------------------------------------------------------
+    # SQL injection — %-formatting
+    # ------------------------------------------------------------------
+
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        if (
+            isinstance(node.op, ast.Mod)
+            and isinstance(node.left, ast.Constant)
+            and isinstance(node.left.value, str)
+            and _SQL_KEYWORD_RE.search(node.left.value)
+        ):
+            self.violations.append(
+                f"Line {node.lineno}: potential SQL injection via "
+                f"%-formatting on a string containing SQL keywords"
             )
 
         self.generic_visit(node)
