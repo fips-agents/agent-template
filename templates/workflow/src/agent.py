@@ -9,8 +9,7 @@ import asyncio
 import json
 import logging
 
-from workflow import WorkflowState, BaseNode, Graph, WorkflowRunner, END, node
-from workflow.agent_node import AgentNode
+from fipsagents.workflow import WorkflowState, BaseNode, Graph, WorkflowRunner, END, node, AgentNode
 
 logger = logging.getLogger(__name__)
 

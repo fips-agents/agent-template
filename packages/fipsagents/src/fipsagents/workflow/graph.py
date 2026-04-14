@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from workflow.errors import NodeNotFoundError
-from workflow.state import END
+from fipsagents.workflow.errors import NodeNotFoundError
+from fipsagents.workflow.state import END
 
 logger = logging.getLogger(__name__)
 

@@ -11,9 +11,9 @@ import logging
 import time
 from typing import Any, TypeVar
 
-from workflow.errors import EdgeResolutionError, MaxStepsExceededError
-from workflow.graph import Graph
-from workflow.state import END
+from fipsagents.workflow.errors import EdgeResolutionError, MaxStepsExceededError
+from fipsagents.workflow.graph import Graph
+from fipsagents.workflow.state import END
 
 logger = logging.getLogger(__name__)
 

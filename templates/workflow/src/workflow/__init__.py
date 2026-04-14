@@ -1,19 +1,25 @@
-"""Workflow orchestration engine for composing agents and nodes into directed graphs."""
+"""Workflow framework — re-exported from the fipsagents package.
 
-from workflow.errors import (
+This shim provides backwards compatibility for projects that import
+from ``workflow`` directly. New code should import from
+``fipsagents.workflow`` instead.
+"""
+
+from fipsagents.workflow import (
+    END,
+    AgentNode,
+    BaseNode,
     EdgeResolutionError,
+    Graph,
     MaxStepsExceededError,
     NodeNotFoundError,
     StateValidationError,
     WorkflowError,
+    WorkflowNode,
+    WorkflowRunner,
+    WorkflowState,
+    node,
 )
-from workflow.state import END, WorkflowState
-from workflow.protocol import WorkflowNode
-from workflow.node import BaseNode
-from workflow.decorator import node  # must come after workflow.node import to avoid module shadowing
-from workflow.graph import Graph
-from workflow.runner import WorkflowRunner
-from workflow.agent_node import AgentNode
 
 __all__ = [
     "WorkflowState",

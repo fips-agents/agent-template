@@ -23,6 +23,21 @@ from fipsagents.baseagent import (
     ToolRegistry,
     ToolResult,
 )
+from fipsagents.workflow import (
+    WorkflowState,
+    END,
+    BaseNode,
+    WorkflowNode,
+    node,
+    Graph,
+    WorkflowRunner,
+    AgentNode,
+    WorkflowError,
+    NodeNotFoundError,
+    EdgeResolutionError,
+    StateValidationError,
+    MaxStepsExceededError,
+)
 
 __all__ = [
     "BaseAgent",
@@ -46,4 +61,17 @@ __all__ = [
     "ToolCall",
     "ToolRegistry",
     "ToolResult",
+    "WorkflowState",
+    "END",
+    "BaseNode",
+    "WorkflowNode",
+    "node",
+    "Graph",
+    "WorkflowRunner",
+    "AgentNode",
+    "WorkflowError",
+    "NodeNotFoundError",
+    "EdgeResolutionError",
+    "StateValidationError",
+    "MaxStepsExceededError",
 ]
