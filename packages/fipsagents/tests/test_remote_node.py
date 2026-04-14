@@ -27,10 +27,18 @@ class RemoteState(WorkflowState):
 # ---------------------------------------------------------------------------
 
 
-def _mock_response(status_code: int = 200, json_data: dict | None = None) -> MagicMock:
+def _mock_response(
+    status_code: int = 200,
+    json_data: dict | None = None,
+    *,
+    json_error: bool = False,
+) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status_code
-    resp.json.return_value = json_data or {}
+    if json_error:
+        resp.json.side_effect = ValueError("No JSON object could be decoded")
+    else:
+        resp.json.return_value = json_data or {}
     if status_code >= 400:
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
             "error", request=MagicMock(), response=resp
@@ -282,3 +290,48 @@ class TestRemoteNodeBackoff:
 
         for sleep_call in sleep_mock.call_args_list:
             assert sleep_call.args[0] <= 0.5
+
+
+# ---------------------------------------------------------------------------
+# Response parsing errors (#32)
+# ---------------------------------------------------------------------------
+
+
+class TestRemoteNodeResponseParsing:
+    async def test_non_json_response_raises_remote_node_error(self):
+        node = RemoteNode(name="worker", endpoint="http://agent:8080", retries=0)
+
+        cls_mock, _ = _make_client_patch([_mock_response(200, json_error=True)])
+        with patch("httpx.AsyncClient", cls_mock):
+            with pytest.raises(RemoteNodeError, match="invalid response"):
+                await node.process(RemoteState())
+
+    async def test_missing_state_key_raises_remote_node_error(self):
+        node = RemoteNode(name="worker", endpoint="http://agent:8080", retries=0)
+
+        cls_mock, _ = _make_client_patch([_mock_response(200, {"wrong_key": {}})])
+        with patch("httpx.AsyncClient", cls_mock):
+            with pytest.raises(RemoteNodeError, match="invalid response"):
+                await node.process(RemoteState())
+
+    async def test_invalid_state_schema_raises_remote_node_error(self):
+        node = RemoteNode(name="worker", endpoint="http://agent:8080", retries=0)
+        # RemoteState uses extra="forbid", so an unknown field triggers ValidationError
+        bad_state = {"state": {"query": "q", "result": "r", "unknown_field": "x"}}
+
+        cls_mock, _ = _make_client_patch([_mock_response(200, bad_state)])
+        with patch("httpx.AsyncClient", cls_mock):
+            with pytest.raises(RemoteNodeError, match="invalid response"):
+                await node.process(RemoteState())
+
+    async def test_parsing_error_is_not_retried(self):
+        """Response parsing errors should raise immediately, not trigger retries."""
+        node = RemoteNode(name="worker", endpoint="http://agent:8080", retries=2)
+
+        cls_mock, client_mock = _make_client_patch([_mock_response(200, {"no_state": {}})])
+        with patch("httpx.AsyncClient", cls_mock):
+            with pytest.raises(RemoteNodeError):
+                await node.process(RemoteState())
+
+        # Only one HTTP call — parsing error is not retryable
+        assert client_mock.post.call_count == 1

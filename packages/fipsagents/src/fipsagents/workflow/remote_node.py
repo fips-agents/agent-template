@@ -7,6 +7,7 @@ import logging
 from typing import TypeVar
 
 import httpx
+from pydantic import ValidationError
 
 from fipsagents.workflow.node import BaseNode
 from fipsagents.baseagent.config import BackoffConfig
@@ -82,8 +83,14 @@ class RemoteNode(BaseNode):
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     resp = await client.post(url, json=payload)
                     resp.raise_for_status()
-                    data = resp.json()
-                    return state_type.model_validate(data["state"])
+                    try:
+                        data = resp.json()
+                        return state_type.model_validate(data["state"])
+                    except (KeyError, ValueError, ValidationError) as exc:
+                        raise RemoteNodeError(
+                            f"Remote node '{self.name}' received invalid response "
+                            f"from {url}: {exc}"
+                        ) from exc
             except httpx.HTTPStatusError as exc:
                 last_error = exc
                 logger.warning(
