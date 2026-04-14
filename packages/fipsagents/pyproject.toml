@@ -38,6 +38,11 @@ dependencies = [
 memory = [
     "memoryhub",
 ]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov",
+]
 
 [project.urls]
 Homepage = "https://github.com/redhat-ai-americas/agent-template"
@@ -46,3 +51,7 @@ Issues = "https://github.com/redhat-ai-americas/agent-template/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
