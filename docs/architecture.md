@@ -87,7 +87,7 @@ BaseAgent includes a built-in MCP client (FastMCP v3) for connecting to remote t
 
 ### Memory
 
-When a `.memoryhub.yaml` file is present, `self.memory` provides the MemoryHub SDK client for programmatic read/write from agent code. When absent, `self.memory` is `None` and the agent works without it. Memory integration is described in detail in its own section.
+`self.memory` is always a `MemoryClientBase` instance -- either a live backend or `NullMemoryClient` (silent no-op). Agent code can unconditionally call `self.memory.search(...)` without checking configuration. The backend is selected via `memory.backend` in `agent.yaml`; when unset, the factory auto-detects `.memoryhub.yaml` for backward compatibility. Memory integration is described in detail in its own section.
 
 ### Skills
 
@@ -195,19 +195,27 @@ logging:
 
 The env var substitution pattern provides clean separation between the configuration structure (which is baked into the container image) and environment-specific values (which come from OpenShift ConfigMaps and Secrets at deploy time). Defaults ensure the agent can run locally without any external configuration, while every value can be overridden for production.
 
-## MemoryHub Integration
+## Memory Integration
 
-MemoryHub integration is optional and first-class. When a developer wants memory capabilities, they run `memoryhub config init`, which generates two files: `.memoryhub.yaml` (behavioral configuration, committed to source) and a rules file for memory-related agent behavior.
+Memory is optional and pluggable. The `memory.backend` field in `agent.yaml` selects which backend to use:
 
-BaseAgent detects `.memoryhub.yaml` during `setup()` and wires up two access paths:
+| Backend | Config file | Dependencies | Search type | Best for |
+|---------|-------------|--------------|-------------|----------|
+| `memoryhub` | `.memoryhub.yaml` | `memoryhub` | Full (server-side) | Production with MemoryHub |
+| `sqlite` | `.memory-sqlite.yaml` | None (stdlib) | Keyword (FTS5) | Local dev, testing |
+| `pgvector` | `.memory-pgvector.yaml` | `asyncpg`, `pgvector` | Semantic (vector cosine) | Production without MemoryHub |
+| `custom` | -- | Your choice | Your choice | Custom infrastructure |
+| `null` | -- | None | None (disabled) | Explicitly disable memory |
 
-**The MCP path** makes MemoryHub's 15 tools available to the LLM through the standard MCP client. The LLM can read and write memories as part of its tool-calling workflow.
+When `backend` is unset, the factory auto-detects `.memoryhub.yaml` for backward compatibility. All backends implement `MemoryClientBase` with four async methods: `search()`, `write()`, `update()`, and `report_contradiction()`. When no backend is configured (or any backend fails to initialise), `self.memory` is a `NullMemoryClient` -- a silent no-op that returns empty results so agent code never needs to guard on configuration.
 
 **The SDK path** exposes `self.memory` for programmatic access from agent code. This is for cases where the agent logic itself needs to read or write memories -- caching intermediate results, maintaining state across iterations, or implementing retrieval patterns that the LLM shouldn't control directly.
 
-When `.memoryhub.yaml` is absent, `self.memory` is `None` and MemoryHub tools are not registered. The agent works identically in either case; memory is purely additive.
+**The MCP path** (MemoryHub only) makes MemoryHub's tools available to the LLM through the standard MCP client. The LLM can read and write memories as part of its tool-calling workflow.
 
-For multi-agent deployments, multiple agents can connect to the same MemoryHub instance. Scope-based visibility (user, project, role, organization, enterprise) and RBAC control which agents can see which memories, enabling shared-memory architectures without coupling the agents to each other.
+Custom backends can be registered via `backend: custom` with a `backend_class` dotted import path in `agent.yaml`. See `docs/custom-memory-backend.md` for the full guide.
+
+For multi-agent deployments with MemoryHub, multiple agents can connect to the same instance. Scope-based visibility (user, project, role, organization, enterprise) and RBAC control which agents can see which memories, enabling shared-memory architectures without coupling the agents to each other.
 
 ## Deployment Model
 
@@ -331,7 +339,8 @@ The dependency footprint is deliberately minimal:
 
 - **litellm** -- LLM client providing the OpenAI-compatible interface to 100+ providers
 - **FastMCP v3** -- MCP client for remote tool server integration
-- **memoryhub SDK** -- optional; MemoryHub programmatic access
+- **memoryhub SDK** -- optional; MemoryHub programmatic access (one of several pluggable memory backends)
+- **asyncpg** -- optional; PGVector memory backend (`pip install fipsagents[pgvector]`)
 - **pydantic** -- configuration validation and structured output schemas
 - **httpx** -- async HTTP (also used internally by litellm and FastMCP)
 - **python-frontmatter** -- parsing YAML frontmatter in prompt and skill files

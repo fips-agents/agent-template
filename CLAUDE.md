@@ -29,7 +29,7 @@ These are settled. Do not revisit without explicit discussion.
 - **Rules** are plain Markdown files in `rules/`, no frontmatter
 - **agent.yaml** with `${VAR:-default}` env var substitution for configuration
 - **Immutable container images** -- code, tools, prompts, skills, rules all baked in. Only env-specific config is external.
-- **MemoryHub** integration is optional and first-class -- dual path: MCP for LLM, SDK (`self.memory`) for agent code. Wired via `memoryhub config init`.
+- **Pluggable memory backends** -- memoryhub, sqlite, pgvector, custom, or null. `self.memory` is always a `MemoryClientBase` (never None). MemoryHub adds MCP path for LLM-driven memory tools.
 - **Helm chart** bundles only the agent. Infrastructure (vLLM, LlamaStack, PGVector) is pre-deployed via rh-ai-quickstart/ai-architecture-charts.
 - **Red Hat UBI** base images for all containers
 - **`call_model_validated()`** is a first-class BaseAgent method -- call model, validate with a tool, retry with backoff
@@ -89,7 +89,8 @@ Makefile
 
 - litellm -- LLM client
 - fastmcp (v3) -- MCP client
-- memoryhub -- optional, MemoryHub SDK
+- memoryhub -- optional, MemoryHub memory backend
+- asyncpg -- optional, PGVector memory backend (`pip install fipsagents[pgvector]`)
 - pydantic -- config and schema validation
 - httpx -- async HTTP
 - python-frontmatter -- parsing prompt/skill files

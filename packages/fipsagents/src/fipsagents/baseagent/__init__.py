@@ -1,6 +1,6 @@
 """BaseAgent framework for building production-ready AI agents."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from fipsagents.baseagent.agent import BaseAgent, StepOutcome, StepResult
 from fipsagents.baseagent.config import AgentConfig, ConfigError, load_config, load_config_from_string
