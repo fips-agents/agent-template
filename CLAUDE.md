@@ -49,6 +49,7 @@ agent-template/
   packages/
     fipsagents/            # Shared BaseAgent package (pip-installable)
   sandbox/                 # Code execution sandbox sidecar (FastAPI, UBI)
+  examples/                # Runnable demos (shared-memory, etc.)
   templates/
     agent-loop/            # Single-agent loop template
     workflow/              # Multi-node workflow template

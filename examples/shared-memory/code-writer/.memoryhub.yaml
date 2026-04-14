@@ -1,0 +1,13 @@
+# Replace with your MemoryHub MCP server URL and API key.
+# For shared memory demo: use the same API key as the problem-solver agent,
+# or enroll both agents in the same MemoryHub project.
+server_url: "${MEMORYHUB_URL:-https://your-memoryhub-server.example.com/mcp/}"
+api_key: "${MEMORYHUB_API_KEY}"
+
+memory_loading:
+  mode: focused
+  pattern: lazy
+retrieval_defaults:
+  max_results: 10
+  max_response_tokens: 4000
+  default_mode: full
