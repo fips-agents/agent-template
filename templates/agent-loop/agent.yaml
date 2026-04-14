@@ -115,6 +115,34 @@ memory:
   config_path: .memoryhub.yaml
   # backend_class: null
 
+# -- Node deployment topology (optional) -------------------------------------
+#
+# Maps workflow node names to their deployment topology.  Nodes default to
+# local (in-process).  Set type: remote to delegate processing to an
+# already-deployed agent via HTTP POST.
+#
+# The runner auto-wraps remote nodes -- the graph definition stays
+# topology-agnostic.  Same graph works for local dev and production.
+#
+# Remote contract:
+#   POST {endpoint}{path}
+#   Body:  {"state": {...}, "state_type": "fully.qualified.ClassName"}
+#   Reply: {"state": {...}}
+#
+# Production env vars (example):
+#   RESEARCH_AGENT_URL -- URL of a separately deployed research agent
+#
+# nodes:
+#   classify:
+#     type: local
+#   research:
+#     type: remote
+#     endpoint: ${RESEARCH_AGENT_URL:-http://research-agent:8080}
+#     path: /process        # default
+#     timeout: 30.0         # seconds, default
+#     retries: 2            # HTTP-level retries (runner also retries via node_retries)
+nodes: {}
+
 # -- Code execution sandbox (optional) ----------------------------------------
 #
 # The code_executor tool sends LLM-generated Python code to a sandbox sidecar

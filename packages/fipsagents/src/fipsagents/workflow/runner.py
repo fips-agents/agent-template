@@ -11,8 +11,10 @@ import logging
 import time
 from typing import Any, TypeVar
 
+from fipsagents.baseagent.config import NodeConfig
 from fipsagents.workflow.errors import EdgeResolutionError, MaxStepsExceededError
 from fipsagents.workflow.graph import Graph
+from fipsagents.workflow.remote_node import RemoteNode
 from fipsagents.workflow.state import END
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,11 @@ class WorkflowRunner:
     Basic usage::
 
         runner = WorkflowRunner(graph, max_steps=100)
+        result = await runner.start(initial_state)
+
+    With remote nodes (topology from agent.yaml)::
+
+        runner = WorkflowRunner(graph, node_configs=config.nodes)
         result = await runner.start(initial_state)
 
     For finer control over lifecycle::
@@ -44,10 +51,12 @@ class WorkflowRunner:
         *,
         max_steps: int = 50,
         node_retries: int = 2,
+        node_configs: dict[str, NodeConfig] | None = None,
     ) -> None:
         self._graph = graph
         self._max_steps = max_steps
         self._node_retries = node_retries
+        self._node_configs = node_configs or {}
 
     async def setup(self) -> None:
         """Initialise nodes that have a ``setup`` method (e.g. AgentNodes)."""
@@ -137,7 +146,8 @@ class WorkflowRunner:
             start = time.monotonic()
 
             try:
-                updated = await node.process(state)
+                effective_node = self._effective_node(name, node)
+                updated = await effective_node.process(state)
                 duration_ms = (time.monotonic() - start) * 1000
                 output_hash = _state_hash(updated)
 
@@ -192,6 +202,19 @@ class WorkflowRunner:
             },
         )
         raise last_exc
+
+    def _effective_node(self, name: str, node: Any) -> Any:
+        """Return a RemoteNode wrapper if config says remote, else the original node."""
+        cfg = self._node_configs.get(name)
+        if cfg is not None and cfg.type == "remote":
+            return RemoteNode(
+                name=name,
+                endpoint=cfg.endpoint,  # type: ignore[arg-type]  # validated by NodeConfig
+                path=cfg.path,
+                timeout=cfg.timeout,
+                retries=cfg.retries,
+            )
+        return node
 
     def _resolve_next(self, current: str, state: Any) -> str:
         """Determine the next node from edges. Conditional edges take priority."""

@@ -3,7 +3,7 @@
 __version__ = "0.2.0"
 
 from fipsagents.baseagent.agent import BaseAgent, StepOutcome, StepResult
-from fipsagents.baseagent.config import AgentConfig, ConfigError, load_config, load_config_from_string
+from fipsagents.baseagent.config import AgentConfig, ConfigError, NodeConfig, load_config, load_config_from_string
 from fipsagents.baseagent.llm import LLMClient, LLMError, ModelResponse
 from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, create_memory_client
 from fipsagents.baseagent.prompts import Prompt, PromptLoader
@@ -19,6 +19,7 @@ __all__ = [
     # config
     "AgentConfig",
     "ConfigError",
+    "NodeConfig",
     "load_config",
     "load_config_from_string",
     # llm

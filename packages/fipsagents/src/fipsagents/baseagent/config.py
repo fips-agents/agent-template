@@ -207,6 +207,22 @@ class MemoryConfig(BaseModel):
         return v
 
 
+class NodeConfig(BaseModel):
+    """Configuration for a single workflow node's deployment topology."""
+
+    type: Literal["local", "remote"] = "local"
+    endpoint: str | None = None
+    path: str = "/process"
+    timeout: float = 30.0
+    retries: int = 2
+
+    @model_validator(mode="after")
+    def _validate_remote_has_endpoint(self) -> "NodeConfig":
+        if self.type == "remote" and not self.endpoint:
+            raise ValueError("Remote nodes require an 'endpoint'")
+        return self
+
+
 class AgentConfig(BaseModel):
     """Top-level agent configuration, corresponding to ``agent.yaml``."""
 
@@ -217,6 +233,7 @@ class AgentConfig(BaseModel):
     loop: LoopConfig = Field(default_factory=LoopConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    nodes: dict[str, NodeConfig] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

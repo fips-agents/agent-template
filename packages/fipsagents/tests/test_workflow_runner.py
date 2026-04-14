@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from fipsagents.baseagent.config import NodeConfig
 from fipsagents.workflow.errors import EdgeResolutionError, MaxStepsExceededError
 from fipsagents.workflow.graph import Graph
 from fipsagents.workflow.node import BaseNode
@@ -298,3 +300,92 @@ class TestPassthroughState:
 
         assert result.count == 42
         assert result.path == ["pre"]
+
+
+# ---------------------------------------------------------------------------
+# RemoteNode auto-wrap
+# ---------------------------------------------------------------------------
+
+
+class TestRemoteNodeAutoWrap:
+    """WorkflowRunner auto-wraps nodes declared remote in node_configs."""
+
+    async def test_remote_node_is_called_instead_of_local(self):
+        """When node_configs declares a node as remote, the runner calls
+        RemoteNode.process() instead of the graph node's process()."""
+        g = Graph(state_type=CountState)
+        local_node = IncrementNode()
+        g.add_node("worker", local_node)
+        g.add_edge("worker", END)
+        g.set_entry_point("worker")
+
+        node_configs = {
+            "worker": NodeConfig(
+                type="remote",
+                endpoint="http://remote:8080",
+            ),
+        }
+
+        with patch("fipsagents.workflow.runner.RemoteNode") as MockRemoteNode:
+            mock_instance = MagicMock()
+            mock_instance.process = AsyncMock(
+                return_value=CountState(count=99, path=["remote"])
+            )
+            MockRemoteNode.return_value = mock_instance
+
+            runner = WorkflowRunner(g, node_configs=node_configs)
+            result = await runner.start(CountState())
+
+        MockRemoteNode.assert_called_once_with(
+            name="worker",
+            endpoint="http://remote:8080",
+            path="/process",
+            timeout=30.0,
+            retries=2,
+        )
+        mock_instance.process.assert_called_once()
+        assert result.count == 99
+
+    async def test_local_node_unaffected_by_empty_configs(self):
+        """Nodes without remote config execute normally."""
+        g = _linear_chain("a")
+        runner = WorkflowRunner(g, node_configs={})
+        result = await runner.start(CountState())
+
+        assert result.count == 1
+        assert result.path == ["a"]
+
+    async def test_mixed_local_and_remote(self):
+        """Graph with both local and remote nodes: local nodes run normally,
+        remote node is auto-wrapped and its mock state flows to local_c."""
+        g = Graph(state_type=CountState)
+        g.add_node("local_a", IncrementNode())
+        g.add_node("remote_b", IncrementNode())  # will be auto-wrapped
+        g.add_node("local_c", IncrementNode())
+        g.add_edge("local_a", "remote_b")
+        g.add_edge("remote_b", "local_c")
+        g.add_edge("local_c", END)
+        g.set_entry_point("local_a")
+
+        node_configs = {
+            "remote_b": NodeConfig(
+                type="remote",
+                endpoint="http://b-agent:8080",
+            ),
+        }
+
+        with patch("fipsagents.workflow.runner.RemoteNode") as MockRemoteNode:
+            mock_instance = MagicMock()
+            # remote_b returns count=2 (local_a added 1, remote_b "adds" 1)
+            mock_instance.process = AsyncMock(
+                return_value=CountState(count=2, path=["local_a", "remote_b"])
+            )
+            MockRemoteNode.return_value = mock_instance
+
+            runner = WorkflowRunner(g, node_configs=node_configs)
+            result = await runner.start(CountState())
+
+        # local_a ran (count=1), remote_b was wrapped (count=2),
+        # local_c ran normally (count=3).
+        assert result.count == 3
+        assert "local_a" in result.path

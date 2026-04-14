@@ -12,6 +12,7 @@ from fipsagents.baseagent.config import (
     LLMConfig,
     LoggingConfig,
     LoopConfig,
+    NodeConfig,
     _substitute_recursive,
     load_config,
     load_config_from_string,
@@ -344,3 +345,66 @@ class TestLoggingConfig:
     def test_invalid_level_raises(self):
         with pytest.raises(ValidationError, match="logging.level"):
             LoggingConfig(level="VERBOSE")
+
+
+# ---------------------------------------------------------------------------
+# NodeConfig
+# ---------------------------------------------------------------------------
+
+
+class TestNodeConfig:
+    def test_defaults_to_local(self):
+        cfg = NodeConfig()
+        assert cfg.type == "local"
+        assert cfg.endpoint is None
+
+    def test_remote_requires_endpoint(self):
+        with pytest.raises(ValidationError, match="endpoint"):
+            NodeConfig(type="remote")
+
+    def test_remote_with_endpoint(self):
+        cfg = NodeConfig(type="remote", endpoint="http://agent:8080")
+        assert cfg.endpoint == "http://agent:8080"
+        assert cfg.path == "/process"
+        assert cfg.timeout == 30.0
+        assert cfg.retries == 2
+
+    def test_local_ignores_endpoint(self):
+        cfg = NodeConfig(type="local", endpoint="http://unused:8080")
+        assert cfg.type == "local"
+
+    def test_custom_values(self):
+        cfg = NodeConfig(
+            type="remote",
+            endpoint="http://agent:9090",
+            path="/run",
+            timeout=60.0,
+            retries=5,
+        )
+        assert cfg.path == "/run"
+        assert cfg.timeout == 60.0
+        assert cfg.retries == 5
+
+    def test_nodes_in_agent_config(self):
+        cfg = load_config_from_string("""
+model:
+  endpoint: http://localhost:8080/v1
+  name: test-model
+nodes:
+  research:
+    type: remote
+    endpoint: http://research:8080
+  classify:
+    type: local
+""")
+        assert "research" in cfg.nodes
+        assert cfg.nodes["research"].type == "remote"
+        assert cfg.nodes["classify"].type == "local"
+
+    def test_empty_nodes_default(self):
+        cfg = load_config_from_string("""
+model:
+  endpoint: http://localhost:8080/v1
+  name: test-model
+""")
+        assert cfg.nodes == {}

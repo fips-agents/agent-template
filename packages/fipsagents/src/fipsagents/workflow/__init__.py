@@ -14,6 +14,7 @@ from fipsagents.workflow.decorator import node  # must come after .node import t
 from fipsagents.workflow.graph import Graph
 from fipsagents.workflow.runner import WorkflowRunner
 from fipsagents.workflow.agent_node import AgentNode
+from fipsagents.workflow.remote_node import RemoteNode, RemoteNodeError
 
 __all__ = [
     "WorkflowState",
@@ -24,6 +25,8 @@ __all__ = [
     "Graph",
     "WorkflowRunner",
     "AgentNode",
+    "RemoteNode",
+    "RemoteNodeError",
     "WorkflowError",
     "NodeNotFoundError",
     "EdgeResolutionError",

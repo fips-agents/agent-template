@@ -30,20 +30,7 @@ When to use:
 
 Mix of in-process and remote nodes. Lightweight routing/transformation nodes stay in-process; heavy or shared agents deploy separately. This is the expected real-world pattern as workflows grow.
 
-Configuration would live in agent.yaml:
-
-```yaml
-nodes:
-  classify:
-    type: local
-  research:
-    type: remote
-    endpoint: ${RESEARCH_AGENT_URL:-http://research-agent:8080}
-  summarize:
-    type: local
-```
-
-The runner checks node type: local calls process() directly, remote makes an HTTP POST. Same graph definition, same state flow, different execution strategy.
+See Resolved Design Decisions below for the settled configuration approach.
 
 ## Decision Axis
 
@@ -105,3 +92,25 @@ Future options:
 - `fips-agents extract-node <name> --from <workflow>` — split a node into its own deployment
 
 The key principle: developers start with a single container and extract when they have a reason. The design should not force topology decisions at creation time.
+
+## Resolved Design Decisions
+
+### 1. Node type configuration location
+
+Node type configuration lives in `AgentConfig` (fipsagents package) as a `NodeConfig` Pydantic model. This allows `WorkflowRunner` to consult node config at execution time and auto-wire remote nodes. The `nodes:` section in `agent.yaml` maps node names to their deployment topology.
+
+### 2. State serialization format
+
+Pydantic `model_dump_json()` / `model_validate_json()` is the serialization format for remote calls. Constraint: all state fields must be JSON-serializable (no file handles, generators, or arbitrary objects). This is enforced naturally since workflow state models use `extra="forbid"`.
+
+### 3. RemoteNode is a framework class
+
+`RemoteNode` ships as a first-class framework class in the fipsagents package alongside `BaseNode` and `AgentNode`. It handles serialization, HTTP transport, exponential backoff retries, and error mapping. Developers who need custom protocols can still write a plain `BaseNode` bridge instead.
+
+### 4. A2A integration: documented pattern only
+
+A2A integration is a documented bridge recipe in the brownfield integration guide, not a framework class. The protocol is still evolving. `RemoteNode` covers HTTP; A2A will be revisited when the protocol stabilizes.
+
+### 5. Runner auto-wraps remote nodes
+
+`WorkflowRunner` auto-wraps nodes when `agent.yaml` declares them as `type: remote`. The graph definition stays topology-agnostic — same graph works for local dev (all in-process) and production (some nodes remote). The runner checks `node_configs` before calling `process()` and substitutes a `RemoteNode` transparently.
