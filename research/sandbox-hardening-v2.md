@@ -300,6 +300,125 @@ and is supported through the OpenShift sandboxed containers operator.
 
 ---
 
+## Finding 5: FIPS-Mode Cluster Implications
+
+### How FIPS enforcement works on OpenShift
+
+On a FIPS-enabled RHEL/RHCOS node, the kernel boots with `fips=1`. This
+switches OpenSSL into FIPS mode system-wide — every process on the node
+inherits it, including all containers. There is no per-pod opt-out. The
+enforcement is at the OpenSSL provider level: non-approved algorithms
+(MD5, SHA-1 for signing, RC4, DES, non-approved curves) raise hard errors
+rather than returning results.
+
+This affects more than just hashing. TLS connections that use self-signed
+certificates with non-FIPS-approved signature algorithms (e.g., SHA-1 RSA)
+will fail even with certificate verification disabled. The failure happens
+at the OpenSSL level before Python's `ssl` module can intercept it. This
+is a known operational constraint: agents connecting to endpoints with
+self-signed or legacy certificates may need to run on non-FIPS clusters or
+the endpoint must be re-issued with FIPS-approved algorithms (SHA-256+).
+
+### Impact on the sandbox sidecar
+
+The sandbox runs Python code in a subprocess on a UBI 9 image. On a FIPS
+cluster:
+
+1. **hashlib**: `hashlib.md5()` and `hashlib.sha1()` work for non-security
+   uses (checksums, cache keys) via the `usedforsecurity=False` parameter
+   added in Python 3.9. Without that parameter, they raise `ValueError` in
+   FIPS mode. Our weak crypto guardrails already flag these calls, which
+   gives the LLM a clear error message *before* it hits the cryptic OpenSSL
+   rejection.
+
+2. **Allowed modules**: The sandbox's 18 allowed modules (`math`, `json`,
+   `csv`, `re`, `datetime`, etc.) do not use OpenSSL. There is no FIPS
+   impact on the sandbox's allowed module set.
+
+3. **random**: The `random` module uses Mersenne Twister, not OpenSSL. No
+   FIPS impact. If cryptographic randomness were needed, `secrets` or
+   `os.urandom()` would be required — but neither is in the allowlist and
+   `os` is blocked.
+
+4. **Error clarity**: When FIPS mode rejects an operation, the error is
+   typically `ValueError: [digital envelope routines] unsupported` or
+   similar OpenSSL errors. These are not helpful for an LLM trying to fix
+   its code. Our guardrails catching these patterns first produces messages
+   like `"call to 'hashlib.md5()' uses weak cryptography"` which is
+   actionable.
+
+### Impact on agents and MCP servers
+
+This is the more significant concern. Agents deployed on FIPS clusters that
+connect to external services via MCP servers or HTTP tools will encounter
+FIPS enforcement on all TLS operations:
+
+- **Self-signed certificates**: Even with `verify=False` in `httpx` or
+  `requests`, if the certificate uses a non-FIPS signature algorithm, the
+  connection fails at the OpenSSL level. The `verify` flag only controls
+  chain validation, not the underlying crypto operations.
+- **Legacy endpoints**: Services using TLS 1.0/1.1, SHA-1 certificates,
+  or non-FIPS cipher suites will be unreachable from a FIPS cluster.
+- **MCP servers proxying to legacy APIs**: An MCP server that surfaces a
+  legacy REST API as tools must either run on a non-FIPS cluster or the
+  API endpoint must be re-issued with FIPS-approved certificates.
+
+### What we do today
+
+- **Weak crypto guardrails** catch `hashlib.md5()` and `hashlib.sha1()` at
+  the application level, providing clear error messages before FIPS-mode
+  OpenSSL rejects them.
+- **UBI base images** ship FIPS-aware OpenSSL. No additional configuration
+  needed — they respect the host kernel's FIPS mode automatically.
+- **Seccomp and Landlock** are kernel mechanisms, not crypto. They work
+  identically on FIPS and non-FIPS clusters.
+
+### Open questions (requires FIPS cluster testing)
+
+These require validation on a live FIPS-mode cluster (tracked in issue #33):
+
+1. **Does `python3 -I` in the sandbox subprocess inherit FIPS mode?**
+   It should (FIPS is kernel-level, inherited by all processes), but the
+   `-I` flag's isolation of environment variables needs verification.
+
+2. **What error does the LLM see when FIPS rejects an operation?** Is the
+   error message clear enough for the LLM to self-correct, or do we need
+   a FIPS-specific guardrail that preemptively blocks non-FIPS operations
+   with a better message?
+
+3. **Does the sandbox's `hashlib` import work at all in FIPS mode?**
+   Importing `hashlib` should be fine (it's a standard module), but
+   calling `hashlib.md5()` without `usedforsecurity=False` will raise.
+   Our guardrails catch `md5()` and `sha1()` calls, but should we also
+   add a guardrail that warns about missing `usedforsecurity=False`?
+
+4. **Agent-to-MCP TLS behavior**: When an agent on a FIPS cluster connects
+   to an MCP server whose upstream API has a self-signed cert, does the
+   failure surface as a clear error or a silent hang? What should the
+   deployment guidance be?
+
+### Recommendations
+
+- **Document FIPS as a deployment constraint** in the Helm chart and agent
+  deployment guide. Operators need to know that FIPS clusters enforce crypto
+  restrictions on all container workloads.
+- **Add FIPS testing** as a gate before v1.0 release. Validate sandbox
+  behavior and agent-to-service connectivity on a FIPS cluster.
+- **Consider a FIPS-aware guardrail** that detects `hashlib.md5()` /
+  `hashlib.sha1()` calls *without* `usedforsecurity=False` and suggests
+  the fix, rather than just flagging the call as weak crypto.
+- **MCP deployment guidance**: Document that MCP servers proxying to legacy
+  (non-FIPS) endpoints should run on non-FIPS clusters or behind a
+  FIPS-terminating reverse proxy.
+
+### Sources
+
+- [RHEL 9 FIPS mode documentation](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/security_hardening/using-the-system-wide-cryptographic-policies_security-hardening)
+- [Python hashlib usedforsecurity parameter](https://docs.python.org/3/library/hashlib.html)
+- [OpenShift FIPS support](https://docs.openshift.com/container-platform/latest/installing/installing-fips.html)
+
+---
+
 ## Implementation Plan
 
 ### Phase 1: CodeGuard static analysis (this session)
