@@ -41,6 +41,15 @@ def test_blocklist_audit_allows_pandas_dataframe():
     )
 
 
+def test_blocklist_audit_catches_chained_attribute():
+    """Chained attributes like scipy.io.loadmat are resolved to the dotted
+    parent name, matching blocklist entry ("scipy.io", "loadmat")."""
+    source = "import scipy.io\ndata = scipy.io.loadmat('data.mat')"
+    violations = blocklist_audit(source, [("scipy.io", "loadmat")])
+    assert len(violations) >= 1, f"expected violation for scipy.io.loadmat: {violations}"
+    assert any("scipy.io.loadmat" in v for v in violations), violations
+
+
 def test_blocklist_audit_instance_method_not_caught():
     """Instance-level method calls (df.to_pickle) cannot be caught by the
     blocklist audit because AST analysis sees the variable name ('df'), not

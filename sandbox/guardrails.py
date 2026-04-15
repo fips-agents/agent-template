@@ -356,22 +356,35 @@ def validate_code(
 class _BlocklistVisitor(ast.NodeVisitor):
     """Lightweight AST visitor that checks attribute access against a blocklist.
 
-    The blocklist is a list of ``(module_or_type, attribute)`` tuples.  The
-    visitor flags any ``name.attr`` access where ``(name, attr)`` matches a
-    blocklist entry.  This catches both module-level access (``pandas.read_pickle``)
-    and method calls on known types (``DataFrame.to_sql``).
+    The blocklist is a list of ``(dotted_name, attribute)`` tuples.  The
+    visitor resolves chained attribute access (e.g. ``scipy.io.loadmat``
+    matches ``("scipy.io", "loadmat")``) by walking the AST node chain.
     """
 
     def __init__(self, blocklist: list[tuple[str, str]]) -> None:
         self.violations: list[str] = []
         self._blocklist = {(m, a) for m, a in blocklist}
 
+    @staticmethod
+    def _resolve_dotted_name(node: ast.expr) -> str | None:
+        """Resolve ``a.b.c`` attribute chain to the dotted string ``"a.b.c"``."""
+        parts: list[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+            return ".".join(reversed(parts))
+        return None
+
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        if isinstance(node.value, ast.Name):
-            if (node.value.id, node.attr) in self._blocklist:
+        # Resolve the parent chain to a dotted name and check (parent, attr).
+        parent_name = self._resolve_dotted_name(node.value)
+        if parent_name is not None:
+            if (parent_name, node.attr) in self._blocklist:
                 self.violations.append(
                     f"Line {node.lineno}: access to "
-                    f"'{node.value.id}.{node.attr}' is blocked by profile"
+                    f"'{parent_name}.{node.attr}' is blocked by profile"
                 )
         self.generic_visit(node)
 
