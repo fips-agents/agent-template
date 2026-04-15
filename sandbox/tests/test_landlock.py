@@ -1,7 +1,7 @@
 """Tests for sandbox.landlock — Landlock LSM filesystem restriction wrapper."""
 
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 

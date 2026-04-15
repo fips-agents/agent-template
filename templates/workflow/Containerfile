@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 FROM registry.redhat.io/ubi9/python-311:latest AS runtime
 
 LABEL io.opencontainers.image.title="workflow-template" \
-      io.opencontainers.image.version="0.1.0" \
+      io.opencontainers.image.version="0.4.0" \
       io.opencontainers.image.description="Workflow template — compose AI agents into directed graphs" \
       io.opencontainers.image.source="https://github.com/OWNER/REPO" \
       io.opencontainers.image.vendor="Red Hat"

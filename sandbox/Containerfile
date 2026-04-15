@@ -1,7 +1,7 @@
 FROM registry.access.redhat.com/ubi9/python-311:latest
 
 LABEL name="code-sandbox" \
-      version="0.1.0" \
+      version="0.4.0" \
       description="Code execution sandbox sidecar" \
       io.openshift.expose-services="8000:http"
 
