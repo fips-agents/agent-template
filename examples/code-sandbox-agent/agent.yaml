@@ -1,0 +1,32 @@
+model:
+  endpoint: ${MODEL_ENDPOINT:-http://localhost:8321/v1}
+  name: ${MODEL_NAME:-openai/RedHatAI/granite-3.3-8b-instruct}
+  temperature: 0.2
+  max_tokens: 2048
+
+mcp_servers: []
+
+tools:
+  local_dir: ./tools
+  visibility_default: llm_only
+
+prompts:
+  dir: ./prompts
+
+loop:
+  max_iterations: 10
+  backoff:
+    initial: 1.0
+    max: 10.0
+    multiplier: 2.0
+
+logging:
+  level: ${LOG_LEVEL:-INFO}
+
+memory:
+  backend: "null"
+
+security:
+  mode: ${SECURITY_MODE:-enforce}
+  tool_inspection:
+    enabled: true
