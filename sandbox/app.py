@@ -7,14 +7,28 @@ endpoints:
   POST /execute   — validate and run Python code, return captured output
 """
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from sandbox.executor import execute_code
 from sandbox.guardrails import validate_code
+from sandbox.landlock import apply_sandbox_landlock
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Code Sandbox", description="Isolated Python code execution sandbox")
+
+# Apply Landlock filesystem restrictions at import time (before first
+# request).  Rules are inherited by subprocess children.  Degrades
+# gracefully on non-Linux or older kernels.
+_landlock_status = apply_sandbox_landlock()
+if _landlock_status.applied:
+    logger.info("Landlock active (ABI v%d)", _landlock_status.abi_version)
+elif _landlock_status.reason:
+    logger.info("Landlock not applied: %s", _landlock_status.reason)
 
 
 class ExecuteRequest(BaseModel):

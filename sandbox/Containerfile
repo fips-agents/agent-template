@@ -13,7 +13,7 @@ COPY --chmod=644 pyproject.toml .
 RUN pip install --no-cache-dir "fastapi>=0.115.0" "uvicorn[standard]>=0.32.0"
 
 # Copy source into sandbox/ package directory
-COPY --chmod=644 __init__.py app.py executor.py guardrails.py sandbox/
+COPY --chmod=644 __init__.py app.py executor.py guardrails.py landlock.py sandbox/
 
 EXPOSE 8000
 
