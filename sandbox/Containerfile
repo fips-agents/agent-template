@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir "fastapi>=0.115.0" "uvicorn[standard]>=0.32.0" "p
 COPY --chmod=644 profiles/${PROFILE}-requirements.txt /tmp/profile-requirements.txt
 RUN if [ -s /tmp/profile-requirements.txt ]; then \
         pip install --no-cache-dir -r /tmp/profile-requirements.txt; \
-    fi && rm -f /tmp/profile-requirements.txt
+    fi
 
 # Copy source into sandbox/ package directory
 COPY --chmod=644 __init__.py app.py executor.py guardrails.py landlock.py \
