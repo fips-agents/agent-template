@@ -68,9 +68,19 @@ class TestNullMemoryClient:
 # ── MemoryClient with mocked SDK ──────────────────────────────────────────
 
 
-def _make_sdk(**overrides: Any) -> MagicMock:
-    """Create a mock MemoryHub SDK with async methods."""
-    sdk = MagicMock()
+class _FakeSDK:
+    """Minimal stand-in for the MemoryHub SDK.
+
+    Unlike MagicMock, this does not auto-create attributes, so
+    ``getattr(sdk, "search", None)`` returns ``None`` and
+    ``hasattr(sdk, "__aenter__")`` returns ``False`` — matching the
+    attribute-probing logic in memory.py.
+    """
+
+
+def _make_sdk(**overrides: Any) -> _FakeSDK:
+    """Create a fake MemoryHub SDK with async methods."""
+    sdk = _FakeSDK()
     sdk.search_memory = AsyncMock(return_value=[{"id": "m1", "content": "found"}])
     sdk.write_memory = AsyncMock(return_value={"id": "m2", "content": "written"})
     sdk.update_memory = AsyncMock(return_value={"id": "m1", "content": "updated"})
@@ -229,8 +239,6 @@ class TestCreateMemoryClient:
         (key_dir / "api-key").write_text("  test-key-123  \n")
 
         mock_sdk_instance = _make_sdk()
-        # Remove register_session so the factory doesn't try to call it
-        del mock_sdk_instance.register_session
 
         mock_memoryhub = MagicMock()
         mock_memoryhub.MemoryHubClient.return_value = mock_sdk_instance
@@ -255,7 +263,6 @@ class TestCreateMemoryClient:
         )
 
         mock_sdk_instance = _make_sdk()
-        del mock_sdk_instance.register_session
         mock_memoryhub = MagicMock()
         mock_memoryhub.MemoryHubClient.return_value = mock_sdk_instance
 
@@ -344,7 +351,6 @@ class TestCreateMemoryClient:
         config_file.write_text("")
 
         mock_sdk_instance = _make_sdk()
-        del mock_sdk_instance.register_session
         mock_memoryhub = MagicMock()
         mock_memoryhub.MemoryHubClient.return_value = mock_sdk_instance
 
