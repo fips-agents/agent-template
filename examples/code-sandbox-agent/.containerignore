@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+setup.sh
+run.py
+README.md
+requirements.txt
+values-deploy.yaml
+.containerignore
