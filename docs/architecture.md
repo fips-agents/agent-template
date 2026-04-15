@@ -34,6 +34,8 @@ BaseAgent is the core abstraction. It is pure Python, async throughout, and carr
 
 All LLM communication goes through litellm, which provides a unified OpenAI-compatible interface to 100+ providers (vLLM, LlamaStack, Anthropic, OpenAI, Azure, Bedrock, and others). Switching providers is a configuration change -- update the model string prefix and endpoint URL -- not a code change.
 
+**Important:** litellm's OpenAI provider requires `OPENAI_API_KEY` to be set even when connecting to unauthenticated endpoints (e.g., a vLLM instance with no auth). Set it to any non-empty string (e.g., `OPENAI_API_KEY=not-required`) in the agent's environment. Without this, litellm raises `AuthenticationError` before the request is sent.
+
 BaseAgent exposes four methods for model interaction:
 
 `call_model(messages, **kwargs)` makes a standard chat completion call and returns the response. This is the workhorse for most interactions.

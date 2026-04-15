@@ -16,6 +16,8 @@
 # Production env vars:
 #   MODEL_ENDPOINT  -- vLLM / LlamaStack URL (e.g. https://vllm.apps.cluster.example.com/v1)
 #   MODEL_NAME      -- deployed model identifier
+#   OPENAI_API_KEY  -- required by litellm even for unauthenticated vLLM endpoints;
+#                      set to any non-empty string (e.g. "not-required")
 model:
   endpoint: ${MODEL_ENDPOINT:-http://llamastack:8321/v1}
   name: ${MODEL_NAME:-meta-llama/Llama-3.3-70B-Instruct}
