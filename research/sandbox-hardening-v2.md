@@ -1,6 +1,6 @@
 # Sandbox Hardening v2: Research Findings
 
-**Date:** 2026-04-14
+**Date:** 2026-04-15
 **Tracking issue:** #26
 **Status:** Research complete, implementation priorities revised
 
@@ -308,114 +308,166 @@ On a FIPS-enabled RHEL/RHCOS node, the kernel boots with `fips=1`. This
 switches OpenSSL into FIPS mode system-wide — every process on the node
 inherits it, including all containers. There is no per-pod opt-out. The
 enforcement is at the OpenSSL provider level: non-approved algorithms
-(MD5, SHA-1 for signing, RC4, DES, non-approved curves) raise hard errors
-rather than returning results.
+raise hard errors rather than returning results.
 
-This affects more than just hashing. TLS connections that use self-signed
-certificates with non-FIPS-approved signature algorithms (e.g., SHA-1 RSA)
-will fail even with certificate verification disabled. The failure happens
-at the OpenSSL level before Python's `ssl` module can intercept it. This
-is a known operational constraint: agents connecting to endpoints with
-self-signed or legacy certificates may need to run on non-FIPS clusters or
-the endpoint must be re-issued with FIPS-approved algorithms (SHA-256+).
+The scope of FIPS enforcement varies by operation type:
+
+- **Hashing**: MD5 is blocked for security use. SHA-1 is *not* blocked
+  (allowed for both signing and non-security use).
+- **Signing**: SHA-1 RSA signing is blocked — `openssl req -sha1` fails
+  with `invalid digest`. SHA-256+ is required for certificate generation.
+- **TLS cipher suites**: Only AEAD ciphers (AES-GCM, AES-CCM) with
+  128/256-bit keys are available. TLSv1.2 and TLSv1.3 only (21 ciphers
+  total). No CBC, ChaCha20, RC4, or DES.
+- **TLS certificate verification**: SHA-1 signed certificates from
+  external sources *can* be verified — FIPS blocks signing, not
+  verification of existing signatures.
+
+### Test results (2026-04-15, OCP 4.20.17, OpenSSL 3.5.1, FIPS-enabled)
+
+Validated on cluster `cluster-l78nk.l78nk.sandbox1834.opentlc.com` with
+the sandbox sidecar deployed via Helm chart with SPO seccomp profile.
+
+#### Sandbox behavior
+
+| Test | Expected | Actual | Notes |
+|------|----------|--------|-------|
+| `python3 -I` inherits FIPS | Yes | **Yes** | `/proc/sys/crypto/fips_enabled` = 1 inside subprocess |
+| `import hashlib` | Works | **Works** | Module loads fine |
+| `hashlib.md5(b"x")` | ValueError | **UnsupportedDigestmodError** | `[digital envelope routines] unsupported` |
+| `hashlib.new("md5", b"x")` | ValueError | **ValueError** | `unsupported hash type md5(in FIPS mode)` |
+| `hashlib.md5(b"x", usedforsecurity=False)` | Works | **Works** | Returns correct digest |
+| `hashlib.sha1(b"x")` | ValueError | **Works** | SHA-1 is NOT blocked by FIPS for hashing |
+| `hashlib.sha256(b"x")` | Works | **Works** | FIPS-approved |
+| Guardrails fire before FIPS | Yes | **Yes** | Guardrails return `"call to 'hashlib.md5()' uses weak cryptography"` before code reaches executor |
+
+Key corrections from pre-test hypothesis:
+
+1. **SHA-1 hashing is allowed in FIPS mode.** Only MD5 is blocked. Our
+   guardrails are stricter than FIPS here (flagging SHA-1 as weak crypto),
+   which is the correct security posture.
+
+2. **Two different error types for MD5.** `hashlib.md5()` raises
+   `UnsupportedDigestmodError` while `hashlib.new("md5")` raises
+   `ValueError`. Both include enough context for an LLM to self-correct.
+
+3. **Guardrails provide better errors than FIPS.** The guardrail message
+   `"call to 'hashlib.md5()' uses weak cryptography"` is actionable. The
+   FIPS error `[digital envelope routines] unsupported` is not.
+
+#### Agent-to-service TLS connectivity
+
+| Test | Expected | Actual | Notes |
+|------|----------|--------|-------|
+| Generate SHA-1 cert on FIPS cluster | Fail | **Fail** | `invalid digest` — cannot create SHA-1 signed certs |
+| Generate SHA-256 cert on FIPS cluster | Works | **Works** | `sha256WithRSAEncryption` |
+| Connect to SHA-1 server, `verify=False` | Fail | **Works** | FIPS does NOT block SHA-1 cert verification |
+| Connect to SHA-1 server, `verify=<cert>` | Fail | **Works** | SHA-1 signature verification succeeds |
+| Connect to SHA-256 server, `verify=False` | Works | **Works** | Expected |
+| Connect to SHA-256 server, `verify=<cert>` | Works | **Works** | Expected |
+| Available TLS cipher count | — | **21** | All AEAD (AES-GCM/CCM), TLSv1.2/1.3 only |
+| SHA-1 digest ciphers | — | **0** | No cipher suites use SHA-1 as HMAC digest |
+
+Key corrections from pre-test hypothesis:
+
+1. **SHA-1 signed certificates work for TLS connections in FIPS mode.**
+   The original hypothesis that `verify=False` cannot bypass FIPS rejection
+   for SHA-1 certs was incorrect. FIPS blocks *creating* SHA-1 signatures
+   but allows *verifying* existing ones. This is a meaningful distinction:
+   agents on FIPS clusters CAN connect to legacy endpoints with SHA-1 certs.
+
+2. **The real TLS constraint is cipher suites, not cert signatures.** Only
+   21 AEAD ciphers are available. Endpoints that require CBC-mode ciphers,
+   RC4, or other non-AEAD suites will fail to negotiate. This is the actual
+   connectivity risk for legacy endpoints.
+
+3. **Error surfacing is clear.** TLS failures produce standard Python
+   `ssl.SSLError` or `httpx.ConnectError` with descriptive OpenSSL messages.
+   No silent hangs observed — errors propagate immediately.
 
 ### Impact on the sandbox sidecar
 
 The sandbox runs Python code in a subprocess on a UBI 9 image. On a FIPS
 cluster:
 
-1. **hashlib**: `hashlib.md5()` and `hashlib.sha1()` work for non-security
-   uses (checksums, cache keys) via the `usedforsecurity=False` parameter
-   added in Python 3.9. Without that parameter, they raise `ValueError` in
-   FIPS mode. Our weak crypto guardrails already flag these calls, which
-   gives the LLM a clear error message *before* it hits the cryptic OpenSSL
-   rejection.
+1. **hashlib**: Only `hashlib.md5()` is blocked by FIPS (without
+   `usedforsecurity=False`). `hashlib.sha1()` works. However, our
+   guardrails catch both `md5()` and `sha1()` before execution, giving
+   the LLM clear actionable errors regardless of FIPS mode. This is the
+   desired behavior — guardrails are stricter than FIPS.
 
 2. **Allowed modules**: The sandbox's 18 allowed modules (`math`, `json`,
-   `csv`, `re`, `datetime`, etc.) do not use OpenSSL. There is no FIPS
-   impact on the sandbox's allowed module set.
+   `csv`, `re`, `datetime`, etc.) do not use OpenSSL. No FIPS impact.
 
-3. **random**: The `random` module uses Mersenne Twister, not OpenSSL. No
-   FIPS impact. If cryptographic randomness were needed, `secrets` or
-   `os.urandom()` would be required — but neither is in the allowlist and
-   `os` is blocked.
+3. **random**: Uses Mersenne Twister, not OpenSSL. No FIPS impact.
 
-4. **Error clarity**: When FIPS mode rejects an operation, the error is
-   typically `ValueError: [digital envelope routines] unsupported` or
-   similar OpenSSL errors. These are not helpful for an LLM trying to fix
-   its code. Our guardrails catching these patterns first produces messages
-   like `"call to 'hashlib.md5()' uses weak cryptography"` which is
-   actionable.
+4. **Error clarity**: FIPS errors are adequate (`UnsupportedDigestmodError`
+   with traceback pointing to exact line), but our guardrails provide
+   better messages. No FIPS-specific guardrail needed — the existing
+   weak crypto guardrails already cover the relevant cases.
 
 ### Impact on agents and MCP servers
 
-This is the more significant concern. Agents deployed on FIPS clusters that
-connect to external services via MCP servers or HTTP tools will encounter
-FIPS enforcement on all TLS operations:
+Less severe than originally hypothesized. Agents on FIPS clusters:
 
-- **Self-signed certificates**: Even with `verify=False` in `httpx` or
-  `requests`, if the certificate uses a non-FIPS signature algorithm, the
-  connection fails at the OpenSSL level. The `verify` flag only controls
-  chain validation, not the underlying crypto operations.
-- **Legacy endpoints**: Services using TLS 1.0/1.1, SHA-1 certificates,
-  or non-FIPS cipher suites will be unreachable from a FIPS cluster.
-- **MCP servers proxying to legacy APIs**: An MCP server that surfaces a
-  legacy REST API as tools must either run on a non-FIPS cluster or the
-  API endpoint must be re-issued with FIPS-approved certificates.
+- **Self-signed SHA-1 certs**: Work for connectivity with `verify=False`
+  or when explicitly trusted. No immediate re-issue required, though
+  SHA-256+ remains the recommended long-term posture.
+- **Self-signed SHA-256 certs**: Work fine (expected).
+- **TLS cipher negotiation**: The real constraint. Only 21 AEAD ciphers
+  available. Endpoints requiring legacy cipher suites (CBC, RC4) cannot
+  negotiate a connection. This failure presents as a clear TLS handshake
+  error, not a silent hang.
+- **MCP servers proxying to legacy APIs**: Only a concern if the legacy
+  endpoint requires non-AEAD cipher suites. SHA-1 certs alone are not
+  a blocker.
 
 ### What we do today
 
 - **Weak crypto guardrails** catch `hashlib.md5()` and `hashlib.sha1()` at
   the application level, providing clear error messages before FIPS-mode
-  OpenSSL rejects them.
-- **UBI base images** ship FIPS-aware OpenSSL. No additional configuration
-  needed — they respect the host kernel's FIPS mode automatically.
+  OpenSSL could reject them. Guardrails are stricter than FIPS (blocking
+  SHA-1 which FIPS allows), which is the right security posture.
+- **UBI base images** ship FIPS-aware OpenSSL (3.5.1 on OCP 4.20). No
+  additional configuration needed — they respect the host kernel's FIPS
+  mode automatically.
 - **Seccomp and Landlock** are kernel mechanisms, not crypto. They work
   identically on FIPS and non-FIPS clusters.
 
-### Open questions (requires FIPS cluster testing)
+### Deployment notes
 
-These require validation on a live FIPS-mode cluster (tracked in issue #33):
+- **Landlock**: Not available on the tested FIPS cluster (kernel
+  5.14.0-570.99.1.el9_6, LSM not in boot list). Landlock availability
+  depends on kernel config, not FIPS mode. Seccomp profile provides the
+  primary syscall restriction.
+- **SPO**: Security Profiles Operator v0.10.0 works correctly on FIPS
+  clusters. SeccompProfile CRD installs and the profile is applied to
+  the sandbox container.
+- **No FIPS-specific configuration needed** for the sandbox sidecar or
+  agent. The UBI base image handles FIPS transparency.
 
-1. **Does `python3 -I` in the sandbox subprocess inherit FIPS mode?**
-   It should (FIPS is kernel-level, inherited by all processes), but the
-   `-I` flag's isolation of environment variables needs verification.
+### Recommendations (updated post-testing)
 
-2. **What error does the LLM see when FIPS rejects an operation?** Is the
-   error message clear enough for the LLM to self-correct, or do we need
-   a FIPS-specific guardrail that preemptively blocks non-FIPS operations
-   with a better message?
-
-3. **Does the sandbox's `hashlib` import work at all in FIPS mode?**
-   Importing `hashlib` should be fine (it's a standard module), but
-   calling `hashlib.md5()` without `usedforsecurity=False` will raise.
-   Our guardrails catch `md5()` and `sha1()` calls, but should we also
-   add a guardrail that warns about missing `usedforsecurity=False`?
-
-4. **Agent-to-MCP TLS behavior**: When an agent on a FIPS cluster connects
-   to an MCP server whose upstream API has a self-signed cert, does the
-   failure surface as a clear error or a silent hang? What should the
-   deployment guidance be?
-
-### Recommendations
-
-- **Document FIPS as a deployment constraint** in the Helm chart and agent
-  deployment guide. Operators need to know that FIPS clusters enforce crypto
-  restrictions on all container workloads.
-- **Add FIPS testing** as a gate before v1.0 release. Validate sandbox
-  behavior and agent-to-service connectivity on a FIPS cluster.
-- **Consider a FIPS-aware guardrail** that detects `hashlib.md5()` /
-  `hashlib.sha1()` calls *without* `usedforsecurity=False` and suggests
-  the fix, rather than just flagging the call as weak crypto.
-- **MCP deployment guidance**: Document that MCP servers proxying to legacy
-  (non-FIPS) endpoints should run on non-FIPS clusters or behind a
-  FIPS-terminating reverse proxy.
+- **Document FIPS cipher suite constraints** in agent deployment guide.
+  The 21-cipher AEAD-only suite is the primary operational constraint,
+  not certificate signature algorithms.
+- **No FIPS-specific guardrail needed.** Existing weak crypto guardrails
+  cover MD5 and SHA-1 adequately. Adding `usedforsecurity=False` guidance
+  is a nice-to-have but not critical since `hashlib` is not in the sandbox
+  allowlist anyway.
+- **MCP deployment guidance**: MCP servers proxying to legacy endpoints
+  only need special handling if those endpoints require non-AEAD cipher
+  suites. SHA-1 certificates alone are not a blocker on FIPS clusters.
+- **Add FIPS validation to CI**: Include a FIPS test job that validates
+  sandbox hashlib behavior and TLS connectivity against a controlled
+  endpoint.
 
 ### Sources
 
 - [RHEL 9 FIPS mode documentation](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/security_hardening/using-the-system-wide-cryptographic-policies_security-hardening)
 - [Python hashlib usedforsecurity parameter](https://docs.python.org/3/library/hashlib.html)
 - [OpenShift FIPS support](https://docs.openshift.com/container-platform/latest/installing/installing-fips.html)
+- Tested 2026-04-15 on OCP 4.20.17, OpenSSL 3.5.1, RHEL 9.6 kernel 5.14.0-570.99.1
 
 ---
 

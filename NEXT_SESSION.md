@@ -2,10 +2,18 @@
 
 ## What was completed this session
 
-- **Workflow extraction**: Moved 8 workflow modules (Graph, WorkflowRunner, BaseNode, AgentNode, WorkflowState, @node, WorkflowNode protocol, errors) from `templates/workflow/src/workflow/` into `packages/fipsagents/src/fipsagents/workflow/`. Template's `src/workflow/` is now a thin re-export shim for backwards compat.
-- **Test suite**: 256 tests covering all baseagent modules (config, tools, memory, llm, prompts) and the full workflow framework. Zero tests existed before.
-- **Document-analysis example**: 6-node pipeline (classify → extract|summarize|fallback → validate → format_report) demonstrating conditional routing, mixed node types, typed state, and the full runner lifecycle. 28 unit tests + live validation against GPT-OSS-20B.
-- GPT-OSS-20B endpoint confirmed working: `https://gpt-oss-20b-2-gpt-oss-model-2.apps.cluster-n7pd5.n7pd5.sandbox5167.opentlc.com/v1`, model name `openai/RedHatAI/gpt-oss-20b`
+- **FIPS cluster testing (issue #33)**: Full test matrix on OCP 4.20.17 FIPS
+  cluster (cluster-l78nk). Key findings: MD5 blocked, SHA-1 allowed by FIPS
+  (guardrails stricter, correct). SHA-1 cert TLS verification works (original
+  hypothesis wrong). 21 AEAD-only ciphers. SPO + seccomp work on FIPS.
+  Updated Finding 5 in sandbox-hardening-v2.md, added FIPS notes to
+  values.yaml, commented results on issue #33.
+
+## What was completed prior session
+
+- **Workflow extraction**: Moved 8 workflow modules into fipsagents package
+- **Test suite**: 256 tests covering all baseagent + workflow modules
+- **Document-analysis example**: 6-node pipeline with 28 tests + live LLM validation
 
 ## Priority 1: Sandbox profiles (implement)
 
@@ -32,20 +40,7 @@ See `planning/code-execution-pipeline.md` Section 1 for full design.
 6. Deploy data-science profile to RHPDS cluster and test with numpy/pandas
    workloads to validate the blocklist catches dangerous attribute access.
 
-## Priority 2: FIPS cluster testing (#33)
-
-Still waiting on FIPS cluster provisioning (week of 2026-04-14).
-
-1. Deploy code-sandbox-agent to the FIPS cluster
-2. Run test matrix from issue #33:
-   - hashlib.md5() behavior in the sandbox
-   - hashlib.md5(b"x", usedforsecurity=False)
-   - Agent-to-MCP TLS with self-signed certs
-   - Error message clarity
-3. Update `research/sandbox-hardening-v2.md` Finding 5 with results
-4. Add FIPS deployment guidance to Helm chart docs
-
-## Priority 3: Code refactoring agent MCP servers
+## Priority 2: Code refactoring agent MCP servers
 
 See `planning/code-execution-pipeline.md` Section 3 for full design.
 
