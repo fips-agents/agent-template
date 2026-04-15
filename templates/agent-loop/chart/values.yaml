@@ -77,3 +77,14 @@ sandbox:
     limits:
       cpu: 500m
       memory: 256Mi
+  # Custom seccomp profile for the sandbox container.
+  # Blocks networking syscalls (socket, connect, bind) and dangerous
+  # operations (ptrace, mount, io_uring) at the kernel level.
+  #
+  # Prerequisites:
+  #   1. Security Profiles Operator (SPO) installed on the cluster
+  #      (GA since OCP 4.12 — install from OperatorHub).
+  #   2. A custom SCC or SPO ProfileBinding that permits Localhost
+  #      seccomp profiles (restricted-v2 only allows RuntimeDefault).
+  seccomp:
+    enabled: false
