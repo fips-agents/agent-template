@@ -1,0 +1,74 @@
+{
+  "document_name": "unknown",
+  "document_type_detected": "unknown",
+  "total_duration_ms": 7.89,
+  "nodes_executed": [
+    {
+      "step": 1,
+      "node_name": "classify",
+      "duration_ms": 0.1,
+      "error": null,
+      "state_before": {
+        "document": "Hello world",
+        "document_type": "",
+        "extracted_specs": "",
+        "summary": "",
+        "validation_errors": [],
+        "report": ""
+      },
+      "state_after": {
+        "document": "Hello world",
+        "document_type": "unknown",
+        "extracted_specs": "",
+        "summary": "",
+        "validation_errors": [],
+        "report": ""
+      }
+    },
+    {
+      "step": 2,
+      "node_name": "fallback",
+      "duration_ms": 0.01,
+      "error": null,
+      "state_before": {
+        "document": "Hello world",
+        "document_type": "unknown",
+        "extracted_specs": "",
+        "summary": "",
+        "validation_errors": [],
+        "report": ""
+      },
+      "state_after": {
+        "document": "Hello world",
+        "document_type": "unknown",
+        "extracted_specs": "",
+        "summary": "Document could not be classified. Raw text length: 11 characters.",
+        "validation_errors": [],
+        "report": ""
+      }
+    },
+    {
+      "step": 3,
+      "node_name": "format_report",
+      "duration_ms": 0.01,
+      "error": null,
+      "state_before": {
+        "document": "Hello world",
+        "document_type": "unknown",
+        "extracted_specs": "",
+        "summary": "Document could not be classified. Raw text length: 11 characters.",
+        "validation_errors": [],
+        "report": ""
+      },
+      "state_after": {
+        "document": "Hello world",
+        "document_type": "unknown",
+        "extracted_specs": "",
+        "summary": "Document could not be classified. Raw text length: 11 characters.",
+        "validation_errors": [],
+        "report": "# Document Analysis Report\n\n**Type:** unknown\n\n## Summary\n\nDocument could not be classified. Raw text length: 11 characters.\n"
+      }
+    }
+  ],
+  "final_report": "# Document Analysis Report\n\n**Type:** unknown\n\n## Summary\n\nDocument could not be classified. Raw text length: 11 characters.\n"
+}
