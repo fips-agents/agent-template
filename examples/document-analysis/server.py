@@ -8,7 +8,6 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.agent import DocumentState, WorkflowRunner, build_graph

@@ -351,7 +351,7 @@ Everything else comes from the Python standard library. There are no agent frame
 
 ## Workflow Template
 
-The workflow template (`templates/workflow/`) implements a state-graph execution model for composing multiple agents and lightweight nodes into directed workflows.
+The workflow framework lives in the `fipsagents` package (`packages/fipsagents/src/fipsagents/workflow/`) and implements a state-graph execution model for composing multiple agents and lightweight nodes into directed workflows. The workflow template (`templates/workflow/`) imports from `fipsagents.workflow` and provides a thin re-export shim at `src/workflow/` for backwards compatibility with existing scaffolded projects.
 
 ### Core Abstractions
 
