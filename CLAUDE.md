@@ -33,7 +33,7 @@ These are settled. Do not revisit without explicit discussion.
 - **Helm chart** bundles only the agent. Infrastructure (vLLM, LlamaStack, PGVector) is pre-deployed via rh-ai-quickstart/ai-architecture-charts.
 - **Red Hat UBI** base images for all containers
 - **`call_model_validated()`** is a first-class BaseAgent method -- call model, validate with a tool, retry with backoff
-- **fipsagents** is the shared pip-installable package at `packages/fipsagents/`. Both templates depend on it. Import as `from fipsagents.baseagent import BaseAgent`.
+- **fipsagents** is the shared pip-installable package at `packages/fipsagents/`. Both templates depend on it. Import as `from fipsagents.baseagent import BaseAgent`. Workflow classes are also in the package: `from fipsagents.workflow import Graph, WorkflowRunner, BaseNode, AgentNode`.
 - **WorkflowNode** protocol (`typing.Protocol`) -- structural subtyping, no inheritance coupling. Both BaseNode and AgentNode satisfy it.
 - **BaseNode** for lightweight workflow nodes (routing, gating). **AgentNode** for full-agent workflow nodes (LLM, tools, MCP). **RemoteNode** for nodes that delegate to already-deployed agents via HTTP POST.
 - **NodeConfig** in `AgentConfig` maps node names to deployment topology (`local` or `remote`). `WorkflowRunner` auto-wraps remote nodes transparently -- the graph definition stays topology-agnostic.
@@ -51,7 +51,7 @@ agent-template/
   packages/
     fipsagents/            # Shared BaseAgent package (pip-installable)
   sandbox/                 # Code execution sandbox sidecar (FastAPI, UBI)
-  examples/                # Runnable demos (shared-memory, code-sandbox-agent)
+  examples/                # Runnable demos (shared-memory, code-sandbox-agent, document-analysis)
   templates/
     agent-loop/            # Single-agent loop template
     workflow/              # Multi-node workflow template

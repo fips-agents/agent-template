@@ -1,21 +1,11 @@
 # Next Session: Sandbox Profiles & Code Refactoring Pipeline
 
-## What was completed
+## What was completed this session
 
-- Code-sandbox-agent deployed to OpenShift and validated end-to-end
-  - Built both images (agent + sandbox sidecar) via OpenShift BuildConfig
-  - Created FastAPI server wrapper (server.py) with /chat, /healthz, /readyz
-  - Created agent Containerfile (UBI 9 Python 3.11)
-  - Deployed via Helm with sandbox sidecar enabled
-  - Full test matrix passed: computations, word problems, guardrails, health
-- On-cluster findings documented:
-  - Landlock active (ABI v5) on RHCOS 9.6 (kernel 5.14.0)
-  - Read-only root filesystem confirmed working with /tmp emptyDir
-  - File permissions fine with COPY --chmod=644
-  - Resources well within limits (agent: 2m/146Mi, sandbox: 7m/34Mi)
-  - SPO not installed on RHPDS cluster (seccomp skipped)
-  - litellm requires OPENAI_API_KEY even for unauthenticated vLLM (set dummy value)
-- Planning doc written: `planning/code-execution-pipeline.md`
+- **Workflow extraction**: Moved 8 workflow modules (Graph, WorkflowRunner, BaseNode, AgentNode, WorkflowState, @node, WorkflowNode protocol, errors) from `templates/workflow/src/workflow/` into `packages/fipsagents/src/fipsagents/workflow/`. Template's `src/workflow/` is now a thin re-export shim for backwards compat.
+- **Test suite**: 256 tests covering all baseagent modules (config, tools, memory, llm, prompts) and the full workflow framework. Zero tests existed before.
+- **Document-analysis example**: 6-node pipeline (classify → extract|summarize|fallback → validate → format_report) demonstrating conditional routing, mixed node types, typed state, and the full runner lifecycle. 28 unit tests + live validation against GPT-OSS-20B.
+- GPT-OSS-20B endpoint confirmed working: `https://gpt-oss-20b-2-gpt-oss-model-2.apps.cluster-n7pd5.n7pd5.sandbox5167.opentlc.com/v1`, model name `openai/RedHatAI/gpt-oss-20b`
 
 ## Priority 1: Sandbox profiles (implement)
 
@@ -72,17 +62,18 @@ See `planning/code-execution-pipeline.md` Section 3 for full design.
 
 - `planning/code-execution-pipeline.md` -- Authoritative design doc
 - `examples/code-sandbox-agent/` -- Deployed example (server.py, Containerfile, values-deploy.yaml)
+- `examples/document-analysis/` -- Workflow example (conditional routing, mixed nodes, live LLM)
 - `sandbox/` -- Sidecar (to be extended with profiles/)
 - Issue #33 -- FIPS test matrix
 
 ## Prior session context
 
-- v0.4.0 on PyPI. 499 tests passing.
+- 284 tests passing (256 in fipsagents package + 28 in document-analysis example).
 - Code-sandbox-agent deployed on RHPDS cluster (namespace: code-sandbox-agent)
   - Agent image: internal registry, built via BuildConfig
   - Sandbox image: internal registry, built via BuildConfig
   - Route: code-sandbox-agent-agent-template-code-sandbox-agent.apps.cluster-n7pd5.n7pd5.sandbox5167.opentlc.com
   - Model: GPT-OSS-20B (RedHatAI/gpt-oss-20b) via external route
-- ec2-dev-2 was unreachable this session; used BuildConfig instead
+- ec2-dev-2 was unreachable last session; used BuildConfig instead
 - Tool ecosystem identified for refactoring pipeline: treeloom, greploom,
   sanicode, veripak, stigcode. All deploy as MCP servers.
