@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from src.agent import ProblemSolver, PROJECT_ID
+from src.agent import ProblemSolver
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

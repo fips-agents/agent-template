@@ -11,7 +11,7 @@ from fipsagents.baseagent.tool_inspector import (
     InspectionResult,
     ToolInspector,
 )
-from fipsagents.baseagent.tools import ToolRegistry, ToolResult, tool
+from fipsagents.baseagent.tools import ToolRegistry, tool
 
 
 # ---------------------------------------------------------------------------

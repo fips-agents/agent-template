@@ -9,7 +9,6 @@ Then run this:
 """
 
 import asyncio
-import sys
 from pathlib import Path
 
 from src.agent import CodeSandboxAgent
