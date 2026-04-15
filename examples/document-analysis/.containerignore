@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+run.py
+tests/
+values-deploy.yaml
+.containerignore
+Makefile

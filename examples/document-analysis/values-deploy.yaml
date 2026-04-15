@@ -1,0 +1,21 @@
+# Helm values override for deploying document-analysis to OpenShift.
+# Usage: helm upgrade --install document-analysis ../../templates/agent-loop/chart \
+#          -f values-deploy.yaml -n <PROJECT>
+
+image:
+  # Populated by Makefile — points to the internal registry image built by BuildConfig.
+  repository: SET_BY_MAKEFILE
+  tag: latest
+  pullPolicy: Always
+
+config:
+  MODEL_ENDPOINT: "https://gpt-oss-20b-2-gpt-oss-model-2.apps.cluster-n7pd5.n7pd5.sandbox5167.opentlc.com/v1"
+  MODEL_NAME: "openai/RedHatAI/gpt-oss-20b"
+  LOG_LEVEL: "INFO"
+  OPENAI_API_KEY: "not-required"
+
+probes:
+  enabled: true
+
+route:
+  enabled: true
