@@ -66,6 +66,11 @@ route:
 #   2. Build and push the sandbox image from sandbox/ at the repo root.
 sandbox:
   enabled: false
+  # Sandbox profile: minimal, data-science, financial, code-analysis.
+  # Controls which imports are allowed and which scan stages run.
+  # The image tag should match the profile (e.g., "0.5.0-data-science").
+  # Sets SANDBOX_PROFILE env var in the sandbox container.
+  profile: minimal
   image:
     repository: code-sandbox
     tag: latest
@@ -88,3 +93,20 @@ sandbox:
   #      seccomp profiles (restricted-v2 only allows RuntimeDefault).
   seccomp:
     enabled: false
+
+# -- FIPS cluster notes -------------------------------------------------------
+# No FIPS-specific configuration is required. UBI base images ship
+# FIPS-aware OpenSSL and respect the host kernel's fips=1 mode
+# automatically.
+#
+# Validated behavior (OCP 4.20.17, OpenSSL 3.5.1, 2026-04-15):
+#   - Sandbox: python3 -I subprocess inherits FIPS mode. hashlib.md5()
+#     raises UnsupportedDigestmodError; md5(usedforsecurity=False) works.
+#     hashlib.sha1() is NOT blocked by FIPS. Guardrails fire before FIPS
+#     for both md5 and sha1 with actionable error messages.
+#   - TLS: 21 AEAD-only ciphers (AES-GCM/CCM, TLSv1.2/1.3). SHA-1
+#     signed certs from external sources can be verified. Endpoints
+#     requiring non-AEAD cipher suites (CBC, RC4) cannot negotiate.
+#   - Seccomp/Landlock: Kernel mechanisms, unaffected by FIPS.
+#
+# See research/sandbox-hardening-v2.md Finding 5 for full test results.

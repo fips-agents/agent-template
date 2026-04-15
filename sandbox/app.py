@@ -1,9 +1,10 @@
 """FastAPI HTTP layer for the code execution sandbox.
 
-Wires together guardrails.validate_code and executor.execute_code behind two
-endpoints:
+Wires together the multi-stage pipeline (guardrails → execute → post-review)
+behind three endpoints:
 
   GET  /healthz   — liveness/readiness probe
+  GET  /profile   — active profile introspection
   POST /execute   — validate and run Python code, return captured output
 """
 
@@ -13,9 +14,9 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from sandbox.executor import execute_code
-from sandbox.guardrails import validate_code
 from sandbox.landlock import apply_sandbox_landlock
+from sandbox.pipeline import run_pipeline
+from sandbox.profiles import Profile, get_active_profile
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,15 @@ if _landlock_status.applied:
 elif _landlock_status.reason:
     logger.info("Landlock not applied: %s", _landlock_status.reason)
 
+# Load profile once at startup.
+_profile: Profile = get_active_profile()
+logger.info(
+    "Sandbox profile: %s (%d allowed imports, %d blocklist entries)",
+    _profile.name,
+    len(_profile.allowed_imports),
+    len(_profile.blocklist),
+)
+
 
 class ExecuteRequest(BaseModel):
     code: str
@@ -41,19 +51,38 @@ async def healthz() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/profile")
+async def profile() -> dict:
+    """Return the active profile for introspection."""
+    return {
+        "name": _profile.name,
+        "description": _profile.description,
+        "allowed_imports": sorted(_profile.allowed_imports),
+        "blocklist_entries": len(_profile.blocklist),
+        "scan_stages": {
+            "pre": _profile.scan_stages.pre,
+            "post": _profile.scan_stages.post,
+        },
+    }
+
+
 @app.post("/execute")
 async def execute(req: ExecuteRequest) -> JSONResponse:
     if not req.code.strip():
         return JSONResponse(status_code=400, content={"error": "No code provided"})
 
-    violations = validate_code(req.code)
-    if violations:
+    pipeline_result = await run_pipeline(req.code, _profile, req.timeout)
+
+    if pipeline_result.rejected:
         return JSONResponse(
             status_code=400,
-            content={"error": "Code validation failed", "violations": violations},
+            content={
+                "error": "Code validation failed",
+                "violations": pipeline_result.violations,
+            },
         )
 
-    result = await execute_code(req.code, req.timeout)
+    result = pipeline_result.result
     return JSONResponse(
         status_code=200,
         content={

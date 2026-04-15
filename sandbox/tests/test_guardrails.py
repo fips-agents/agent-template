@@ -342,3 +342,29 @@ def test_path_traversal_safe(source):
     violations = validate_code(source)
     traversal_violations = [v for v in violations if "path traversal" in v]
     assert traversal_violations == [], f"False positive path traversal: {traversal_violations}"
+
+
+# ---------------------------------------------------------------------------
+# allowed_imports parameter — profile-aware import checking
+# ---------------------------------------------------------------------------
+
+
+def test_custom_allowed_imports_permits_numpy():
+    # numpy is not in the default (minimal) allowlist, but passing it explicitly
+    # should suppress the import violation.
+    violations = validate_code(
+        "import numpy",
+        allowed_imports=frozenset({"math", "numpy"}),
+    )
+    assert violations == [], (
+        f"numpy should be allowed with custom allowed_imports, got: {violations}"
+    )
+
+
+def test_default_allowed_imports_blocks_numpy():
+    # Without an explicit allowed_imports argument the minimal allowlist applies,
+    # so numpy must still be rejected.
+    violations = validate_code("import numpy")
+    assert any("numpy" in v for v in violations), (
+        f"expected numpy to be blocked by default allowlist, got: {violations}"
+    )

@@ -1,0 +1,41 @@
+# Minimal sandbox profile — safe stdlib-only computation.
+# This is the default profile and the base for all other profiles.
+
+name: minimal
+description: >
+  Safe computation with standard library modules only. No filesystem,
+  network, or subprocess access. Suitable for math, data formatting,
+  and string manipulation tasks.
+
+imports:
+  allowed:
+    - math
+    - statistics
+    - itertools
+    - functools
+    - re
+    - datetime
+    - collections
+    - json
+    - csv
+    - string
+    - textwrap
+    - decimal
+    - fractions
+    - random
+    - operator
+    - typing
+
+# No profile-specific blocklist — the core guardrails handle all
+# blocked calls, modules, and patterns for the minimal profile.
+blocklist: []
+
+resources:
+  memory: 256Mi
+  cpu: 500m
+  timeout_max: 30.0
+
+scan_stages:
+  pre:
+    - ast_scan
+  post: []

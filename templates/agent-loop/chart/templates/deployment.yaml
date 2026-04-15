@@ -73,6 +73,9 @@ spec:
             - name: sandbox
               containerPort: 8000
               protocol: TCP
+          env:
+            - name: SANDBOX_PROFILE
+              value: {{ .Values.sandbox.profile | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -82,7 +85,7 @@ spec:
             {{- if .Values.sandbox.seccomp.enabled }}
             seccompProfile:
               type: Localhost
-              localhostProfile: operator/{{ .Release.Namespace }}/{{ include "agent-template.fullname" . }}-sandbox.json
+              localhostProfile: operator/{{ include "agent-template.fullname" . }}-sandbox.json
             {{- end }}
           resources:
             {{- toYaml .Values.sandbox.resources | nindent 12 }}

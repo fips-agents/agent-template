@@ -12,12 +12,16 @@ metadata:
   labels:
     {{- include "agent-template.labels" . | nindent 4 }}
 spec:
-  # Deny by default, allowlist only what Python subprocess needs.
+  # Deny by default.  This profile covers the entire sandbox container
+  # (uvicorn + executor subprocess).  Uvicorn needs socket/bind/listen for
+  # its HTTP server; the executor subprocess gets additional Landlock LSM
+  # restrictions to block filesystem escape, applied in code at startup.
   defaultAction: SCMP_ACT_ERRNO
   syscalls:
-    # -- Process lifecycle (required for python3 -I subprocess) ---------------
+    # -- Process lifecycle ----------------------------------------------------
     - names:
         - fork
+        - vfork
         - clone
         - clone3
         - execve
@@ -33,8 +37,14 @@ spec:
     # -- File I/O -------------------------------------------------------------
     - names:
         - read
+        - pread64
         - write
+        - writev
+        - sendfile
+        - sendfile64
+        - splice
         - close
+        - close_range
         - openat
         - open
         - lseek
@@ -106,6 +116,7 @@ spec:
     - names:
         - getpid
         - getppid
+        - getpgrp
         - gettid
         - getuid
         - getgid
@@ -138,6 +149,36 @@ spec:
         - timerfd_gettime
       action: SCMP_ACT_ALLOW
 
+    # -- Networking (uvicorn HTTP server — not the code executor subprocess) ---
+    # Uvicorn needs these to serve HTTP on localhost:8000.
+    # The code executor subprocess is restricted via Landlock LSM at the app
+    # layer; seccomp networking blocks here would prevent the server from
+    # starting.
+    - names:
+        - socket
+        - bind
+        - listen
+        - accept
+        - accept4
+        - connect
+        - sendto
+        - recvfrom
+        - sendmsg
+        - recvmsg
+        - socketpair
+        - setsockopt
+        - getsockopt
+        - getsockname
+        - getpeername
+      action: SCMP_ACT_ALLOW
+
+    # -- Async I/O (Python asyncio / uvloop use io_uring when available) -------
+    - names:
+        - io_uring_setup
+        - io_uring_enter
+        - io_uring_register
+      action: SCMP_ACT_ALLOW
+
     # -- Miscellaneous (Python runtime needs) ----------------------------------
     - names:
         - ioctl
@@ -151,22 +192,6 @@ spec:
     # These are already denied by SCMP_ACT_ERRNO default, but listing them
     # makes the policy self-documenting.
     - names:
-        # Networking — sandbox has zero network access
-        - socket
-        - bind
-        - connect
-        - listen
-        - accept
-        - accept4
-        - sendto
-        - recvfrom
-        - sendmsg
-        - recvmsg
-        - socketpair
-        - setsockopt
-        - getsockopt
-        - getsockname
-        - getpeername
         # Process injection
         - ptrace
         - process_vm_readv
@@ -180,11 +205,7 @@ spec:
         - umount2
         - pivot_root
         - chroot
-        # Container escape vectors
-        - io_uring_setup
-        - io_uring_enter
-        - io_uring_register
-        # eBPF
+        # eBPF (code executor has no need for kernel programs)
         - bpf
         # Namespace manipulation
         - unshare

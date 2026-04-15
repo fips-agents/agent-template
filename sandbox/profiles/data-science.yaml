@@ -1,0 +1,64 @@
+# Data science sandbox profile — extends minimal with numpy, pandas, scipy.
+# Adds a blocklist audit stage to prevent dangerous attribute access on
+# the newly allowed modules.
+
+name: data-science
+description: >
+  Data analysis and scientific computing. Adds numpy, pandas, and scipy
+  on top of the minimal profile. Blocklist prevents filesystem access,
+  code execution, and deserialization through these libraries.
+
+extends: minimal
+
+imports:
+  additional:
+    - numpy
+    - pandas
+    - scipy
+
+# Dangerous attributes on allowed data-science modules.
+# Each entry is [module, attribute] — the blocklist audit stage
+# rejects code that accesses module.attribute.
+blocklist:
+  # numpy: block ctypes bridge and low-level memory access
+  - [numpy, ctypeslib]
+  - [numpy, frompyfunc]
+
+  # pandas: block filesystem I/O and code execution
+  - [pandas, read_pickle]
+  - [pandas, read_sql]
+  - [pandas, read_sql_query]
+  - [pandas, read_sql_table]
+  - [pandas, read_html]
+  - [pandas, read_fwf]
+  - [pandas, read_clipboard]
+  - [pandas, read_excel]
+  - [pandas, read_feather]
+  - [pandas, read_parquet]
+  - [pandas, read_orc]
+  - [pandas, read_sas]
+  - [pandas, read_spss]
+  - [pandas, read_stata]
+  - [pandas, read_gbq]
+  - [pandas, read_hdf]
+  # NOTE: Instance-level methods (df.to_pickle, df.to_sql) cannot be caught
+  # by AST-based blocklist audit — the visitor sees the variable name, not
+  # the type. These are mitigated by the seccomp profile (blocks filesystem
+  # writes) and the read-only root filesystem.
+
+  # scipy: block filesystem and code execution
+  - [scipy.io, loadmat]
+  - [scipy.io, savemat]
+  - [scipy.io, mmread]
+  - [scipy.io, mmwrite]
+
+resources:
+  memory: 512Mi
+  cpu: 500m
+  timeout_max: 30.0
+
+scan_stages:
+  pre:
+    - ast_scan
+    - blocklist_audit
+  post: []

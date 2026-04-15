@@ -4,21 +4,28 @@ Validates LLM-generated Python code before execution by walking the parse tree
 and collecting all violations in a single pass.  Returns an empty list when the
 code is safe to run; a non-empty list when it must be rejected.
 
+The allowed import set is supplied by the active profile — the visitor no
+longer owns a hardcoded module list.
+
 Usage::
 
     from sandbox.guardrails import validate_code
+    from sandbox.profiles import get_active_profile
 
+    profile = get_active_profile()
+    violations = validate_code(source, profile.allowed_imports)
+
+    # or with default minimal profile (backward-compatible):
     violations = validate_code(source)
-    if violations:
-        # surface all violations to the LLM so it can fix them in one retry
-        ...
 """
+
+from __future__ import annotations
 
 import ast
 import re
-
-# Modules the sandbox is allowed to import.
-ALLOWED_IMPORTS: frozenset[str] = frozenset(
+# Default allowed imports — used when no profile is passed (backward compat).
+# Matches the ``minimal`` profile.
+_DEFAULT_ALLOWED_IMPORTS: frozenset[str] = frozenset(
     {
         "math",
         "statistics",
@@ -38,6 +45,9 @@ ALLOWED_IMPORTS: frozenset[str] = frozenset(
         "typing",
     }
 )
+
+# Public alias for backward compatibility.
+ALLOWED_IMPORTS = _DEFAULT_ALLOWED_IMPORTS
 
 # Bare function names that are always blocked.
 _BLOCKED_CALLS: frozenset[str] = frozenset(
@@ -124,8 +134,15 @@ _PATH_TRAVERSAL_RE: re.Pattern[str] = re.compile(r"\.\./")
 class _GuardrailVisitor(ast.NodeVisitor):
     """Single-pass AST visitor that collects all policy violations."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        allowed_imports: frozenset[str] | None = None,
+    ) -> None:
         self.violations: list[str] = []
+        self._allowed_imports = (
+            allowed_imports if allowed_imports is not None
+            else _DEFAULT_ALLOWED_IMPORTS
+        )
 
     # ------------------------------------------------------------------
     # Import checking
@@ -134,10 +151,10 @@ class _GuardrailVisitor(ast.NodeVisitor):
     def _check_module_name(self, name: str, lineno: int) -> None:
         """Reject any module not on the allowlist (checks the top-level name)."""
         top = name.split(".")[0]
-        if top not in ALLOWED_IMPORTS:
+        if top not in self._allowed_imports:
             self.violations.append(
                 f"Line {lineno}: import of '{name}' is not allowed "
-                f"(not in ALLOWED_IMPORTS)"
+                f"(not in allowed imports)"
             )
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -299,13 +316,19 @@ class _GuardrailVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def validate_code(source: str) -> list[str]:
-    """Validate *source* against sandbox policy.
+def validate_code(
+    source: str,
+    allowed_imports: frozenset[str] | None = None,
+) -> list[str]:
+    """Validate *source* against sandbox policy (AST scan stage).
 
     Parameters
     ----------
     source:
         Python source code to validate.
+    allowed_imports:
+        Set of allowed top-level module names.  Defaults to the minimal
+        profile's allowlist when ``None``.
 
     Returns
     -------
@@ -320,6 +343,69 @@ def validate_code(source: str) -> list[str]:
     except SyntaxError as exc:
         return [f"SyntaxError: {exc.msg} (line {exc.lineno})"]
 
-    visitor = _GuardrailVisitor()
+    visitor = _GuardrailVisitor(allowed_imports=allowed_imports)
+    visitor.visit(tree)
+    return visitor.violations
+
+
+# ------------------------------------------------------------------
+# Blocklist audit stage (Tier 2+)
+# ------------------------------------------------------------------
+
+
+class _BlocklistVisitor(ast.NodeVisitor):
+    """Lightweight AST visitor that checks attribute access against a blocklist.
+
+    The blocklist is a list of ``(module_or_type, attribute)`` tuples.  The
+    visitor flags any ``name.attr`` access where ``(name, attr)`` matches a
+    blocklist entry.  This catches both module-level access (``pandas.read_pickle``)
+    and method calls on known types (``DataFrame.to_sql``).
+    """
+
+    def __init__(self, blocklist: list[tuple[str, str]]) -> None:
+        self.violations: list[str] = []
+        self._blocklist = {(m, a) for m, a in blocklist}
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if isinstance(node.value, ast.Name):
+            if (node.value.id, node.attr) in self._blocklist:
+                self.violations.append(
+                    f"Line {node.lineno}: access to "
+                    f"'{node.value.id}.{node.attr}' is blocked by profile"
+                )
+        self.generic_visit(node)
+
+
+def blocklist_audit(
+    source: str,
+    blocklist: list[tuple[str, str]],
+) -> list[str]:
+    """Check *source* for attribute access blocked by the active profile.
+
+    This is a separate, lightweight AST pass that only checks attribute
+    access against the profile's blocklist.  It runs after ``validate_code``
+    in Tier 2+ profiles.
+
+    Parameters
+    ----------
+    source:
+        Python source code (must already pass ``validate_code``).
+    blocklist:
+        List of ``(module_or_type, attribute)`` pairs to reject.
+
+    Returns
+    -------
+    list[str]
+        Violation strings.  Empty means the code passed.
+    """
+    if not blocklist:
+        return []
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []  # validate_code already caught this
+
+    visitor = _BlocklistVisitor(blocklist)
     visitor.visit(tree)
     return visitor.violations
