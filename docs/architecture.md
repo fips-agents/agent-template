@@ -115,7 +115,7 @@ Every BaseAgent subclass follows the same lifecycle:
 
 `setup()` loads configuration, connects to MCP servers, discovers local tools and prompts, initializes memory (if configured), and loads skill stubs. This runs once at startup.
 
-`step()` is the abstract method that subclasses implement. It contains the agent's core logic -- one iteration of whatever the agent does.
+`step()` is one iteration of agent logic. The default implementation consumes `astep_stream()` and concatenates `ContentDelta` content into a `StepResult.done`, so most subclasses override only `astep_stream` and get a working sync path for free -- any pre/post-turn hooks (system prompt injection, memory recall, memory write) live in a single place and both sync and streaming clients share identical behavior. Override `step()` directly only when a subclass needs sync-specific behavior that doesn't map cleanly onto events.
 
 `teardown()` disconnects MCP servers and performs cleanup. This runs once at shutdown.
 
@@ -124,6 +124,62 @@ Every BaseAgent subclass follows the same lifecycle:
 ### Conversation State
 
 `messages` holds the current conversation history. `add_message()` appends to it. `clear_messages()` resets it. These are deliberately simple because conversation management strategies vary widely between agents, and BaseAgent should not impose a particular approach.
+
+## HTTP Server
+
+Most FIPS-Agents chat deployments sit behind an OpenAI-compatible HTTP endpoint so a UI, gateway, or another agent can call them through the ecosystem-standard `/v1/chat/completions` contract. `fipsagents.server.OpenAIChatServer` is the canonical implementation: a FastAPI app that takes a `BaseAgent` subclass and exposes `/v1/chat/completions` (sync + SSE), `/healthz`, and `/readyz` with no hand-written HTTP glue.
+
+```python
+from fipsagents.server import OpenAIChatServer
+from myagent import MyAgent
+
+server = OpenAIChatServer(MyAgent, config_path="agent.yaml")
+app = server.app  # for uvicorn / gunicorn
+
+if __name__ == "__main__":
+    server.run()  # convenience wrapper around uvicorn.run
+```
+
+The class owns the agent lifecycle via FastAPI lifespan -- `MyAgent.setup()` on startup, `shutdown()` on teardown -- and serializes per-request access through an `asyncio.Lock` so concurrent requests don't interleave writes to the shared `agent.messages`. Streaming delegates to `fipsagents.serialization.openai_sse:stream_events_as_sse` (see below); the agent subclass itself is fully unaware of HTTP.
+
+### Opt-in extra, not a core dependency
+
+`fipsagents` core has no FastAPI dependency. `OpenAIChatServer` lives behind the `[server]` optional-dependencies extra:
+
+```toml
+pip install 'fipsagents[server]'   # pulls in fastapi + uvicorn[standard]
+```
+
+Agents that don't expose HTTP -- workflow nodes, batch jobs, evaluation harnesses -- pay no FastAPI install cost. Importing `fipsagents.server` without the extra installed raises a clear `ImportError` pointing at the install command.
+
+### Not a plugin system
+
+There is deliberately **one** HTTP server class and **one** wire-format serializer in the package today. Agents needing a different wire format (WebSocket push, Anthropic Messages API, OpenAI Responses API) either write their own server in their own repo or wait for issue-tracked follow-ups to add a sibling function. There is no registry, no strategy class, no `BaseServer` abstract -- the test for any new serializer is whether it slots in as a plain async function with the same type signature, not whether it registers into some lookup. This keeps the framework's public surface small enough to read top to bottom.
+
+## Streaming Serialization
+
+The streaming wire format -- translating `StreamEvent` sequences to bytes on the wire -- is its own concern, split out from the HTTP server so the same serializer can be reused by WebSocket handlers, test harnesses, or alternative transports.
+
+```python
+from fipsagents.serialization.openai_sse import stream_events_as_sse
+
+async for chunk in stream_events_as_sse(agent.astep_stream(), model_name):
+    yield chunk  # yields SSE frames ending with "data: [DONE]\n\n"
+```
+
+`stream_events_as_sse` is a pure async generator: no FastAPI, no logging, no side effects. It accepts any `AsyncIterator[StreamEvent]`, maps each event to an OpenAI chat-completion-chunk delta using only standard OpenAI wire fields (`reasoning_content`, `tool_calls`, `role:"tool"` + `tool_call_id`, `content`), and terminates with `[DONE]`. On exception from the source iterator it emits an error chunk before `[DONE]` so clients always see a clean termination.
+
+### Adding new wire formats
+
+Additional wire formats (OpenAI Responses API for LlamaStack, Anthropic Messages) follow the same convention: one module, one pure function, one explicit import path.
+
+```
+fipsagents.serialization.openai_sse:stream_events_as_sse           # today
+fipsagents.serialization.responses_api:stream_events_as_responses  # future (#35)
+fipsagents.serialization.anthropic:stream_events_as_messages       # future (#41)
+```
+
+The type signature `(events: AsyncIterator[StreamEvent], model_name: str, ...) -> AsyncIterator[str]` is the contract. No base class, no registry -- grep for the function name to know what exists.
 
 ## Prompts
 
@@ -357,6 +413,7 @@ The dependency footprint is deliberately minimal:
 - **FastMCP v3** -- MCP client for remote tool server integration
 - **memoryhub SDK** -- optional; MemoryHub programmatic access (one of several pluggable memory backends)
 - **asyncpg** -- optional; PGVector memory backend (`pip install fipsagents[pgvector]`)
+- **FastAPI + uvicorn** -- optional; OpenAI-compatible HTTP server (`pip install fipsagents[server]`)
 - **pydantic** -- configuration validation and structured output schemas
 - **httpx** -- async HTTP (also used internally by litellm and FastMCP)
 - **python-frontmatter** -- parsing YAML frontmatter in prompt and skill files
