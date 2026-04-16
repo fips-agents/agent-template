@@ -18,6 +18,15 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar
 
 from fipsagents.baseagent.config import AgentConfig, load_config
+from fipsagents.baseagent.events import (
+    ContentDelta,
+    ReasoningDelta,
+    StreamComplete,
+    StreamEvent,
+    StreamMetrics,
+    ToolCallDelta,
+    ToolResultEvent,
+)
 from fipsagents.baseagent.llm import LLMClient, ModelResponse
 from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, create_memory_client
 from fipsagents.baseagent.prompts import PromptLoader, PromptNotFoundError
@@ -313,6 +322,226 @@ class BaseAgent(abc.ABC):
         msgs = messages if messages is not None else self.messages
         async for chunk in self.llm.call_model_stream(msgs, **kwargs):
             yield chunk
+
+    async def astep_stream(
+        self,
+        *,
+        max_iterations: int = 10,
+    ) -> AsyncIterator[StreamEvent]:
+        """Streaming agent loop. Yields typed ``StreamEvent`` values.
+
+        Drives the model in streaming mode and emits:
+
+        - ``ReasoningDelta`` for each ``delta.reasoning_content`` chunk
+          (models like gpt-oss-20b expose this natively)
+        - ``ToolCallDelta`` for each incremental tool-call chunk the
+          model emits, including ``arguments`` streamed token-by-token
+        - ``ToolResultEvent`` after the agent executes each tool
+        - ``ContentDelta`` for each ``delta.content`` chunk (the
+          user-visible response)
+        - ``StreamComplete`` as the terminal event, carrying
+          ``StreamMetrics`` (TTFT, ITL samples, totals)
+
+        The loop terminates when the model returns a turn with
+        ``finish_reason`` other than ``"tool_calls"``. Subclasses that
+        want custom pre/post-turn work (memory recall, message
+        injection) should override this method and call ``super()``.
+
+        This is source-agnostic: tools from MCP servers and local
+        ``@tool`` functions flow through the same dispatch point, so
+        streaming looks identical regardless of tool origin.
+        """
+        self._require_llm()
+
+        metrics = StreamMetrics()
+        loop = asyncio.get_running_loop()
+        start_time = loop.time()
+        last_content_time: float | None = None
+
+        def _mark_first_reasoning() -> None:
+            if metrics.time_to_first_reasoning is None:
+                metrics.time_to_first_reasoning = loop.time() - start_time
+
+        def _mark_content(now: float) -> None:
+            nonlocal last_content_time
+            if metrics.time_to_first_content is None:
+                metrics.time_to_first_content = now - start_time
+            if last_content_time is not None:
+                metrics.inter_token_latencies.append(now - last_content_time)
+            last_content_time = now
+
+        finish_reason = "stop"
+
+        for _ in range(max_iterations):
+            metrics.model_calls += 1
+            schemas = self.get_tool_schemas()
+            tools_arg = schemas if schemas else None
+
+            # Accumulators for this turn. Keyed by tool_call index since
+            # OpenAI streams multiple concurrent tool calls interleaved.
+            tool_buf: dict[int, dict[str, Any]] = {}
+            assistant_content_parts: list[str] = []
+
+            async for chunk in self.llm.call_model_stream_raw(
+                self.messages, tools=tools_arg
+            ):
+                try:
+                    choice = chunk.choices[0]
+                except (AttributeError, IndexError):
+                    continue
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
+
+                # Reasoning ("thinking") deltas.
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning:
+                    _mark_first_reasoning()
+                    yield ReasoningDelta(content=reasoning)
+
+                # Content deltas.
+                content = getattr(delta, "content", None)
+                if content:
+                    now = loop.time()
+                    _mark_content(now)
+                    assistant_content_parts.append(content)
+                    yield ContentDelta(content=content)
+
+                # Tool-call deltas. OpenAI streams these with an
+                # ``index`` so concurrent calls stay distinct.
+                tc_list = getattr(delta, "tool_calls", None) or []
+                for tc in tc_list:
+                    idx = getattr(tc, "index", 0) or 0
+                    buf = tool_buf.setdefault(
+                        idx, {"id": None, "name": None, "arguments": ""}
+                    )
+                    tc_id = getattr(tc, "id", None)
+                    fn = getattr(tc, "function", None)
+                    tc_name = getattr(fn, "name", None) if fn else None
+                    tc_args = getattr(fn, "arguments", None) if fn else None
+
+                    # First delta for this index usually carries id+name.
+                    first = buf["id"] is None and tc_id is not None
+                    if tc_id and not buf["id"]:
+                        buf["id"] = tc_id
+                    if tc_name and not buf["name"]:
+                        buf["name"] = tc_name
+                    if tc_args:
+                        buf["arguments"] += tc_args
+
+                    yield ToolCallDelta(
+                        index=idx,
+                        call_id=buf["id"] if first else None,
+                        name=buf["name"] if first else None,
+                        arguments_delta=tc_args or "",
+                    )
+
+                turn_finish = getattr(choice, "finish_reason", None)
+                if turn_finish:
+                    finish_reason = turn_finish
+
+            # Extract any usage stats the provider reported. Not all
+            # providers send these with streaming.
+            usage = getattr(chunk, "usage", None)
+            if usage is not None:
+                metrics.prompt_tokens = (
+                    getattr(usage, "prompt_tokens", None)
+                    or metrics.prompt_tokens
+                )
+                metrics.completion_tokens = (
+                    getattr(usage, "completion_tokens", None)
+                    or metrics.completion_tokens
+                )
+                metrics.total_tokens = (
+                    getattr(usage, "total_tokens", None)
+                    or metrics.total_tokens
+                )
+
+            # If the model decided to call tools, execute them and loop.
+            if tool_buf:
+                import json as _json
+
+                assembled_calls = []
+                for idx in sorted(tool_buf.keys()):
+                    buf = tool_buf[idx]
+                    if not buf["id"] or not buf["name"]:
+                        continue
+                    assembled_calls.append(
+                        {
+                            "id": buf["id"],
+                            "type": "function",
+                            "function": {
+                                "name": buf["name"],
+                                "arguments": buf["arguments"],
+                            },
+                        }
+                    )
+
+                # Append the assistant's tool-calling message so the
+                # conversation history is correctly shaped for the next
+                # model call.
+                self.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "".join(assistant_content_parts) or "",
+                        "tool_calls": assembled_calls,
+                    }
+                )
+
+                # Execute each tool and emit the result event.
+                for call in assembled_calls:
+                    metrics.tool_calls += 1
+                    fn_name = call["function"]["name"]
+                    try:
+                        args = (
+                            _json.loads(call["function"]["arguments"])
+                            if call["function"]["arguments"]
+                            else {}
+                        )
+                    except _json.JSONDecodeError:
+                        args = {}
+
+                    result = await self.tools.execute(fn_name, **args)
+                    is_err = result.is_error
+                    content_str = (
+                        result.result
+                        if not is_err
+                        else f"ERROR: {result.error}"
+                    )
+
+                    self.messages.append(
+                        {
+                            "role": "tool",
+                            "content": content_str,
+                            "tool_call_id": call["id"],
+                        }
+                    )
+                    yield ToolResultEvent(
+                        call_id=call["id"],
+                        name=fn_name,
+                        content=content_str,
+                        is_error=is_err,
+                    )
+
+                # Continue the loop: call the model again with the tool
+                # results appended.
+                continue
+
+            # No tool calls -> this turn produced the final response.
+            if assistant_content_parts:
+                self.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "".join(assistant_content_parts),
+                    }
+                )
+            break
+        else:
+            # Loop exhausted without break -> hit iteration cap.
+            finish_reason = "length"
+
+        metrics.total_time = loop.time() - start_time
+        yield StreamComplete(finish_reason=finish_reason, metrics=metrics)
 
     async def call_model_validated(
         self,

@@ -250,9 +250,46 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        """Streaming chat completion.
+        """Streaming chat completion (content-only).
 
         Yields content-delta strings as they arrive from the provider.
+        Discards reasoning, tool calls, and other delta fields. Use
+        ``call_model_stream_raw`` if you need the full chunk.
+
+        Parameters
+        ----------
+        messages:
+            OpenAI-format message list.
+        tools:
+            Optional tool schemas for function calling.
+        **kwargs:
+            Extra keyword arguments forwarded to ``litellm.acompletion``.
+        """
+        async for chunk in self.call_model_stream_raw(
+            messages, tools=tools, **kwargs
+        ):
+            try:
+                delta = chunk.choices[0].delta
+            except (AttributeError, IndexError):
+                continue
+            content = getattr(delta, "content", None)
+            if content:
+                yield content
+
+    async def call_model_stream_raw(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Streaming chat completion (raw chunks).
+
+        Yields the full litellm chunk for each delta. Callers can
+        inspect ``chunk.choices[0].delta`` for ``content``, ``role``,
+        ``tool_calls``, ``reasoning_content``, and other provider fields.
+        Used by ``BaseAgent.astep_stream`` to drive rich streaming with
+        thinking, tool execution, and response phases preserved.
 
         Parameters
         ----------
@@ -276,10 +313,7 @@ class LLMClient:
             ) from exc
         try:
             async for chunk in response:
-                delta = chunk.choices[0].delta
-                content = getattr(delta, "content", None)
-                if content:
-                    yield content
+                yield chunk
         except Exception as exc:
             raise LLMError(
                 f"Error during streaming iteration ({type(exc).__name__}): {exc}"
