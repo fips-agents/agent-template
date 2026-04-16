@@ -32,6 +32,7 @@ from fipsagents.baseagent.events import (
     ReasoningDelta,
     StreamComplete,
     StreamEvent,
+    StreamMetrics,
     ToolCallDelta,
     ToolResultEvent,
 )
@@ -69,6 +70,42 @@ def _sse_chunk(
                 "finish_reason": finish_reason,
             }
         ],
+    }
+    return f"data: {json.dumps(chunk)}\n\n"
+
+
+def _usage_chunk(
+    completion_id: str,
+    model_name: str,
+    metrics: StreamMetrics,
+) -> str:
+    """Serialize a final usage chunk (OpenAI ``include_usage`` convention).
+
+    Shape matches OpenAI's ``stream_options: {include_usage: true}``
+    behaviour — a chunk with ``choices: []`` and a top-level ``usage``
+    object. We also attach a ``stream_metrics`` extension carrying
+    TTFT / ITL / counters that OpenAI's spec does not cover; unknown
+    fields are ignored by conforming clients.
+    """
+    chunk = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": _now(),
+        "model": model_name,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": metrics.prompt_tokens,
+            "completion_tokens": metrics.completion_tokens,
+            "total_tokens": metrics.total_tokens,
+        },
+        "stream_metrics": {
+            "time_to_first_reasoning": metrics.time_to_first_reasoning,
+            "time_to_first_content": metrics.time_to_first_content,
+            "total_time": metrics.total_time,
+            "inter_token_latencies": metrics.inter_token_latencies,
+            "model_calls": metrics.model_calls,
+            "tool_calls": metrics.tool_calls,
+        },
     }
     return f"data: {json.dumps(chunk)}\n\n"
 
@@ -183,6 +220,9 @@ async def stream_events_as_sse(
                     {},
                     finish_reason=event.finish_reason,
                 )
+                # OpenAI's stream_options.include_usage appends a
+                # separate chunk with empty choices carrying usage.
+                yield _usage_chunk(completion_id, model_name, event.metrics)
 
     except Exception as exc:
         err = {"error": {"message": str(exc), "type": type(exc).__name__}}

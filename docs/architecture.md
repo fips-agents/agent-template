@@ -169,6 +169,8 @@ async for chunk in stream_events_as_sse(agent.astep_stream(), model_name):
 
 `stream_events_as_sse` is a pure async generator: no FastAPI, no logging, no side effects. It accepts any `AsyncIterator[StreamEvent]`, maps each event to an OpenAI chat-completion-chunk delta using only standard OpenAI wire fields (`reasoning_content`, `tool_calls`, `role:"tool"` + `tool_call_id`, `content`), and terminates with `[DONE]`. On exception from the source iterator it emits an error chunk before `[DONE]` so clients always see a clean termination.
 
+After the terminal `StreamComplete`, the serializer emits one additional chunk with `choices: []` and a top-level `usage` object -- matching OpenAI's `stream_options: {include_usage: true}` behaviour so token counts are visible to standard clients. The same chunk also carries a sibling `stream_metrics` object with TTFT, time-to-first-content, total time, inter-token latencies, and model/tool call counters drawn from `StreamMetrics`. Conforming OpenAI clients ignore the extension; dashboards and eval harnesses that know to look for it get richer instrumentation without a second endpoint. The sync (`stream: false`) response body carries the same `usage` + `stream_metrics` at the top level.
+
 ### Adding new wire formats
 
 Additional wire formats (OpenAI Responses API for LlamaStack, Anthropic Messages) follow the same convention: one module, one pure function, one explicit import path.
