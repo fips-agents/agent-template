@@ -5,17 +5,18 @@ natural-language response. MemoryHub is wired via the SDK path
 (``self.memory``): the agent searches memory before responding and
 writes facts back after each turn.
 
-Both sync (``step``) and streaming (``astep_stream``) variants do the
-same memory I/O so the two paths behave the same from the outside.
+Only overrides ``astep_stream``. The sync ``step`` path inherits
+``BaseAgent``'s default implementation, which consumes the same stream
+and concatenates content deltas — so sync and streaming clients share
+the identical memory-recall / tool-dispatch / memory-write behavior.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import AsyncIterator
 
-from fipsagents.baseagent import BaseAgent, StepResult
+from fipsagents.baseagent import BaseAgent
 from fipsagents.baseagent.events import StreamComplete, StreamEvent
 
 logger = logging.getLogger(__name__)
@@ -103,62 +104,7 @@ class DemoChatAgent(BaseAgent):
                 lines.append(f"- {content}")
         return "\n".join(lines)
 
-    # -- Sync path (non-streaming clients) ----------------------------------
-
-    async def step(self) -> StepResult:
-        if not self.messages:
-            return StepResult.done("No messages to process.")
-
-        self._ensure_system_prompt()
-
-        latest_user = self._latest_user_message()
-        if latest_user:
-            await self._inject_memory_recall(latest_user)
-
-        response = await self.call_model()
-
-        while response.tool_calls:
-            self.messages.append({
-                "role": "assistant",
-                "content": response.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in response.tool_calls
-                ],
-            })
-
-            for tc in response.tool_calls:
-                args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                result = await self.tools.execute(tc.function.name, **args)
-                content = (
-                    result.result
-                    if not result.is_error
-                    else f"ERROR: {result.error}"
-                )
-                self.messages.append({
-                    "role": "tool",
-                    "content": content,
-                    "tool_call_id": tc.id,
-                })
-
-            response = await self.call_model()
-
-        final = response.content or ""
-        self.messages.append({"role": "assistant", "content": final})
-
-        if latest_user:
-            await self._persist_user_turn(latest_user)
-
-        return StepResult.done(final)
-
-    # -- Streaming path (rich clients) --------------------------------------
+    # -- Streaming path (canonical — sync ``step`` consumes this) -----------
 
     async def astep_stream(
         self, *, max_iterations: int = 10
