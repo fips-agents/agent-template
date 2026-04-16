@@ -34,6 +34,7 @@ except ImportError as exc:  # pragma: no cover — helpful error path
     ) from exc
 
 from fipsagents.baseagent import BaseAgent
+from fipsagents.baseagent.events import ContentDelta, StreamComplete, StreamMetrics
 from fipsagents.serialization.openai_sse import stream_events_as_sse
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,14 @@ def _messages_to_dicts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
     return out
 
 
-def _sync_response(model_name: str, content: str) -> dict[str, Any]:
+def _sync_response(
+    model_name: str,
+    content: str,
+    *,
+    metrics: StreamMetrics | None = None,
+    finish_reason: str = "stop",
+) -> dict[str, Any]:
+    m = metrics or StreamMetrics()
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
@@ -89,13 +97,21 @@ def _sync_response(model_name: str, content: str) -> dict[str, Any]:
             {
                 "index": 0,
                 "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "finish_reason": finish_reason,
             }
         ],
         "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
+            "prompt_tokens": m.prompt_tokens,
+            "completion_tokens": m.completion_tokens,
+            "total_tokens": m.total_tokens,
+        },
+        "stream_metrics": {
+            "time_to_first_reasoning": m.time_to_first_reasoning,
+            "time_to_first_content": m.time_to_first_content,
+            "total_time": m.total_time,
+            "inter_token_latencies": m.inter_token_latencies,
+            "model_calls": m.model_calls,
+            "tool_calls": m.tool_calls,
         },
     }
 
@@ -190,10 +206,17 @@ class OpenAIChatServer:
         incoming = _messages_to_dicts(req.messages)
 
         if not req.stream:
-            async with self._agent_lock:
-                agent.messages = list(incoming)
-                result = await agent.run()
-            return JSONResponse(_sync_response(model_name, str(result)))
+            content, metrics, finish_reason = await self._collect_sync(
+                agent, incoming
+            )
+            return JSONResponse(
+                _sync_response(
+                    model_name,
+                    content,
+                    metrics=metrics,
+                    finish_reason=finish_reason,
+                )
+            )
 
         return StreamingResponse(
             self._stream(incoming, model_name),
@@ -204,6 +227,31 @@ class OpenAIChatServer:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    # -- Sync ----------------------------------------------------------------
+
+    async def _collect_sync(
+        self,
+        agent: BaseAgent,
+        incoming: list[dict[str, Any]],
+    ) -> tuple[str, StreamMetrics | None, str]:
+        """Drive ``astep_stream`` for a non-streaming response.
+
+        Fully drains the iterator so any post-``StreamComplete`` hooks
+        in the subclass (e.g. memory writes) run to completion.
+        """
+        parts: list[str] = []
+        metrics: StreamMetrics | None = None
+        finish_reason = "stop"
+        async with self._agent_lock:
+            agent.messages = list(incoming)
+            async for event in agent.astep_stream(max_iterations=10):
+                if isinstance(event, ContentDelta):
+                    parts.append(event.content)
+                elif isinstance(event, StreamComplete):
+                    metrics = event.metrics
+                    finish_reason = event.finish_reason
+        return "".join(parts), metrics, finish_reason
 
     # -- Streaming -----------------------------------------------------------
 

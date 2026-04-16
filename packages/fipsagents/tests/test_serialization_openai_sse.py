@@ -44,12 +44,20 @@ async def _collect(gen: AsyncIterator[str]) -> list[dict | str]:
 
 
 def _delta(parsed: dict) -> dict:
-    """Extract the delta dict from a parsed chunk."""
-    return parsed["choices"][0]["delta"]
+    """Extract the delta dict from a parsed chunk. Empty-choices chunks
+    (e.g. the trailing usage chunk) return ``{}`` so filter expressions
+    can safely call this on any chunk."""
+    choices = parsed.get("choices") or []
+    if not choices:
+        return {}
+    return choices[0]["delta"]
 
 
 def _finish_reason(parsed: dict) -> str | None:
-    return parsed["choices"][0]["finish_reason"]
+    choices = parsed.get("choices") or []
+    if not choices:
+        return None
+    return choices[0]["finish_reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -137,14 +145,58 @@ async def test_tool_result_event_becomes_tool_role_chunk():
     assert d["content"] == "result text"
 
 
-async def test_stream_complete_emits_finish_reason_then_done():
+async def test_stream_complete_emits_finish_reason_then_usage_then_done():
     events = [StreamComplete(finish_reason="stop", metrics=StreamMetrics())]
     frames = await _collect(stream_events_as_sse(_iter(events), model_name="m"))
-    # role, complete chunk, [DONE]
-    assert len(frames) == 3
+    # role, finish_reason chunk, usage chunk, [DONE]
+    assert len(frames) == 4
     assert _delta(frames[1]) == {}
     assert _finish_reason(frames[1]) == "stop"
-    assert frames[2] == "[DONE]"
+    # Usage chunk: empty choices, usage + stream_metrics populated.
+    assert frames[2]["choices"] == []
+    assert "usage" in frames[2]
+    assert "stream_metrics" in frames[2]
+    assert frames[3] == "[DONE]"
+
+
+async def test_usage_chunk_carries_token_counts_and_stream_metrics():
+    metrics = StreamMetrics(
+        time_to_first_reasoning=0.05,
+        time_to_first_content=0.12,
+        total_time=1.5,
+        inter_token_latencies=[0.01, 0.02, 0.015],
+        prompt_tokens=42,
+        completion_tokens=17,
+        total_tokens=59,
+        model_calls=2,
+        tool_calls=1,
+    )
+    events = [StreamComplete(finish_reason="stop", metrics=metrics)]
+    frames = await _collect(stream_events_as_sse(_iter(events), model_name="m"))
+    usage_chunk = frames[2]
+    assert usage_chunk["usage"] == {
+        "prompt_tokens": 42,
+        "completion_tokens": 17,
+        "total_tokens": 59,
+    }
+    sm = usage_chunk["stream_metrics"]
+    assert sm["time_to_first_reasoning"] == 0.05
+    assert sm["time_to_first_content"] == 0.12
+    assert sm["total_time"] == 1.5
+    assert sm["inter_token_latencies"] == [0.01, 0.02, 0.015]
+    assert sm["model_calls"] == 2
+    assert sm["tool_calls"] == 1
+
+
+async def test_usage_chunk_shares_completion_id_and_model_name():
+    events = [StreamComplete(finish_reason="stop", metrics=StreamMetrics())]
+    frames = await _collect(
+        stream_events_as_sse(_iter(events), model_name="granite-8b", completion_id="cid-1")
+    )
+    json_frames = [f for f in frames if isinstance(f, dict)]
+    assert all(f["id"] == "cid-1" for f in json_frames)
+    assert all(f["model"] == "granite-8b" for f in json_frames)
+    assert all(f["object"] == "chat.completion.chunk" for f in json_frames)
 
 
 async def test_exception_in_source_yields_error_chunk_then_done():

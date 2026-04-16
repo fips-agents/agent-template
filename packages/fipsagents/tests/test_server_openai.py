@@ -104,11 +104,19 @@ def _parse_sse_body(body: str) -> list[dict | str]:
 
 
 def _delta(chunk: dict) -> dict:
-    return chunk["choices"][0]["delta"]
+    """Extract delta from a chunk; returns ``{}`` for empty-choices
+    chunks (e.g. the trailing usage chunk)."""
+    choices = chunk.get("choices") or []
+    if not choices:
+        return {}
+    return choices[0]["delta"]
 
 
 def _finish_reason(chunk: dict) -> str | None:
-    return chunk["choices"][0]["finish_reason"]
+    choices = chunk.get("choices") or []
+    if not choices:
+        return None
+    return choices[0]["finish_reason"]
 
 
 def _build_server(events=None, *, model_name: str = "stub-model") -> OpenAIChatServer:
@@ -163,6 +171,60 @@ def test_sync_chat_completions_returns_concatenated_content():
     assert body["choices"][0]["finish_reason"] == "stop"
 
 
+def test_sync_response_populates_usage_and_stream_metrics_from_metrics():
+    metrics = StreamMetrics(
+        time_to_first_content=0.07,
+        total_time=0.42,
+        inter_token_latencies=[0.01, 0.02],
+        prompt_tokens=11,
+        completion_tokens=5,
+        total_tokens=16,
+        model_calls=1,
+        tool_calls=0,
+    )
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    server = _build_server(events)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+        )
+    body = resp.json()
+    assert body["usage"] == {
+        "prompt_tokens": 11,
+        "completion_tokens": 5,
+        "total_tokens": 16,
+    }
+    sm = body["stream_metrics"]
+    assert sm["time_to_first_content"] == 0.07
+    assert sm["total_time"] == 0.42
+    assert sm["inter_token_latencies"] == [0.01, 0.02]
+    assert sm["model_calls"] == 1
+
+
+def test_sync_response_finish_reason_reflects_stream_complete():
+    events = [
+        ContentDelta(content="truncated"),
+        StreamComplete(finish_reason="length", metrics=StreamMetrics()),
+    ]
+    server = _build_server(events)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+        )
+    assert resp.json()["choices"][0]["finish_reason"] == "length"
+
+
 def test_streaming_chat_completions_emits_sse_frames():
     events = [
         ContentDelta(content="hi"),
@@ -197,6 +259,39 @@ def test_streaming_chat_completions_emits_sse_frames():
         if isinstance(f, dict) and _finish_reason(f) == "stop"
     ]
     assert len(stop_chunks) == 1
+
+
+def test_streaming_response_ends_with_usage_chunk_then_done():
+    metrics = StreamMetrics(
+        prompt_tokens=9,
+        completion_tokens=3,
+        total_tokens=12,
+        total_time=0.3,
+    )
+    events = [
+        ContentDelta(content="hi"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    server = _build_server(events)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "ping"}],
+                "stream": True,
+            },
+        )
+    frames = _parse_sse_body(resp.text)
+    assert frames[-1] == "[DONE]"
+    usage_chunk = frames[-2]
+    assert isinstance(usage_chunk, dict)
+    assert usage_chunk["choices"] == []
+    assert usage_chunk["usage"] == {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "total_tokens": 12,
+    }
+    assert usage_chunk["stream_metrics"]["total_time"] == 0.3
 
 
 def test_streaming_tool_call_events_pass_through():
