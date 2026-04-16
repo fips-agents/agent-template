@@ -36,15 +36,29 @@ All LLM communication goes through litellm, which provides a unified OpenAI-comp
 
 **Important:** litellm's OpenAI provider requires `OPENAI_API_KEY` to be set even when connecting to unauthenticated endpoints (e.g., a vLLM instance with no auth). Set it to any non-empty string (e.g., `OPENAI_API_KEY=not-required`) in the agent's environment. Without this, litellm raises `AuthenticationError` before the request is sent.
 
-BaseAgent exposes four methods for model interaction:
+BaseAgent exposes five methods for model interaction:
 
 `call_model(messages, **kwargs)` makes a standard chat completion call and returns the response. This is the workhorse for most interactions.
 
 `call_model_json(messages, schema, **kwargs)` requests structured output conforming to a Pydantic schema and returns a parsed, validated object. It handles the provider-specific details of requesting JSON mode or structured output.
 
-`call_model_stream(messages, **kwargs)` returns an async generator that yields response chunks as they arrive, for use cases where latency to first token matters.
+`call_model_stream(messages, **kwargs)` returns an async generator that yields content-delta strings as they arrive, for use cases where latency to first token matters but only the user-visible text is needed.
+
+`call_model_stream_raw(messages, **kwargs)` is the richer sibling: it yields the full provider chunk for each delta so callers can inspect `content`, `role`, `tool_calls`, `reasoning_content`, and any other fields the provider emits. Used internally by `astep_stream` (see below) and appropriate for any caller that needs to surface tool decisions or thinking as separate phases. `call_model_stream` is implemented in terms of `call_model_stream_raw`.
 
 `call_model_validated(messages, validator_tool, **kwargs)` is a first-class pattern, not an afterthought. It calls the model, validates the output by invoking a tool (which can be a schema check, a domain-specific validator, or anything else registered in the tool system), and retries with exponential backoff if validation fails. This pattern recurs constantly in production agents -- extracting structured data from unstructured responses, ensuring outputs meet domain constraints -- and deserves dedicated support rather than being reimplemented in every agent.
+
+### Streaming Agent Loop
+
+`BaseAgent.astep_stream()` is the streaming counterpart to `step()`. It drives the full ReAct loop (model call → tool execution → model call → ...) in streaming mode and yields a typed event stream from `fipsagents.baseagent.events`:
+
+- `ReasoningDelta(content)` -- incremental thinking chunk (maps from `delta.reasoning_content`; gpt-oss-20b, o1, o3 emit this natively)
+- `ToolCallDelta(index, call_id, name, arguments_delta)` -- streaming tool-call decision, with arguments arriving token-by-token
+- `ToolResultEvent(call_id, name, content, is_error)` -- result of a tool the agent just executed, paired to the originating `call_id`
+- `ContentDelta(content)` -- incremental user-visible response chunk
+- `StreamComplete(finish_reason, metrics)` -- terminal event carrying `StreamMetrics` (TTFT, ITL samples, total time, model/tool call counts, token usage)
+
+Tool dispatch inside the streaming loop flows through the same registry as non-streaming, so the event stream is source-agnostic: tools from MCP servers and local `@tool` functions produce identical event shapes. This is load-bearing for the framework's OpenAI-compatibility story -- server code serializing `astep_stream` to `/v1/chat/completions` SSE can use only standard OpenAI delta fields (`reasoning_content`, `tool_calls`, `role:"tool"` + `tool_call_id`, `content`) with no custom extensions. Dumb OpenAI clients see the assistant content; rich clients render thinking, tool execution, and response as separate phases by inspecting which fields each delta carries.
 
 ### Two Tool Planes
 
