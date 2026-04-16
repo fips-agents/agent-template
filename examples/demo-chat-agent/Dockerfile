@@ -10,13 +10,14 @@ WORKDIR /opt/app-root/src
 # Install the vendored fipsagents source first. The deploy script
 # stages packages/fipsagents -> vendor/fipsagents before running the
 # build so we can install the in-development version instead of the
-# PyPI release.
+# PyPI release.  The [server] extra pulls in FastAPI + uvicorn used by
+# fipsagents.server.OpenAIChatServer.
 USER 0
 COPY vendor/fipsagents/ /tmp/fipsagents-src/
 # pip needs to write egg-info into the source dir during install; make
 # the staged source writable by anyone before running the install.
 RUN chmod -R a+w /tmp/fipsagents-src \
-    && pip install --no-cache-dir /tmp/fipsagents-src/ \
+    && pip install --no-cache-dir '/tmp/fipsagents-src/[server]' \
     && rm -rf /tmp/fipsagents-src
 USER 1001
 
@@ -28,10 +29,10 @@ RUN pip install --no-cache-dir -r requirements-container.txt
 
 # Copy agent artifacts.
 COPY --chmod=644 agent.yaml .
-# .memoryhub.yaml is rewritten in place by server.lifespan to expand
-# ${VAR:-default} placeholders, so the running user (1001) needs write
-# access. chmod 666 keeps the file readable by everyone but writable too.
-COPY --chmod=666 .memoryhub.yaml .
+# .memoryhub.yaml may contain ${VAR:-default} placeholders; fipsagents'
+# memory client expands them in-memory on load, so the file stays
+# read-only in the image.
+COPY --chmod=644 .memoryhub.yaml .
 COPY --chmod=644 src/__init__.py src/
 COPY --chmod=644 src/agent.py src/
 COPY --chmod=644 src/server.py src/
