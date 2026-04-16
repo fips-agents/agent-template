@@ -5,6 +5,10 @@
     '''\/examples\/''',
     '''\/tests?\/fixtures\/''',
     '''docs\/.*\.md$''',
+    # Security test suites contain fake secrets as inputs to the pattern
+    # detectors they exercise. Removing the fakes defeats the tests.
+    '''sandbox\/tests\/test_guardrails\.py$''',
+    '''packages\/fipsagents\/tests\/test_tool_inspector\.py$''',
   ]
 
   regexes = [
