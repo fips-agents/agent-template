@@ -1,9 +1,18 @@
 """BaseAgent framework for building production-ready AI agents."""
 
-__version__ = "0.2.0"
+__version__ = "0.5.0.dev0"
 
 from fipsagents.baseagent.agent import BaseAgent, StepOutcome, StepResult
 from fipsagents.baseagent.config import AgentConfig, ConfigError, NodeConfig, SecurityConfig, load_config, load_config_from_string
+from fipsagents.baseagent.events import (
+    ContentDelta,
+    ReasoningDelta,
+    StreamComplete,
+    StreamEvent,
+    StreamMetrics,
+    ToolCallDelta,
+    ToolResultEvent,
+)
 from fipsagents.baseagent.llm import LLMClient, LLMError, ModelResponse
 from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, create_memory_client
 from fipsagents.baseagent.prompts import Prompt, PromptLoader
@@ -24,6 +33,14 @@ __all__ = [
     "SecurityConfig",
     "load_config",
     "load_config_from_string",
+    # events (streaming)
+    "ContentDelta",
+    "ReasoningDelta",
+    "StreamComplete",
+    "StreamEvent",
+    "StreamMetrics",
+    "ToolCallDelta",
+    "ToolResultEvent",
     # llm
     "LLMClient",
     "LLMError",
