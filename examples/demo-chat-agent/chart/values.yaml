@@ -1,0 +1,44 @@
+replicaCount: 1
+
+image:
+  # Defaults target an in-cluster BuildConfig ImageStream. Override
+  # `image.repository` to use an external registry.
+  repository: image-registry.openshift-image-registry.svc:5000/demo-chat-agent/demo-chat-agent
+  tag: latest
+  pullPolicy: Always
+
+service:
+  port: 8080
+
+route:
+  enabled: true
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+probes:
+  enabled: true
+
+# agent.yaml env-var overrides injected via ConfigMap.
+# Leave blank to fall back to the defaults baked into the image.
+config:
+  LOG_LEVEL: INFO
+  # litellm requires this to be set even for unauthenticated vLLM endpoints.
+  # Any non-empty string works; see agent.yaml's header comment for context.
+  OPENAI_API_KEY: "not-required"
+
+# MemoryHub API key is injected from an OpenShift Secret.
+# Create it with:
+#   oc create secret generic memoryhub-api-key \
+#     --from-literal=api-key=<YOUR_KEY> -n demo-chat-agent
+memoryhub:
+  secretName: memoryhub-api-key
+  secretKey: api-key
