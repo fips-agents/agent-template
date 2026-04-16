@@ -276,12 +276,46 @@ Memory is optional and pluggable. The `memory.backend` field in `agent.yaml` sel
 | Backend | Config file | Dependencies | Search type | Best for |
 |---------|-------------|--------------|-------------|----------|
 | `memoryhub` | `.memoryhub.yaml` | `memoryhub` | Full (server-side) | Production with MemoryHub |
+| `markdown` | `.memory-markdown.yaml` | None (stdlib) | Case-insensitive substring | Human-curated, git-committed memory |
 | `sqlite` | `.memory-sqlite.yaml` | None (stdlib) | Keyword (FTS5) | Local dev, testing |
 | `pgvector` | `.memory-pgvector.yaml` | `asyncpg`, `pgvector` | Semantic (vector cosine) | Production without MemoryHub |
 | `custom` | -- | Your choice | Your choice | Custom infrastructure |
 | `null` | -- | None | None (disabled) | Explicitly disable memory |
 
 When `backend` is unset, the factory auto-detects `.memoryhub.yaml` for backward compatibility. All backends implement `MemoryClientBase` with four async methods: `search()`, `write()`, `update()`, and `report_contradiction()`. When no backend is configured (or any backend fails to initialise), `self.memory` is a `NullMemoryClient` -- a silent no-op that returns empty results so agent code never needs to guard on configuration.
+
+### Picking a backend
+
+Memory implementations cluster into maturity levels; most teams should start at the simplest level that addresses their actual failure modes. The first decision is whether the agent needs memory at all:
+
+```
+Does this agent need memory across sessions?
+├─ No  → backend: null (or just leave it unset).
+└─ Yes → How will you curate it?
+   ├─ I'll read and edit the memory file by hand, and commit it to git
+   │  ├─ One topic       → backend: markdown, file: ./memory.md      (Level 1)
+   │  └─ Multiple areas  → backend: markdown, dir:  ./memories        (Level 2)
+   ├─ Agent needs searchable memory on one host, I won't curate by hand
+   │                     → backend: sqlite                            (Level 3)
+   ├─ Multiple agents share memory, or I need vector similarity
+   │                     → backend: pgvector                          (Level 4)
+   └─ Regulated environment: audit trails, RBAC, retention, deletion-with-evidence
+                           → backend: memoryhub                       (Level 5)
+```
+
+Each jump is a real jump, not a sliding scale of features. If you find yourself asking "should the markdown backend have search ranking?" the answer is usually "no, move to SQLite." The primer at `research/agent-memory-primer.md` goes into more detail on when each level is the right choice.
+
+### The prefix-cache pattern
+
+Regardless of backend, *how* an agent injects memory into the context affects prefix-cache hit rates at the model endpoint. Modern inference servers (vLLM, OpenAI, Anthropic) cache prefixes across requests; a turn whose first N tokens match the previous turn pays zero time-to-first-token for those tokens.
+
+Cache-friendly ordering looks like:
+
+1. System prompt (stable across turns)
+2. Memory block (stable across turns — inject once at session start, not re-query per turn)
+3. Conversation history (the changing part)
+
+The markdown backend's `search(query="")` is designed for this: it returns every section or file in stable file order as separate results, so an agent can load the whole memory set once and inject it as a stable prefix. Other backends (SQLite, PGVector, MemoryHub) can use the same pattern by retrieving once at session start and caching the result for the duration of the session. A first-class "memory prefix slot" in `BaseAgent` is a tracked follow-up.
 
 **The SDK path** exposes `self.memory` for programmatic access from agent code. This is for cases where the agent logic itself needs to read or write memories -- caching intermediate results, maintaining state across iterations, or implementing retrieval patterns that the LLM shouldn't control directly.
 
