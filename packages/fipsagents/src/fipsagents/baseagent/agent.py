@@ -259,12 +259,26 @@ class BaseAgent(abc.ABC):
         finally:
             await self.shutdown()
 
-    # -- Abstract method -----------------------------------------------------
+    # -- Step: one iteration of agent logic ---------------------------------
 
-    @abc.abstractmethod
     async def step(self) -> StepResult:
-        """One iteration of agent logic (subclasses implement this)."""
-        ...
+        """One iteration of agent logic.
+
+        The default implementation consumes :meth:`astep_stream` and returns
+        the concatenated ``ContentDelta`` content as a ``StepResult.done``.
+        Subclasses typically override ``astep_stream`` only; both sync and
+        streaming clients then share the same ReAct loop, tool dispatch, and
+        any pre/post-turn hooks (memory recall, system prompt injection).
+
+        Override this method directly only when a subclass needs sync-specific
+        behavior that doesn't make sense to expose as events — most agents
+        should not.
+        """
+        content_parts: list[str] = []
+        async for event in self.astep_stream():
+            if isinstance(event, ContentDelta):
+                content_parts.append(event.content)
+        return StepResult.done("".join(content_parts))
 
     # -- Conversation state --------------------------------------------------
 
