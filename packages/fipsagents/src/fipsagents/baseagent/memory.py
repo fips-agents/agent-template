@@ -12,6 +12,7 @@ The factory **never** raises — the agent always gets a usable client.
 
 Supported backends:
   - ``memoryhub``  — MemoryHub SDK (auto-detected or explicit)
+  - ``markdown``   — Human-readable markdown file(s) (via ``memory_markdown`` module)
   - ``sqlite``     — Local SQLite with FTS5 (via ``memory_sqlite`` module)
   - ``pgvector``   — PostgreSQL + pgvector (via ``memory_pgvector`` module)
   - ``custom``     — Any ``MemoryClientBase`` subclass at a dotted import path
@@ -233,6 +234,9 @@ async def create_memory_client(
     if backend == "memoryhub":
         return await _create_memoryhub_client(effective_path)
 
+    if backend == "markdown":
+        return await _create_markdown_client(effective_path)
+
     if backend == "sqlite":
         return await _create_sqlite_client(effective_path)
 
@@ -349,6 +353,20 @@ async def _create_pgvector_client(config_path: Path) -> MemoryClientBase:
             "PGVector memory backend requested but memory_pgvector module "
             "not found — falling back to NullMemoryClient. "
             "Install with: pip install fipsagents[pgvector]"
+        )
+        return NullMemoryClient()
+
+
+async def _create_markdown_client(config_path: Path) -> MemoryClientBase:
+    """Create a markdown-backed memory client."""
+    try:
+        from fipsagents.baseagent.memory_markdown import create_markdown_client
+
+        return await create_markdown_client(config_path)
+    except ImportError:
+        logger.error(
+            "Markdown memory backend requested but memory_markdown module "
+            "not found — falling back to NullMemoryClient"
         )
         return NullMemoryClient()
 

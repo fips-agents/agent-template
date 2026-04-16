@@ -187,6 +187,7 @@ class MemoryConfig(BaseModel):
 
     Supported backends:
       - ``memoryhub`` — MemoryHub SDK (requires ``memoryhub`` package)
+      - ``markdown``  — Human-readable markdown file(s) (zero dependencies)
       - ``sqlite``    — Local SQLite with FTS5 (zero dependencies)
       - ``pgvector``  — PostgreSQL + pgvector (requires ``asyncpg``)
       - ``custom``    — Bring your own: set ``backend_class`` to a dotted
@@ -194,7 +195,7 @@ class MemoryConfig(BaseModel):
       - ``null``      — Explicitly disable memory
     """
 
-    backend: Literal["memoryhub", "sqlite", "pgvector", "custom", "null"] | None = None
+    backend: Literal["memoryhub", "markdown", "sqlite", "pgvector", "custom", "null"] | None = None
     config_path: str = ".memoryhub.yaml"
     backend_class: str | None = None
 
