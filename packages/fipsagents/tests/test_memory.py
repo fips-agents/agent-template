@@ -258,6 +258,34 @@ class TestCreateMemoryClientFactory:
             client = await create_memory_client(config_file)
         assert isinstance(client, MemoryClient)
 
+    @pytest.mark.asyncio
+    async def test_env_var_placeholders_are_substituted(self, tmp_path, monkeypatch):
+        """.memoryhub.yaml may contain ${VAR:-default} placeholders; the
+        factory expands them before instantiating the SDK client."""
+        config_file = tmp_path / ".memoryhub.yaml"
+        config_file.write_text(
+            "server_url: ${TEST_MEMORYHUB_URL:-http://default:8000}\n"
+            "api_key: ${TEST_MEMORYHUB_KEY:-fallback-key}\n"
+        )
+        monkeypatch.setenv("TEST_MEMORYHUB_URL", "http://from-env:9000")
+        # TEST_MEMORYHUB_KEY intentionally unset — exercises the default branch.
+
+        mock_sdk_instance = MagicMock()
+        del mock_sdk_instance.__aenter__
+        if hasattr(mock_sdk_instance, "register_session"):
+            del mock_sdk_instance.register_session
+
+        mock_memoryhub = MagicMock()
+        mock_memoryhub.MemoryHubClient.return_value = mock_sdk_instance
+
+        with patch.dict(sys.modules, {"memoryhub": mock_memoryhub}):
+            await create_memory_client(config_file)
+
+        # The SDK must have been invoked with the substituted values.
+        kwargs = mock_memoryhub.MemoryHubClient.call_args.kwargs
+        assert kwargs["server_url"] == "http://from-env:9000"
+        assert kwargs["api_key"] == "fallback-key"
+
 
 # ---------------------------------------------------------------------------
 # Backend dispatch via MemoryConfig

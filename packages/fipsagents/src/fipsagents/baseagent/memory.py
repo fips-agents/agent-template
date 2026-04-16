@@ -278,10 +278,14 @@ async def _create_memoryhub_client(path: Path) -> MemoryClientBase:
         return NullMemoryClient()
 
     try:
-        import yaml
+        # Expand ${VAR:-default} placeholders in the YAML before parsing.
+        # TODO: Remove this shim once the memoryhub SDK reads config through
+        # an env-aware loader (upstream feature request — the SDK currently
+        # calls yaml.safe_load directly and ignores env var placeholders).
+        from fipsagents.baseagent.config import parse_yaml_with_env
 
         raw = path.read_text(encoding="utf-8")
-        hub_config = yaml.safe_load(raw) or {}
+        hub_config = parse_yaml_with_env(raw) or {}
 
         # Read the API key from the conventional location if not in config.
         api_key = hub_config.get("api_key")
