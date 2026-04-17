@@ -28,6 +28,7 @@ from fipsagents.baseagent.events import (
     ToolResultEvent,
 )
 from fipsagents.baseagent.llm import LLMClient, ModelResponse
+from fipsagents.baseagent.reasoning import ThinkTagParser, create_reasoning_parser
 from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, create_memory_client
 from fipsagents.baseagent.prompts import PromptLoader, PromptNotFoundError
 from fipsagents.baseagent.rules import RuleLoader
@@ -199,6 +200,16 @@ class BaseAgent(abc.ABC):
                 "Memory prefix injected (%d chars, role=%s)",
                 len(prefix),
                 self.config.memory.prefix_role,
+            )
+
+        # 11. Reasoning parser for models that use <think> tags in content.
+        self._reasoning_parser: ThinkTagParser | None = create_reasoning_parser(
+            self.config.model.name
+        )
+        if self._reasoning_parser:
+            logger.info(
+                "Think-tag reasoning parser enabled for model %s",
+                self.config.model.name,
             )
 
         self._setup_done = True
@@ -412,6 +423,8 @@ class BaseAgent(abc.ABC):
             # OpenAI streams multiple concurrent tool calls interleaved.
             tool_buf: dict[int, dict[str, Any]] = {}
             assistant_content_parts: list[str] = []
+            if self._reasoning_parser:
+                self._reasoning_parser.reset()
 
             async for chunk in self.llm.call_model_stream_raw(
                 self.messages, tools=tools_arg
@@ -430,13 +443,25 @@ class BaseAgent(abc.ABC):
                     _mark_first_reasoning()
                     yield ReasoningDelta(content=reasoning)
 
-                # Content deltas.
+                # Content deltas. If a reasoning parser is active,
+                # separate <think>…</think> blocks from visible content.
                 content = getattr(delta, "content", None)
                 if content:
-                    now = loop.time()
-                    _mark_content(now)
-                    assistant_content_parts.append(content)
-                    yield ContentDelta(content=content)
+                    if self._reasoning_parser:
+                        for kind, text in self._reasoning_parser.feed(content):
+                            if kind == "reasoning":
+                                _mark_first_reasoning()
+                                yield ReasoningDelta(content=text)
+                            else:
+                                now = loop.time()
+                                _mark_content(now)
+                                assistant_content_parts.append(text)
+                                yield ContentDelta(content=text)
+                    else:
+                        now = loop.time()
+                        _mark_content(now)
+                        assistant_content_parts.append(content)
+                        yield ContentDelta(content=content)
 
                 # Tool-call deltas. OpenAI streams these with an
                 # ``index`` so concurrent calls stay distinct.
@@ -470,6 +495,15 @@ class BaseAgent(abc.ABC):
                 turn_finish = getattr(choice, "finish_reason", None)
                 if turn_finish:
                     finish_reason = turn_finish
+
+            # Flush any buffered reasoning parser state.
+            if self._reasoning_parser:
+                for kind, text in self._reasoning_parser.flush():
+                    if kind == "reasoning":
+                        yield ReasoningDelta(content=text)
+                    else:
+                        assistant_content_parts.append(text)
+                        yield ContentDelta(content=text)
 
             # Extract any usage stats the provider reported. Not all
             # providers send these with streaming.

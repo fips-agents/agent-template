@@ -87,6 +87,7 @@ def _make_agent(call_sequences):
     agent.tools = ToolRegistry()
     agent.tools.register(add)
     agent._tool_inspector = None
+    agent._reasoning_parser = None
 
     call_count = 0
 
