@@ -185,12 +185,12 @@ After the terminal `StreamComplete`, the serializer emits one additional chunk w
 
 ### Adding new wire formats
 
-Additional wire formats (OpenAI Responses API for LlamaStack, Anthropic Messages) follow the same convention: one module, one pure function, one explicit import path.
+Wire formats follow the same convention: one module, one pure function, one explicit import path.
 
 ```
-fipsagents.serialization.openai_sse:stream_events_as_sse           # today
-fipsagents.serialization.responses_api:stream_events_as_responses  # future (#35)
-fipsagents.serialization.anthropic:stream_events_as_messages       # future (#41)
+fipsagents.serialization.openai_sse:stream_events_as_sse                            # OpenAI Chat Completions
+fipsagents.serialization.anthropic_messages:stream_events_as_anthropic_messages      # Anthropic Messages (#41)
+fipsagents.serialization.responses_api:stream_events_as_responses                    # future (#35)
 ```
 
 The type signature `(events: AsyncIterator[StreamEvent], model_name: str, ...) -> AsyncIterator[str]` is the contract. No base class, no registry -- grep for the function name to know what exists.
