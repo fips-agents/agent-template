@@ -58,6 +58,11 @@ htmlcov/
 .pytest_cache/
 .tox/
 
+# Agent tooling databases
+.agent-memory.db
+.agent-memory.db-shm
+.agent-memory.db-wal
+
 # Session notes
 NEXT_SESSION.md
 MEMORY_HUB_SETUP.md

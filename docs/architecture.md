@@ -95,7 +95,13 @@ The tool name comes from the function name, the description from the docstring, 
 
 ### MCP Integration
 
-BaseAgent includes a built-in MCP client (FastMCP v3) for connecting to remote tool servers. `connect_mcp(url)` connects to an MCP server, discovers its tools, and registers them with `llm_only` visibility by default -- the assumption being that MCP tools are designed for LLM-driven invocation. `disconnect_mcp(url)` handles clean disconnection. Discovered tools participate in the same logging, RBAC, and rate-limiting infrastructure as local tools.
+BaseAgent includes a built-in MCP client (FastMCP v3) for connecting to remote tool servers. `connect_mcp(target)` accepts three transport types:
+
+- **str** -- URL for streamable-http (e.g., `"https://mcp-server/mcp/"`).
+- **McpServerConfig** -- HTTP via `url` field, or stdio subprocess via `command`/`args`/`env`/`cwd` fields. Configured in `agent.yaml` under `mcp_servers`.
+- **FastMCP object** -- in-process transport, no subprocess or network (useful for testing and co-located servers).
+
+Discovered tools are registered with `llm_only` visibility by default -- the assumption being that MCP tools are designed for LLM-driven invocation. They participate in the same logging, RBAC, and rate-limiting infrastructure as local tools.
 
 ### Prompts
 
