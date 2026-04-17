@@ -18,11 +18,6 @@ class ProblemSolver(BaseAgent):
     """Analytical problem solver with code execution and memory."""
 
     async def step(self) -> StepResult:
-        # Insert system prompt on first step
-        if not self.messages or self.messages[0].get("role") != "system":
-            system_prompt = self.build_system_prompt()
-            self.messages.insert(0, {"role": "system", "content": system_prompt})
-
         # Call the model
         response = await self.call_model()
 

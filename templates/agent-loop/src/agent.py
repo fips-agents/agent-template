@@ -29,18 +29,11 @@ class ResearchAssistant(BaseAgent):
     """A research assistant that searches, evaluates, and reports."""
 
     async def step(self) -> StepResult:
-        # 1. Set system prompt once at the start of the conversation.
-        #    Guard prevents duplicate system messages when run() calls
-        #    step() multiple times.
-        if not self.messages or self.messages[0].get("role") != "system":
-            system_prompt = self.build_system_prompt()
-            self.messages.insert(0, {"role": "system", "content": system_prompt})
-
-        # 2. Call the model with LLM-visible tools (e.g. web_search).
+        # 1. Call the model with LLM-visible tools (e.g. web_search).
         #    The LLM decides whether to search.
         response = await self.call_model()
 
-        # 3. Handle any tool calls the LLM made (search, follow-ups).
+        # 2. Handle any tool calls the LLM made (search, follow-ups).
         #    Include tool_call_id — required by the OpenAI-compatible API.
         while response.tool_calls:
             # Append assistant message with tool_calls to conversation history.
@@ -71,7 +64,7 @@ class ResearchAssistant(BaseAgent):
                 })
             response = await self.call_model()
 
-        # 4. Produce structured output via call_model_json
+        # 3. Produce structured output via call_model_json
         report_messages = self.messages + [
             {
                 "role": "user",
@@ -85,7 +78,7 @@ class ResearchAssistant(BaseAgent):
             ResearchReport, messages=report_messages
         )
 
-        # 5. Validate relevance via call_model_validated
+        # 4. Validate relevance via call_model_validated
         query = next(
             (m["content"] for m in self.messages if m["role"] == "user"),
             "",
@@ -112,7 +105,7 @@ class ResearchAssistant(BaseAgent):
         )
         logger.debug("Relevance validation passed: %s", relevance_check[:80])
 
-        # 6. Format citations using the agent-only tool (plane 1)
+        # 5. Format citations using the agent-only tool (plane 1)
         if report.citations:
             cite_result = await self.use_tool(
                 "format_citations",

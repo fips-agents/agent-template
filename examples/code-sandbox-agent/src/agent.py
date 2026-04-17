@@ -13,14 +13,6 @@ class CodeSandboxAgent(BaseAgent):
     """
 
     async def step(self) -> StepResult:
-        if not self.messages:
-            return StepResult.done("No messages to process.")
-
-        # Build system prompt if this is the first step.
-        if not any(m["role"] == "system" for m in self.messages):
-            system = self.build_system_prompt()
-            self.messages.insert(0, {"role": "system", "content": system})
-
         response = await self.call_model()
 
         # Tool-call loop: the LLM may call code_executor one or more times.
