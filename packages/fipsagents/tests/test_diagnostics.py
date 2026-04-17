@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fipsagents.baseagent.diagnostics import RoleProbeResult, probe_role_support
+from fipsagents.baseagent.diagnostics import probe_role_support
 
 
 # ---------------------------------------------------------------------------

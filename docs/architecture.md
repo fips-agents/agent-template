@@ -279,6 +279,7 @@ Memory is optional and pluggable. The `memory.backend` field in `agent.yaml` sel
 | `markdown` | `.memory-markdown.yaml` | None (stdlib) | Case-insensitive substring | Human-curated, git-committed memory |
 | `sqlite` | `.memory-sqlite.yaml` | None (stdlib) | Keyword (FTS5) | Local dev, testing |
 | `pgvector` | `.memory-pgvector.yaml` | `asyncpg`, `pgvector` | Semantic (vector cosine) | Production without MemoryHub |
+| `llamastack` | `.memory-llamastack.yaml` | None (`httpx` in core) | Semantic (vector similarity) | Already-on-LlamaStack deployments |
 | `custom` | -- | Your choice | Your choice | Custom infrastructure |
 | `null` | -- | None | None (disabled) | Explicitly disable memory |
 
@@ -298,7 +299,9 @@ Does this agent need memory across sessions?
    ├─ Agent needs searchable memory on one host, I won't curate by hand
    │                     → backend: sqlite                            (Level 3)
    ├─ Multiple agents share memory, or I need vector similarity
-   │                     → backend: pgvector                          (Level 4)
+   │  ├─ Already using LlamaStack for inference?
+   │  │                  → backend: llamastack                        (Level 4a)
+   │  └─ Otherwise       → backend: pgvector                          (Level 4b)
    └─ Regulated environment: audit trails, RBAC, retention, deletion-with-evidence
                            → backend: memoryhub                       (Level 5)
 ```

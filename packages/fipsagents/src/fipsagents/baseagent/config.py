@@ -203,7 +203,7 @@ class MemoryConfig(BaseModel):
                                entire store.  0 disables the limit.
     """
 
-    backend: Literal["memoryhub", "markdown", "sqlite", "pgvector", "custom", "null"] | None = None
+    backend: Literal["memoryhub", "markdown", "sqlite", "pgvector", "llamastack", "custom", "null"] | None = None
     config_path: str = ".memoryhub.yaml"
     backend_class: str | None = None
     prefix_role: Literal["system", "developer"] = "system"

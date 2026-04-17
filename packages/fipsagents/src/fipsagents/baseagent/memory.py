@@ -11,12 +11,13 @@ one it auto-detects by looking for ``.memoryhub.yaml`` (backward compat).
 The factory **never** raises — the agent always gets a usable client.
 
 Supported backends:
-  - ``memoryhub``  — MemoryHub SDK (auto-detected or explicit)
-  - ``markdown``   — Human-readable markdown file(s) (via ``memory_markdown`` module)
-  - ``sqlite``     — Local SQLite with FTS5 (via ``memory_sqlite`` module)
-  - ``pgvector``   — PostgreSQL + pgvector (via ``memory_pgvector`` module)
-  - ``custom``     — Any ``MemoryClientBase`` subclass at a dotted import path
-  - ``null``       — Explicitly disabled
+  - ``memoryhub``   — MemoryHub SDK (auto-detected or explicit)
+  - ``markdown``    — Human-readable markdown file(s) (via ``memory_markdown`` module)
+  - ``sqlite``      — Local SQLite with FTS5 (via ``memory_sqlite`` module)
+  - ``pgvector``    — PostgreSQL + pgvector (via ``memory_pgvector`` module)
+  - ``llamastack``  — LlamaStack vector stores API (via ``memory_llamastack`` module)
+  - ``custom``      — Any ``MemoryClientBase`` subclass at a dotted import path
+  - ``null``        — Explicitly disabled
 """
 
 from __future__ import annotations
@@ -255,6 +256,9 @@ async def create_memory_client(
     if backend == "pgvector":
         return await _create_pgvector_client(effective_path)
 
+    if backend == "llamastack":
+        return await _create_llamastack_client(effective_path)
+
     if backend == "custom":
         if not config or not config.backend_class:
             logger.error(
@@ -378,6 +382,20 @@ async def _create_markdown_client(config_path: Path) -> MemoryClientBase:
     except ImportError:
         logger.error(
             "Markdown memory backend requested but memory_markdown module "
+            "not found — falling back to NullMemoryClient"
+        )
+        return NullMemoryClient()
+
+
+async def _create_llamastack_client(config_path: Path) -> MemoryClientBase:
+    """Create a LlamaStack-backed memory client."""
+    try:
+        from fipsagents.baseagent.memory_llamastack import create_llamastack_client
+
+        return await create_llamastack_client(config_path)
+    except ImportError:
+        logger.error(
+            "LlamaStack memory backend requested but memory_llamastack module "
             "not found — falling back to NullMemoryClient"
         )
         return NullMemoryClient()
