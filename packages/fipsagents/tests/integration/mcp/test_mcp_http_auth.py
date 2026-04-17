@@ -8,7 +8,7 @@ Target: MemoryHub MCP on cluster n7pd5.  Override with env vars:
 - ``MEMORYHUB_MCP_URL``
 - ``MEMORYHUB_API_KEY`` (or reads from ``~/.config/memoryhub/api-key``)
 
-All tests use read-only operations (get_session, list_projects,
+All tests use read-only operations (get_session, manage_project,
 search_memory) to avoid polluting the production MemoryHub instance.
 """
 
@@ -65,7 +65,7 @@ _EXPECTED_TOOLS = {
     "search_memory",
     "write_memory",
     "read_memory",
-    "list_projects",
+    "manage_project",
     "get_session",
 }
 
@@ -216,11 +216,13 @@ class TestMemoryHubAuthentication:
 class TestMemoryHubToolExecution:
     """Execute MemoryHub tools directly (read-only operations only)."""
 
-    async def test_list_projects(
+    async def test_manage_project_list(
         self, memoryhub_agent: BaseAgent,
     ) -> None:
-        result = await memoryhub_agent.tools.execute("list_projects")
-        assert not result.is_error, f"list_projects error: {result.error}"
+        result = await memoryhub_agent.tools.execute(
+            "manage_project", action="list",
+        )
+        assert not result.is_error, f"manage_project error: {result.error}"
         assert "projects" in result.result
 
     async def test_search_memory(
@@ -279,7 +281,9 @@ class TestMemoryHubStreamingDispatch:
         agent = memoryhub_agent
         agent.add_message("user", "List my projects.")
 
-        turn1 = _tool_call_turn("call_proj", "list_projects", "{}")
+        turn1 = _tool_call_turn(
+            "call_proj", "manage_project", '{"action": "list"}',
+        )
         turn2 = _content_turn("Here are your projects.")
         agent.llm.call_model_stream_raw = _make_mock_stream([turn1, turn2])
 
@@ -290,5 +294,5 @@ class TestMemoryHubStreamingDispatch:
 
         tc_results = [e for e in events if isinstance(e, ToolResultEvent)]
         assert len(tc_results) == 1
-        assert tc_results[0].name == "list_projects"
+        assert tc_results[0].name == "manage_project"
         assert "projects" in tc_results[0].content
