@@ -149,10 +149,16 @@ async def create_llamastack_client(config_path: Path) -> MemoryClientBase:
 
         endpoint: ${LLAMASTACK_ENDPOINT:-http://localhost:8321}
         vector_store: ${MEMORY_VECTOR_STORE:-agent-memory}
+        embedding_model: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+        embedding_dimension: 384  # must match the model's output dimension
         api_key: null  # optional
 
-    Finds or creates the named vector store on startup. Returns
-    ``NullMemoryClient`` on any error so the agent always gets a usable client.
+    Finds or creates the named vector store on startup.  Both
+    ``embedding_model`` and ``embedding_dimension`` are required by
+    LlamaStack when creating a new store (LlamaStack 0.3.x defaults
+    to 768 if omitted, which is wrong for most models).  Returns
+    ``NullMemoryClient`` on any error so the agent always gets a
+    usable client.
     """
     try:
         from fipsagents.baseagent.config import parse_yaml_with_env
@@ -162,6 +168,8 @@ async def create_llamastack_client(config_path: Path) -> MemoryClientBase:
 
         endpoint: str = cfg.get("endpoint", "http://localhost:8321")
         vector_store_name: str = cfg.get("vector_store", "agent-memory")
+        embedding_model: str = cfg.get("embedding_model", "all-MiniLM-L6-v2")
+        embedding_dimension: int = int(cfg.get("embedding_dimension", 384))
         api_key: str | None = cfg.get("api_key") or None
 
         headers: dict[str, str] = {}
@@ -182,7 +190,12 @@ async def create_llamastack_client(config_path: Path) -> MemoryClientBase:
 
         if store_id is None:
             create_resp = await client.post(
-                "/v1/vector_stores", json={"name": vector_store_name}
+                "/v1/vector_stores",
+                json={
+                    "name": vector_store_name,
+                    "embedding_model": embedding_model,
+                    "embedding_dimension": embedding_dimension,
+                },
             )
             create_resp.raise_for_status()
             store_id = create_resp.json()["id"]
