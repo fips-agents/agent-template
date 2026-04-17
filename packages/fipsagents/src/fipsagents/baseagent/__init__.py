@@ -18,6 +18,7 @@ from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, crea
 from fipsagents.baseagent.prompts import Prompt, PromptLoader
 from fipsagents.baseagent.rules import Rule, RuleLoader
 from fipsagents.baseagent.skills import Skill, SkillLoader
+from fipsagents.baseagent.diagnostics import RoleProbeResult, probe_role_support
 from fipsagents.baseagent.tool_inspector import InspectionFinding, InspectionResult, ToolInspector
 from fipsagents.baseagent.tools import ToolCall, ToolRegistry, ToolResult, tool
 
@@ -58,6 +59,9 @@ __all__ = [
     # skills
     "Skill",
     "SkillLoader",
+    # diagnostics
+    "RoleProbeResult",
+    "probe_role_support",
     # tool_inspector
     "InspectionFinding",
     "InspectionResult",

@@ -40,6 +40,7 @@ These are settled. Do not revisit without explicit discussion.
 - **Workflow state** is a typed Pydantic model with `extra="forbid"`. Data only -- execution metadata stays in structured logs.
 - **@node decorator** marks classes for workflow registration, mirroring the @tool pattern.
 - **SecurityConfig** in `AgentConfig` -- global `mode` (`enforce`/`observe`) with per-layer override (`tool_inspection.mode`, `guardrails.mode`). `ToolInspector` scans tool call arguments for secrets, C2 patterns, and prompt injection before execution. Audit findings log to `fipsagents.security.audit`. Wired in `setup()` step 4b.
+- **`probe_role_support()`** is a diagnostic utility in `fipsagents.baseagent.diagnostics` -- probes whether a deployed model supports a given message role (e.g. `developer`). Template inspection (best-effort, checks vLLM model metadata) + canary completion (prompt token delta). Not on the hot path.
 
 ## Repository Structure
 
