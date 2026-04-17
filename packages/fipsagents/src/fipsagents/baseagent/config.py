@@ -193,11 +193,21 @@ class MemoryConfig(BaseModel):
       - ``custom``    — Bring your own: set ``backend_class`` to a dotted
                         import path for a ``MemoryClientBase`` subclass
       - ``null``      — Explicitly disable memory
+
+    Prefix injection:
+      - ``prefix_role``      — Role for the memory prefix message: ``system``
+                               (default, universal) or ``developer``
+                               (harmony-format models like gpt-oss).
+      - ``max_prefix_chars`` — Maximum character length for the memory prefix.
+                               Prevents large backends from dumping their
+                               entire store.  0 disables the limit.
     """
 
     backend: Literal["memoryhub", "markdown", "sqlite", "pgvector", "custom", "null"] | None = None
     config_path: str = ".memoryhub.yaml"
     backend_class: str | None = None
+    prefix_role: Literal["system", "developer"] = "system"
+    max_prefix_chars: int = 8000
 
     @field_validator("backend", mode="before")
     @classmethod

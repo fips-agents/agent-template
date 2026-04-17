@@ -315,7 +315,22 @@ Cache-friendly ordering looks like:
 2. Memory block (stable across turns — inject once at session start, not re-query per turn)
 3. Conversation history (the changing part)
 
-The markdown backend's `search(query="")` is designed for this: it returns every section or file in stable file order as separate results, so an agent can load the whole memory set once and inject it as a stable prefix. Other backends (SQLite, PGVector, MemoryHub) can use the same pattern by retrieving once at session start and caching the result for the duration of the session. A first-class "memory prefix slot" in `BaseAgent` is a tracked follow-up.
+`BaseAgent.build_memory_prefix()` is the hook for this. Called once during `setup()`, the default implementation runs `self.memory.search("")` and joins the `content` fields with `---` separators, truncating at `config.memory.max_prefix_chars` (default 8 000; 0 disables the limit). The result is injected as a message at index 1 in `self.messages`, immediately after the system prompt:
+
+```python
+# After setup(), self.messages looks like:
+[
+    {"role": "system",    "content": "<system prompt>"},
+    {"role": "<prefix_role>", "content": "<memory prefix>"},  # only if non-empty
+]
+# Conversation turns append after this — the prefix never shifts.
+```
+
+The message role is controlled by `config.memory.prefix_role` (default `"system"`). Models that support the OpenAI harmony format (gpt-oss-20b, o-series) can set this to `"developer"` to place memories in the harmony hierarchy (`system > developer > user`). See [#49](https://github.com/redhat-ai-americas/agent-template/issues/49) for a planned probe to detect model support at runtime.
+
+Subclasses override `build_memory_prefix()` to customise the query, formatting, or to return `None` unconditionally when they prefer per-turn recall. Agents that need fresher memory mid-session call `self.memory.search()` directly from their `astep_stream` override -- the prefix is a session-level stable cache, not a replacement for dynamic retrieval.
+
+The markdown backend's `search(query="")` is designed to pair well with this: it returns every section or file in stable file order, so the prefix is deterministic across restarts. Other backends (SQLite, PGVector, MemoryHub) can use the same pattern; results are retrieved once at session start and pinned for the session's lifetime.
 
 **The SDK path** exposes `self.memory` for programmatic access from agent code. This is for cases where the agent logic itself needs to read or write memories -- caching intermediate results, maintaining state across iterations, or implementing retrieval patterns that the LLM shouldn't control directly.
 

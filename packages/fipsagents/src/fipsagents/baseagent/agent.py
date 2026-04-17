@@ -184,6 +184,21 @@ class BaseAgent(abc.ABC):
         for mcp_cfg in self.config.mcp_servers:
             await self.connect_mcp(mcp_cfg.url)
 
+        # 10. Seed messages with system prompt + optional memory prefix.
+        self.messages.append(
+            {"role": "system", "content": self.build_system_prompt()}
+        )
+        prefix = await self.build_memory_prefix()
+        if prefix:
+            self.messages.append(
+                {"role": self.config.memory.prefix_role, "content": prefix}
+            )
+            logger.info(
+                "Memory prefix injected (%d chars, role=%s)",
+                len(prefix),
+                self.config.memory.prefix_role,
+            )
+
         self._setup_done = True
         logger.info("Agent setup complete")
 
@@ -667,6 +682,41 @@ class BaseAgent(abc.ABC):
             sections.append("\n".join(skill_lines))
 
         return "\n\n---\n\n".join(sections)
+
+    async def build_memory_prefix(self) -> str | None:
+        """Return a stable memory block to inject after the system prompt.
+
+        Called once during :meth:`setup`.  The result is inserted as a
+        message (role controlled by ``config.memory.prefix_role``) at
+        index 1 in ``self.messages``, immediately after the system prompt.
+        It stays pinned there for the life of the session — never
+        re-queried per turn — so inference-server prefix caches stay warm.
+
+        The default implementation calls ``self.memory.search("")`` to
+        retrieve all memories in backend-native order, joins their
+        ``content`` fields, and truncates at
+        ``config.memory.max_prefix_chars``.  Returns ``None`` when the
+        backend produces no results (including ``NullMemoryClient``).
+
+        Subclasses override this to customise the query, formatting, or
+        to return ``None`` unconditionally if they prefer per-turn recall.
+        """
+        results = await self.memory.search("")
+        if not results:
+            return None
+
+        parts = [r.get("content", "") for r in results]
+        parts = [p for p in parts if p.strip()]  # drop blanks
+        if not parts:
+            return None
+
+        joined = "\n\n---\n\n".join(parts)
+
+        limit = self.config.memory.max_prefix_chars
+        if limit and len(joined) > limit:
+            joined = joined[:limit] + "\n\n… [truncated]"
+
+        return joined
 
 
 # ---------------------------------------------------------------------------
