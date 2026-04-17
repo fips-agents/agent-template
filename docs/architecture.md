@@ -103,6 +103,12 @@ BaseAgent includes a built-in MCP client (FastMCP v3) for connecting to remote t
 
 Discovered tools are registered with `llm_only` visibility by default -- the assumption being that MCP tools are designed for LLM-driven invocation. They participate in the same logging, RBAC, and rate-limiting infrastructure as local tools.
 
+Beyond tools, `connect_mcp()` also discovers **prompts** and **resources** from each server:
+
+- **MCP prompts** are stored in `self._mcp_prompts` (keyed by name). Call `get_mcp_prompt(name, arguments={...})` to render a prompt through the originating server. `list_mcp_prompts()` returns metadata for all discovered prompts. MCP prompts are kept separate from local prompts (Markdown + YAML files in `prompts/`) -- they have different lifecycles and rendering mechanisms.
+- **MCP resources** are stored in `self._mcp_resources` (keyed by URI). Call `read_resource(uri)` to fetch content on demand. `list_mcp_resources()` and `list_mcp_resource_templates()` return metadata. Resources are agent-plane by default -- agent subclasses choose which resources to surface to the LLM.
+- Resource subscriptions (real-time update notifications) are not implemented. Servers that don't expose prompts or resources are handled gracefully -- discovery errors are logged at DEBUG level and don't affect tool registration.
+
 ### Prompts
 
 `load_prompt(name, **variables)` loads a prompt from the `prompts/` directory, performs variable substitution, and returns the rendered text. `list_prompts()` returns available prompts with their metadata. The prompt format is described in its own section below.

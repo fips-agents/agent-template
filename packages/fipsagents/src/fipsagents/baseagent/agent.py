@@ -107,6 +107,11 @@ class BaseAgent(abc.ABC):
         # MCP client references for cleanup.
         self._mcp_clients: list[Any] = []
 
+        # MCP prompts, resources, and resource templates — populated by connect_mcp().
+        self._mcp_prompts: dict[str, tuple[Any, Any]] = {}      # name → (client, mcp.types.Prompt)
+        self._mcp_resources: dict[str, tuple[Any, Any]] = {}     # uri_string → (client, mcp.types.Resource)
+        self._mcp_resource_templates: dict[str, tuple[Any, Any]] = {}  # uri_template → (client, mcp.types.ResourceTemplate)
+
         # Tracks whether setup has completed.
         self._setup_done = False
 
@@ -276,6 +281,9 @@ class BaseAgent(abc.ABC):
                     "Error closing MCP client", exc_info=True
                 )
         self._mcp_clients.clear()
+        self._mcp_prompts.clear()
+        self._mcp_resources.clear()
+        self._mcp_resource_templates.clear()
         self._setup_done = False
         logger.info("Agent shutdown complete")
 
@@ -656,7 +664,7 @@ class BaseAgent(abc.ABC):
     async def connect_mcp(
         self, target: Any,
     ) -> None:
-        """Connect to an MCP server via FastMCP v3 and register its tools.
+        """Connect to an MCP server via FastMCP v3 and register its tools, prompts, and resources.
 
         Parameters
         ----------
@@ -707,11 +715,61 @@ class BaseAgent(abc.ABC):
                 _register_mcp_tool(self.tools, client, mcp_tool)
                 registered += 1
 
+            # Discover prompts.
+            prompt_count = 0
+            try:
+                prompts_list = await client.list_prompts()
+                for mcp_prompt in prompts_list:
+                    pname = mcp_prompt.name
+                    if pname in self._mcp_prompts:
+                        logger.warning(
+                            "MCP prompt %r already registered — skipping duplicate from %s",
+                            pname, label,
+                        )
+                        continue
+                    self._mcp_prompts[pname] = (client, mcp_prompt)
+                    prompt_count += 1
+            except Exception:
+                logger.debug("MCP server %s does not expose prompts (or error listing them)", label, exc_info=True)
+
+            # Discover resources.
+            resource_count = 0
+            try:
+                resources_list = await client.list_resources()
+                for mcp_resource in resources_list:
+                    uri_str = str(mcp_resource.uri)
+                    if uri_str in self._mcp_resources:
+                        logger.warning(
+                            "MCP resource %r already registered — skipping duplicate from %s",
+                            uri_str, label,
+                        )
+                        continue
+                    self._mcp_resources[uri_str] = (client, mcp_resource)
+                    resource_count += 1
+            except Exception:
+                logger.debug("MCP server %s does not expose resources (or error listing them)", label, exc_info=True)
+
+            # Discover resource templates.
+            template_count = 0
+            try:
+                templates_list = await client.list_resource_templates()
+                for mcp_template in templates_list:
+                    tpl_str = mcp_template.uriTemplate
+                    if tpl_str in self._mcp_resource_templates:
+                        logger.warning(
+                            "MCP resource template %r already registered — skipping duplicate from %s",
+                            tpl_str, label,
+                        )
+                        continue
+                    self._mcp_resource_templates[tpl_str] = (client, mcp_template)
+                    template_count += 1
+            except Exception:
+                logger.debug("MCP server %s does not expose resource templates (or error listing them)", label, exc_info=True)
+
             self._mcp_clients.append(client)
             logger.info(
-                "Connected to MCP server %s — registered %d tool(s)",
-                label,
-                registered,
+                "Connected to MCP server %s — %d tool(s), %d prompt(s), %d resource(s), %d template(s)",
+                label, registered, prompt_count, resource_count, template_count,
             )
         except ImportError:
             logger.warning(
@@ -723,6 +781,98 @@ class BaseAgent(abc.ABC):
             logger.exception(
                 "Failed to connect to MCP server: %s", label
             )
+
+    async def get_mcp_prompt(
+        self, name: str, arguments: dict[str, Any] | None = None,
+    ) -> Any:
+        """Render an MCP prompt by name.
+
+        Calls the originating MCP server's ``get_prompt`` method.
+
+        Returns
+        -------
+        mcp.types.GetPromptResult
+            Contains ``messages`` (list of PromptMessage) and optional
+            ``description``.
+
+        Raises
+        ------
+        KeyError
+            If *name* is not a discovered MCP prompt.
+        """
+        if name not in self._mcp_prompts:
+            raise KeyError(
+                f"MCP prompt {name!r} not found. "
+                f"Available: {sorted(self._mcp_prompts)}"
+            )
+        client, _prompt_meta = self._mcp_prompts[name]
+        return await client.get_prompt(name, arguments=arguments)
+
+    async def read_resource(self, uri: str) -> Any:
+        """Read an MCP resource by URI.
+
+        Calls the originating MCP server's ``read_resource`` method.
+
+        Returns
+        -------
+        list[mcp.types.TextResourceContents | mcp.types.BlobResourceContents]
+
+        Raises
+        ------
+        KeyError
+            If *uri* is not a discovered MCP resource.
+        """
+        if uri not in self._mcp_resources:
+            raise KeyError(
+                f"MCP resource {uri!r} not found. "
+                f"Available: {sorted(self._mcp_resources)}"
+            )
+        client, _resource_meta = self._mcp_resources[uri]
+        return await client.read_resource(uri)
+
+    def list_mcp_prompts(self) -> list[dict[str, Any]]:
+        """Return metadata for all discovered MCP prompts."""
+        result = []
+        for name, (_client, prompt) in sorted(self._mcp_prompts.items()):
+            args = getattr(prompt, "arguments", None) or []
+            entry: dict[str, Any] = {
+                "name": prompt.name,
+                "description": getattr(prompt, "description", None) or "",
+                "arguments": [
+                    {
+                        "name": a.name,
+                        "description": getattr(a, "description", None) or "",
+                        "required": getattr(a, "required", None),
+                    }
+                    for a in args
+                ],
+            }
+            result.append(entry)
+        return result
+
+    def list_mcp_resources(self) -> list[dict[str, Any]]:
+        """Return metadata for all discovered MCP resources."""
+        result = []
+        for uri, (_client, resource) in sorted(self._mcp_resources.items()):
+            result.append({
+                "uri": str(resource.uri),
+                "name": resource.name,
+                "description": getattr(resource, "description", None) or "",
+                "mimeType": getattr(resource, "mimeType", None),
+            })
+        return result
+
+    def list_mcp_resource_templates(self) -> list[dict[str, Any]]:
+        """Return metadata for all discovered MCP resource templates."""
+        result = []
+        for tpl, (_client, template) in sorted(self._mcp_resource_templates.items()):
+            result.append({
+                "uriTemplate": template.uriTemplate,
+                "name": template.name,
+                "description": getattr(template, "description", None) or "",
+                "mimeType": getattr(template, "mimeType", None),
+            })
+        return result
 
     # -- System prompt assembly -----------------------------------------------
 
