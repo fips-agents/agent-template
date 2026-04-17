@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar
 
-from fipsagents.baseagent.config import AgentConfig, load_config
+from fipsagents.baseagent.config import AgentConfig, McpServerConfig, load_config
 from fipsagents.baseagent.events import (
     ContentDelta,
     ReasoningDelta,
@@ -185,7 +185,7 @@ class BaseAgent(abc.ABC):
 
         # 9. MCP servers
         for mcp_cfg in self.config.mcp_servers:
-            await self.connect_mcp(mcp_cfg.url)
+            await self.connect_mcp(mcp_cfg)
 
         # 10. Seed messages with system prompt + optional memory prefix.
         self.messages.append(
@@ -653,13 +653,50 @@ class BaseAgent(abc.ABC):
 
     # -- MCP integration -----------------------------------------------------
 
-    async def connect_mcp(self, server_url: str) -> None:
-        """Connect to an MCP server via FastMCP v3 and register its tools."""
-        logger.info("Connecting to MCP server: %s", server_url)
+    async def connect_mcp(
+        self, target: Any,
+    ) -> None:
+        """Connect to an MCP server via FastMCP v3 and register its tools.
+
+        Parameters
+        ----------
+        target:
+            One of:
+
+            - **str** — URL for HTTP transport (backward-compatible).
+            - **McpServerConfig** — HTTP (``url``) or stdio (``command``).
+            - **FastMCP** — in-process server object (no subprocess or
+              network; FastMCP v3 ``FastMCPTransport``).
+        """
+        # Resolve the transport argument for the FastMCP Client.
+        if isinstance(target, str):
+            label = target
+            transport: Any = target
+        elif isinstance(target, McpServerConfig):
+            if target.url:
+                label = target.url
+                transport = target.url
+            else:
+                label = f"stdio:{target.command}"
+                from fastmcp.client.transports import StdioTransport
+
+                transport = StdioTransport(
+                    command=target.command,
+                    args=target.args,
+                    env=target.env,
+                    cwd=target.cwd,
+                )
+        else:
+            # Assume it's a FastMCP server instance (or any object that
+            # FastMCP Client can auto-detect as a transport).
+            label = getattr(target, "name", None) or type(target).__name__
+            transport = target
+
+        logger.info("Connecting to MCP server: %s", label)
         try:
             from fastmcp import Client as McpClient
 
-            client = McpClient(server_url)
+            client = McpClient(transport)
             await client.__aenter__()
 
             # Discover tools from the server.
@@ -673,18 +710,18 @@ class BaseAgent(abc.ABC):
             self._mcp_clients.append(client)
             logger.info(
                 "Connected to MCP server %s — registered %d tool(s)",
-                server_url,
+                label,
                 registered,
             )
         except ImportError:
             logger.warning(
                 "fastmcp package not installed — cannot connect to MCP "
                 "server %s. Install with: pip install fastmcp",
-                server_url,
+                label,
             )
         except Exception:
             logger.exception(
-                "Failed to connect to MCP server: %s", server_url
+                "Failed to connect to MCP server: %s", label
             )
 
     # -- System prompt assembly -----------------------------------------------

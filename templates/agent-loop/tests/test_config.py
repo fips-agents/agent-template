@@ -212,13 +212,34 @@ class TestToolsConfig:
 
 
 class TestMcpServerConfig:
-    def test_url_required(self):
-        with pytest.raises(Exception, match="url"):
+    def test_requires_url_or_command(self):
+        with pytest.raises(Exception, match="requires either"):
             McpServerConfig()
 
-    def test_valid(self):
+    def test_rejects_both_url_and_command(self):
+        with pytest.raises(Exception, match="cannot have both"):
+            McpServerConfig(url="http://mcp:8080/mcp", command="python")
+
+    def test_valid_http(self):
         cfg = McpServerConfig(url="http://mcp:8080/mcp")
         assert cfg.url == "http://mcp:8080/mcp"
+        assert cfg.command is None
+
+    def test_valid_stdio(self):
+        cfg = McpServerConfig(command="python", args=["server.py"])
+        assert cfg.command == "python"
+        assert cfg.args == ["server.py"]
+        assert cfg.url is None
+
+    def test_stdio_optional_fields(self):
+        cfg = McpServerConfig(
+            command="python",
+            args=["server.py"],
+            env={"LOG_LEVEL": "debug"},
+            cwd="/tmp",
+        )
+        assert cfg.env == {"LOG_LEVEL": "debug"}
+        assert cfg.cwd == "/tmp"
 
 
 class TestMemoryConfig:

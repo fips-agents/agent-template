@@ -63,3 +63,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "local_tool: Tests using local @tool dispatch",
+    "mcp_http: Tests using MCP streamable-http transport",
+    "mcp_stdio: Tests using MCP stdio transport",
+    "llamastack: Tests using LlamaStack proxy dispatch",
+    "kagenti: Tests using Kagenti Gateway dispatch",
+]

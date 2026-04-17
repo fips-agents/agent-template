@@ -106,10 +106,39 @@ class LLMConfig(BaseModel):
 
 
 class McpServerConfig(BaseModel):
-    """Connection details for a single MCP server."""
+    """Connection details for a single MCP server.
 
-    url: str
-    # Extensible: auth, headers, transport options can be added later.
+    Exactly one transport must be specified:
+
+    - **HTTP** (streamable-http): set ``url``.
+    - **stdio** (subprocess): set ``command`` (and optionally ``args``,
+      ``env``, ``cwd``).
+    """
+
+    # HTTP transport
+    url: str | None = None
+
+    # stdio transport
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] | None = None
+    cwd: str | None = None
+
+    @model_validator(mode="after")
+    def _require_exactly_one_transport(self) -> "McpServerConfig":
+        has_url = self.url is not None
+        has_command = self.command is not None
+        if not has_url and not has_command:
+            raise ValueError(
+                "McpServerConfig requires either 'url' (HTTP) or "
+                "'command' (stdio), got neither"
+            )
+        if has_url and has_command:
+            raise ValueError(
+                "McpServerConfig cannot have both 'url' and 'command' "
+                "— pick one transport"
+            )
+        return self
 
 
 class ToolsConfig(BaseModel):
