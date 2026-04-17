@@ -44,6 +44,7 @@ These are settled. Do not revisit without explicit discussion.
 - **`ThinkTagParser`** in `fipsagents.baseagent.reasoning` -- streaming parser that separates `<think>…</think>` blocks from content deltas. Auto-enabled for Granite and DeepSeek models (via `create_reasoning_parser(model_name)`). Wired in `setup()` step 11 and `astep_stream`. Falls back gracefully when vLLM's `--reasoning-parser` already handles extraction server-side.
 - **`McpServerConfig`** supports two YAML-configurable transports: HTTP (`url`) and stdio (`command`/`args`/`env`/`cwd`). Pydantic validator enforces exactly one. `connect_mcp()` also accepts FastMCP server objects for in-process transport (programmatic, not YAML).
 - **MCP integration test harness** at `packages/fipsagents/tests/integration/mcp/` -- pytest-based, mark-driven (`local_tool`, `mcp_http`, `mcp_stdio`, `llamastack`, `kagenti`). Tests every dispatch path with real MCP servers where available, graceful skip when infrastructure is unavailable.
+- **Tool calling model requirements**: gpt-oss-20b generates proper OpenAI-compatible `tool_calls`. Granite 3.3 8B does NOT -- it writes Python code instead of using the tool calling protocol. When building agents that depend on tool calling, verify the model supports it. This is a model capability gap, not a LlamaStack or BaseAgent issue.
 
 ## Repository Structure
 
