@@ -195,8 +195,11 @@ class MemoryClient(MemoryClientBase):
 # ---------------------------------------------------------------------------
 
 
+_UNSET = object()
+
+
 async def create_memory_client(
-    config_path: str | Path = ".memoryhub.yaml",
+    config_path: str | Path | object = _UNSET,
     *,
     config: MemoryConfig | None = None,
 ) -> MemoryClientBase:
@@ -211,11 +214,14 @@ async def create_memory_client(
     Parameters
     ----------
     config_path:
-        Path to the ``.memoryhub.yaml`` file.  Used only when *config* is
-        not provided (legacy call sites).
+        Resolved path to the backend config file.  ``setup()`` resolves
+        ``config.config_path`` against the agent's base directory and
+        passes the result here.  When omitted, falls back to
+        ``config.config_path`` (if *config* is provided) or
+        ``.memoryhub.yaml`` (legacy default).
     config:
         Optional ``MemoryConfig`` from ``agent.yaml``.  When present,
-        ``config.backend`` and ``config.config_path`` drive selection.
+        ``config.backend`` drives backend selection.
 
     Returns
     -------
@@ -223,8 +229,14 @@ async def create_memory_client(
         A live backend client or ``NullMemoryClient``.
     """
     # Resolve effective backend and config path.
+    # Priority: explicit positional > config.config_path > legacy default.
     backend = config.backend if config else None
-    effective_path = Path(config.config_path if config else config_path)
+    if config_path is not _UNSET:
+        effective_path = Path(config_path)
+    elif config is not None:
+        effective_path = Path(config.config_path)
+    else:
+        effective_path = Path(".memoryhub.yaml")
 
     # Explicit dispatch when backend is set.
     if backend == "null":

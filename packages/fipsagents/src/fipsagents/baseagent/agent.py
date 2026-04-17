@@ -178,7 +178,9 @@ class BaseAgent(abc.ABC):
 
         # 8. Memory
         memory_cfg_path = base / self.config.memory.config_path
-        self.memory = await create_memory_client(memory_cfg_path)
+        self.memory = await create_memory_client(
+            memory_cfg_path, config=self.config.memory
+        )
 
         # 9. MCP servers
         for mcp_cfg in self.config.mcp_servers:
