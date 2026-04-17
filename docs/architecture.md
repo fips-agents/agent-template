@@ -343,6 +343,19 @@ Custom backends can be registered via `backend: custom` with a `backend_class` d
 
 For multi-agent deployments with MemoryHub, multiple agents can connect to the same instance. Scope-based visibility (user, project, role, organization, enterprise) and RBAC control which agents can see which memories, enabling shared-memory architectures without coupling the agents to each other.
 
+## Reasoning Extraction
+
+Some models emit chain-of-thought reasoning in the `reasoning_content` delta field (gpt-oss-20b, o-series). Others embed it in the content stream as `<think>…</think>` XML blocks (Granite 3.3, DeepSeek). Without extraction, think tags leak into the user-visible response.
+
+`astep_stream` handles both paths:
+
+1. **Native reasoning** — `delta.reasoning_content` is emitted as `ReasoningDelta` directly. No extraction needed.
+2. **Think-tag extraction** — `ThinkTagParser` (in `fipsagents.baseagent.reasoning`) is a streaming state machine that separates `<think>` blocks from content. It handles tags split across chunk boundaries, multiple blocks per response, and unclosed blocks. Content outside think tags emits as `ContentDelta`; content inside emits as `ReasoningDelta`.
+
+The parser is auto-enabled at `setup()` step 11 based on model name (`granite` or `deepseek` substring match via `create_reasoning_parser()`). When vLLM is started with `--reasoning-parser granite`, it does the extraction server-side and populates `reasoning_content` directly — in that case the parser is a harmless no-op since content won't contain the tags.
+
+Only `ContentDelta` text is appended to the assistant message in conversation history. Reasoning is surfaced to streaming consumers (UI collapsed panels, metrics) but never stored in `self.messages`.
+
 ## Deployment Model
 
 The deployment model is built on a principle of immutable container images. Everything that defines an agent's behavior -- code, tools, prompts, skills, rules -- is baked into the image. The only external inputs are environment-specific configuration values injected through OpenShift ConfigMaps and Secrets (endpoint URLs, credentials, tuning parameters).

@@ -6,8 +6,6 @@ import json
 import re
 from typing import AsyncIterator
 
-import pytest
-
 from fipsagents.baseagent.events import (
     ContentDelta,
     ReasoningDelta,
