@@ -16,7 +16,6 @@ The core abstraction is BaseAgent -- a pure Python async class that handles LLM 
 
 - [docs/](docs/) -- Architecture, design decisions, problem statement, and vision.
 - [planning/](planning/) -- Requirements, scope, constraints, and next steps.
-- [research/](research/) -- Ecosystem research, session records, and side-quest investigations.
 - [sandbox/](sandbox/) -- Code execution sandbox sidecar (FastAPI, layered isolation for `restricted-v2` SCC).
 
 ## Infrastructure

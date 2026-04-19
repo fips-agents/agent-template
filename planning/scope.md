@@ -22,7 +22,7 @@
 
 **LlamaStack internals.** The agent treats LlamaStack as an external endpoint. It does not import LlamaStack libraries, configure OTel instrumentation, or manage guardrail policies. Those are LlamaStack's concern.
 
-**Central tool registry (Tool Hub).** The vision for an enterprise tool registry with per-tool RBAC, quarantine capabilities, and forensic tracing is captured as a [side quest](../research/side-quests/tool-hub.md) for a future project. The current template's BaseAgent design supports it later -- every tool call goes through centralized infrastructure -- but the registry itself is not built here.
+**Central tool registry (Tool Hub).** The vision for an enterprise tool registry with per-tool RBAC, quarantine capabilities, and forensic tracing is captured as a side quest in [fips-agents/research](https://github.com/fips-agents/research) (private). The current template's BaseAgent design supports it later -- every tool call goes through centralized infrastructure -- but the registry itself is not built here.
 
 **Full eval framework.** The template scaffolds an evals directory and provides a lightweight runner, but it does not build a comprehensive evaluation framework. It supports plugging in external harnesses like Inspect AI or OpenAI evals.
 

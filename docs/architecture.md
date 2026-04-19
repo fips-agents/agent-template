@@ -318,7 +318,7 @@ Does this agent need memory across sessions?
                            → backend: memoryhub                       (Level 5)
 ```
 
-Each jump is a real jump, not a sliding scale of features. If you find yourself asking "should the markdown backend have search ranking?" the answer is usually "no, move to SQLite." The primer at `research/agent-memory-primer.md` goes into more detail on when each level is the right choice.
+Each jump is a real jump, not a sliding scale of features. If you find yourself asking "should the markdown backend have search ranking?" the answer is usually "no, move to SQLite."
 
 ### The prefix-cache pattern
 

@@ -53,7 +53,6 @@ These are settled. Do not revisit without explicit discussion.
 agent-template/
   docs/                    # User-facing: architecture, problem, vision
   planning/                # In-flight: requirements, scope, constraints
-  research/                # Investigations: ecosystem research, session records
   packages/
     fipsagents/            # Shared BaseAgent package (pip-installable)
   sandbox/                 # Code execution sandbox sidecar (FastAPI, UBI)

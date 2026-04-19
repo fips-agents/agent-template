@@ -14,4 +14,4 @@ agent-template scaffolds production-ready AI agents for OpenShift via the `fips-
 ## Related Directories
 
 - [planning/](../planning/) -- In-flight design work: requirements, scope, constraints, and next steps.
-- [research/](../research/) -- Ecosystem research, ideation session records, and side-quest investigations.
+- [fips-agents/research](https://github.com/fips-agents/research) (private) -- Ecosystem research, competitive analysis, and side-quest investigations.
