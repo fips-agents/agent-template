@@ -11,7 +11,7 @@ image:
 config:
   # Gemma 4 E4B-it served via vLLM with --tool-call-parser=gemma4
   MODEL_ENDPOINT: "http://gemma-4-e4b-it-predictor.gemma-model.svc.cluster.local/v1"
-  MODEL_NAME: "hosted_vllm/google/gemma-4-e4b-it"
+  MODEL_NAME: "hosted_vllm//mnt/models"
   # Tavily MCP server for CDC/FDA/NIH search
   TAVILY_MCP_URL: "https://mcp-server-cdc-tavily-restricted-mcp.apps.cluster-n7pd5.n7pd5.sandbox5167.opentlc.com/mcp/"
   LOG_LEVEL: "INFO"
