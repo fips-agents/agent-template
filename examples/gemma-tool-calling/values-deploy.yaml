@@ -1,0 +1,24 @@
+# Helm values override for deploying gemma-tool-calling to OpenShift.
+# Usage: helm upgrade --install gemma-tool-calling ../../templates/agent-loop/chart \
+#          -f values-deploy.yaml -n <PROJECT>
+
+image:
+  # Populated by Makefile — points to the internal registry image built by BuildConfig.
+  repository: SET_BY_MAKEFILE
+  tag: latest
+  pullPolicy: Always
+
+config:
+  # Gemma 4 E4B-it served via vLLM with --tool-call-parser=gemma4
+  MODEL_ENDPOINT: "http://gemma-4-e4b-it-predictor.gemma-model.svc.cluster.local/v1"
+  MODEL_NAME: "hosted_vllm/google/gemma-4-e4b-it"
+  # Tavily MCP server for CDC/FDA/NIH search
+  TAVILY_MCP_URL: "https://mcp-server-cdc-tavily-restricted-mcp.apps.cluster-n7pd5.n7pd5.sandbox5167.opentlc.com/mcp/"
+  LOG_LEVEL: "INFO"
+  OPENAI_API_KEY: "not-required"
+
+probes:
+  enabled: true
+
+route:
+  enabled: true
