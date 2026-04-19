@@ -556,7 +556,7 @@ class BaseAgent(abc.ABC):
                 self.messages.append(
                     {
                         "role": "assistant",
-                        "content": "".join(assistant_content_parts) or "",
+                        "content": "".join(assistant_content_parts) or None,
                         "tool_calls": assembled_calls,
                     }
                 )
@@ -959,7 +959,14 @@ def _register_mcp_tool(
 
     async def _call_mcp_tool(**kwargs: Any) -> str:
         result = await client.call_tool(tool_name, kwargs)
-        return str(result)
+        # Extract text from MCP CallToolResult content items.
+        # Each item is typically TextContent with a .text attribute.
+        parts = []
+        for item in getattr(result, "content", []):
+            text = getattr(item, "text", None)
+            if text is not None:
+                parts.append(text)
+        return "\n".join(parts) if parts else str(result)
 
     meta = ToolMeta(
         name=tool_name,
