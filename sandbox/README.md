@@ -86,9 +86,9 @@ x86_64 in-cluster and pushes directly to the internal registry.
 ## Further Reading
 
 The rationale for each layer, the alternatives evaluated, and the FIPS-cluster
-test results are documented in the [fips-agents/research](https://github.com/fips-agents/research) repo (private):
+test results are documented in `sandbox/docs/`:
 
-- `sandbox-alternatives-evaluation.md` — Why NVIDIA OpenShell and Cisco DefenseClaw weren't adopted, what patterns we borrowed from each.
-- `sandbox-hardening-v2.md` — Full hardening research including FIPS-mode test results.
-- `landlock-openshift-feasibility.md` — Why Landlock works under `restricted-v2` SCC without elevated privileges.
-- `sandbox-egress-networkpolicy-vs-opa.md` — Why NetworkPolicy is sufficient for zero-egress instead of an OPA/Rego proxy.
+- [`sandbox-alternatives-evaluation.md`](docs/sandbox-alternatives-evaluation.md) — Why NVIDIA OpenShell and Cisco DefenseClaw weren't adopted, what patterns we borrowed from each.
+- [`sandbox-hardening-v2.md`](docs/sandbox-hardening-v2.md) — Full hardening research including FIPS-mode test results.
+- [`landlock-openshift-feasibility.md`](docs/landlock-openshift-feasibility.md) — Why Landlock works under `restricted-v2` SCC without elevated privileges.
+- [`sandbox-egress-networkpolicy-vs-opa.md`](docs/sandbox-egress-networkpolicy-vs-opa.md) — Why NetworkPolicy is sufficient for zero-egress instead of an OPA/Rego proxy.
