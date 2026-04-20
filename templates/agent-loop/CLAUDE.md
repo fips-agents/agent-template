@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This is an AI agent project built on the BaseAgent framework. The agent runs as an async loop: `setup()` initializes all subsystems, `run()` calls your `step()` method repeatedly, `shutdown()` cleans up.
+This is an AI agent project built on the BaseAgent framework. By default, the agent runs as an OpenAI-compatible HTTP server on port 8080 (`/v1/chat/completions`, `/healthz`). Each incoming request creates a fresh agent instance, calls `setup()` → `step()` loop → `shutdown()`, and streams the response. See comments in `src/agent.py` for how to switch to batch mode if needed.
 
 ## Development Workflow
 

@@ -8,7 +8,7 @@ version = "0.4.0"
 description = "BaseAgent framework — production-ready AI agent for OpenShift"
 requires-python = ">=3.11"
 dependencies = [
-    "fipsagents",
+    "fipsagents[server]",
 ]
 
 [project.optional-dependencies]

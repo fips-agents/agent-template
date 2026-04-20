@@ -118,18 +118,31 @@ class ResearchAssistant(BaseAgent):
         return StepResult.done(result=report)
 
 
+# ---------------------------------------------------------------------------
+# HTTP server (default) vs. batch mode
+#
+# By default, the agent starts as an OpenAI-compatible HTTP server on
+# port 8080 with /v1/chat/completions, /healthz, and /v1/agent-info.
+# This is what the Helm chart, gateway, and UI expect.
+#
+# To switch to batch mode (one-shot execution, no HTTP server):
+#   1. Replace the block below with:
+#        import asyncio
+#        from fipsagents.baseagent import load_config
+#        async def main():
+#            config = load_config()
+#            agent = ResearchAssistant(config=config)
+#            await agent.start()
+#        asyncio.run(main())
+#   2. Comment out EXPOSE 8080 in the Containerfile
+#   3. Remove the liveness/readiness probes from chart/templates/deployment.yaml
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    import asyncio
-    from fipsagents.baseagent import load_config
+    from fipsagents.server import OpenAIChatServer
 
-    async def main():
-        config = load_config()
-        agent = ResearchAssistant(config=config)
-        await agent.setup()
-        try:
-            result = await agent.run()
-            print(result)
-        finally:
-            await agent.shutdown()
-
-    asyncio.run(main())
+    server = OpenAIChatServer(
+        agent_class=ResearchAssistant,
+        config_path="agent.yaml",
+    )
+    server.run()

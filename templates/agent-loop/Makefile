@@ -39,7 +39,7 @@ install: ## Create venv and install all dependencies (dev + memory extras)
 	$(PIP) install -e ".[dev,memory]"
 
 .PHONY: run-local
-run-local: ## Run the agent locally
+run-local: ## Run the agent locally (HTTP server on port 8080)
 	$(PYTHON_VENV) -m src.agent
 
 .PHONY: test

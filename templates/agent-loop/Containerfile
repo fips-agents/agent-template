@@ -66,8 +66,8 @@ RUN chmod -R g=u,o=r src/ tools/ prompts/ skills/ rules/ agent.yaml \
     && find src/ tools/ prompts/ skills/ rules/ -type d -exec chmod g=u,o=rx {} +
 USER 1001
 
-# No port exposed — the agent loop is not a web server.
-# Uncomment and adjust when adding an HTTP health-check or API surface:
-# EXPOSE 8080
+# The agent serves OpenAI-compatible HTTP on port 8080 by default.
+# If you switch to batch mode (see src/agent.py comments), remove this line.
+EXPOSE 8080
 
 CMD ["python", "-m", "src.agent"]
