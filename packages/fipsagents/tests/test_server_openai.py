@@ -352,6 +352,60 @@ def test_streaming_tool_call_events_pass_through():
     assert content_chunks[0]["choices"][0]["delta"]["content"] == "found it"
 
 
+def test_streaming_sequential_tool_calls_across_iterations():
+    """Two tool calls in separate model iterations both get id+name in SSE.
+
+    Reproduces #72: when astep_stream loops (tool A → result → tool B),
+    both iterations use index=0. The SSE serializer must emit opening
+    chunks (with id + name) for *each* unique call_id, not just the
+    first index=0 it sees.
+    """
+    events = [
+        # -- First model iteration: tool call A --
+        ToolCallDelta(index=0, call_id="call_aaa", name="get_weather", arguments_delta='{"city":'),
+        ToolCallDelta(index=0, arguments_delta='"Miami"}'),
+        ToolResultEvent(call_id="call_aaa", name="get_weather", content="75°F sunny"),
+        # -- Second model iteration: tool call B (same index, new call_id) --
+        ToolCallDelta(index=0, call_id="call_bbb", name="get_weather", arguments_delta='{"city":'),
+        ToolCallDelta(index=0, arguments_delta='"Seattle"}'),
+        ToolResultEvent(call_id="call_bbb", name="get_weather", content="58°F cloudy"),
+        # -- Final content --
+        ContentDelta(content="Miami is 75°F, Seattle is 58°F."),
+        StreamComplete(finish_reason="stop", metrics=StreamMetrics(model_calls=2, tool_calls=2)),
+    ]
+    server = _build_server(events)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "weather in Miami and Seattle"}],
+                "stream": True,
+            },
+        )
+    assert resp.status_code == 200
+    frames = _parse_sse_body(resp.text)
+
+    # Collect all tool_calls opening chunks (those with an "id" field).
+    tc_open_chunks = []
+    for f in frames:
+        if not isinstance(f, dict):
+            continue
+        d = _delta(f)
+        tcs = d.get("tool_calls", [])
+        for tc in tcs:
+            if "id" in tc:
+                tc_open_chunks.append(tc)
+
+    # Both tool calls must have received opening chunks with id + name.
+    assert len(tc_open_chunks) == 2, (
+        f"Expected 2 tool-call opening chunks, got {len(tc_open_chunks)}: {tc_open_chunks}"
+    )
+    assert tc_open_chunks[0]["id"] == "call_aaa"
+    assert tc_open_chunks[0]["function"]["name"] == "get_weather"
+    assert tc_open_chunks[1]["id"] == "call_bbb"
+    assert tc_open_chunks[1]["function"]["name"] == "get_weather"
+
+
 def test_model_field_in_request_overrides_config_model():
     events = [
         ContentDelta(content="ok"),

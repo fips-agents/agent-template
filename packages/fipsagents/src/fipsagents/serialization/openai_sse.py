@@ -142,9 +142,11 @@ async def stream_events_as_sse(
     # first content token.
     yield _sse_chunk(completion_id, model_name, {"role": "assistant"})
 
-    # Per-index emission state: tracks which tool-call indexes have already
-    # received their opening chunk (carrying id + name).
-    opened_indexes: set[int] = set()
+    # Per-call emission state: tracks which tool-call IDs have already
+    # received their opening chunk (carrying id + name).  Keyed by
+    # call_id (not index) so that a second model iteration reusing
+    # index 0 with a new call_id still gets a proper opening chunk.
+    opened_call_ids: set[str] = set()
 
     try:
         async for event in events:
@@ -163,12 +165,12 @@ async def stream_events_as_sse(
                 )
 
             elif isinstance(event, ToolCallDelta):
-                # First delta for this index carries id + name.
+                # First delta for a given call_id carries id + name.
                 # Later deltas carry only the arguments fragment.
                 # Skip deltas with neither a call_id (first) nor an
                 # arguments_delta (continuation) — nothing to emit.
-                if event.index not in opened_indexes and event.call_id:
-                    opened_indexes.add(event.index)
+                if event.call_id and event.call_id not in opened_call_ids:
+                    opened_call_ids.add(event.call_id)
                     yield _sse_chunk(
                         completion_id,
                         model_name,
