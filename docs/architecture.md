@@ -10,7 +10,7 @@ The agent template sits in a specific layer of a broader stack. Understanding th
 
 **Infrastructure layer** is provided by `rh-ai-quickstart/ai-architecture-charts` -- composable Helm charts that deploy vLLM, LlamaStack, PGVector, MinIO, and other services onto OpenShift. This project does not deploy or manage any of that infrastructure. Agents built from this template consume those services through well-defined APIs.
 
-**The fips-agents CLI** clones this repository when a developer runs `fips-agents create agent my-agent`, following the same pattern established by `redhat-ai-americas/mcp-server-template`. The CLI selects a template variant, copies it into a new project directory, and hands off to the developer.
+**The fips-agents CLI** clones this repository when a developer runs `fips-agents create agent my-agent`, following the same pattern established by `fips-agents/mcp-server-template`. The CLI selects a template variant, copies it into a new project directory, and hands off to the developer.
 
 **LlamaStack**, when used, is treated as an external endpoint. The agent speaks OpenAI-compatible chat completions to whatever URL is configured. LlamaStack's guardrails, tracing, and routing are its own concern -- the agent neither knows nor cares what sits behind the endpoint.
 
@@ -341,7 +341,7 @@ Cache-friendly ordering looks like:
 # Conversation turns append after this — the prefix never shifts.
 ```
 
-The message role is controlled by `config.memory.prefix_role` (default `"system"`). Models that support the OpenAI harmony format (gpt-oss-20b, o-series) can set this to `"developer"` to place memories in the harmony hierarchy (`system > developer > user`). See [#49](https://github.com/redhat-ai-americas/agent-template/issues/49) for a planned probe to detect model support at runtime.
+The message role is controlled by `config.memory.prefix_role` (default `"system"`). Models that support the OpenAI harmony format (gpt-oss-20b, o-series) can set this to `"developer"` to place memories in the harmony hierarchy (`system > developer > user`). See [#49](https://github.com/fips-agents/agent-template/issues/49) for a planned probe to detect model support at runtime.
 
 Subclasses override `build_memory_prefix()` to customise the query, formatting, or to return `None` unconditionally when they prefer per-turn recall. Agents that need fresher memory mid-session call `self.memory.search()` directly from their `astep_stream` override -- the prefix is a session-level stable cache, not a replacement for dynamic retrieval.
 

@@ -25,7 +25,7 @@ Agents built from this template run on OpenShift and consume services deployed b
 ## Related Projects
 
 - [fips-agents/code-sandbox](https://github.com/fips-agents/code-sandbox) -- Code execution sandbox sidecar
-- [redhat-ai-americas/mcp-server-template](https://github.com/redhat-ai-americas/mcp-server-template) -- Sister template for MCP servers
+- [fips-agents/mcp-server-template](https://github.com/fips-agents/mcp-server-template) -- Sister template for MCP servers
 - [redhat-ai-americas/memory-hub](https://github.com/redhat-ai-americas/memory-hub) -- Optional enterprise memory layer
 - [BerriAI/litellm](https://github.com/BerriAI/litellm) -- LLM client layer
 - [agentskills.io](https://agentskills.io/specification) -- Skills specification

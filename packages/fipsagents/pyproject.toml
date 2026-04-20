@@ -53,9 +53,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/redhat-ai-americas/agent-template"
-Repository = "https://github.com/redhat-ai-americas/agent-template"
-Issues = "https://github.com/redhat-ai-americas/agent-template/issues"
+Homepage = "https://github.com/fips-agents/agent-template"
+Repository = "https://github.com/fips-agents/agent-template"
+Issues = "https://github.com/fips-agents/agent-template/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
