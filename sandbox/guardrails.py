@@ -53,8 +53,9 @@ ALLOWED_IMPORTS = _DEFAULT_ALLOWED_IMPORTS
 _BLOCKED_CALLS: frozenset[str] = frozenset(
     {
         "eval", "exec", "compile", "__import__", "open",
-        "getattr", "setattr", "delattr",  # prevent dynamic attribute access bypasses
-        "breakpoint", "input",  # would hang the subprocess until timeout
+        "getattr", "setattr", "delattr",
+        "breakpoint", "input",
+        "globals", "locals", "vars",  # scope introspection
     }
 )
 
@@ -73,8 +74,52 @@ _BLOCKED_MODULE_ATTRS: frozenset[tuple[str, str]] = frozenset(
 
 # Dunder attribute names that are blocked regardless of the object they appear on.
 _BLOCKED_DUNDERS: frozenset[str] = frozenset(
-    {"__subclasses__", "__globals__", "__builtins__"}
+    {"__subclasses__", "__globals__", "__builtins__",
+     "__traceback__", "__import__",
+     "__class__", "__bases__", "__mro__",  # class hierarchy traversal
+     "__dict__", "__code__", "__closure__",  # namespace / code introspection
+     "__name__"}  # prevents __name__ spoof for runtime caller check bypass
 )
+
+# Frame, generator, coroutine, and traceback attributes that expose
+# execution frames or code objects.  Not dunder-named, but equally
+# dangerous — they provide paths to f_globals -> __builtins__.
+_BLOCKED_FRAME_ATTRS: frozenset[str] = frozenset(
+    {
+        "f_globals", "f_locals", "f_builtins", "f_code",
+        "gi_frame", "gi_code",
+        "cr_frame", "cr_code",
+        "ag_frame", "ag_code",
+        "tb_frame",
+    }
+)
+
+# Private attribute names on allowed modules that are references to
+# dangerous modules.  E.g. random._os is the os module, so
+# random._os.system('id') is a full escape.
+_BLOCKED_MODULE_ALIASES: frozenset[str] = frozenset(
+    {
+        # Private references (e.g. random._os)
+        "_os", "_sys", "_subprocess", "_socket", "_signal",
+        "_ctypes", "_multiprocessing", "_pickle", "_marshal",
+        "_shutil", "_mmap", "_pty",
+        # Direct references (e.g. statistics.sys, fractions.sys)
+        # Attribute names matching dangerous module names.
+        "os", "sys", "subprocess", "socket", "signal",
+        "ctypes", "multiprocessing", "pickle", "marshal",
+        "shutil", "mmap", "pty",
+    }
+)
+
+# Functions from the operator module that perform dynamic attribute
+# or item access via string names, bypassing AST-level checks.
+_DYNAMIC_ATTR_CALLS: frozenset[str] = frozenset(
+    {"attrgetter", "methodcaller", "itemgetter"}
+)
+
+# Matches any dunder name (__xxx__) — used to block dynamic attribute
+# access via operator functions regardless of the specific dunder.
+_DUNDER_PATTERN_RE: re.Pattern[str] = re.compile(r"^__\w+__$")
 
 # Unsafe deserialization: (module, method) pairs.  These modules are already
 # blocked by ALLOWED_IMPORTS, but explicit checks give clearer error messages
@@ -129,6 +174,24 @@ _SQL_KEYWORD_RE: re.Pattern[str] = re.compile(
 
 # Path traversal pattern — any string containing "../".
 _PATH_TRAVERSAL_RE: re.Pattern[str] = re.compile(r"\.\./")
+
+# Format string attribute traversal — detects dunders and blocked frame
+# attrs inside format spec braces, e.g. '{0.__globals__}'.format(obj).
+_FORMAT_ATTR_RE: re.Pattern[str] = re.compile(
+    r"\{[^}]*\.("
+    + "|".join(
+        re.escape(a) for a in sorted(
+            {"__subclasses__", "__globals__", "__builtins__",
+             "__traceback__", "__import__",
+             "__class__", "__bases__", "__mro__",
+             "__dict__", "__code__", "__closure__", "__name__",
+             "f_globals", "f_locals", "f_builtins", "f_code",
+             "gi_frame", "gi_code", "cr_frame", "cr_code",
+             "ag_frame", "ag_code", "tb_frame"}
+        )
+    )
+    + r")(?:\W|$)"
+)
 
 
 class _GuardrailVisitor(ast.NodeVisitor):
@@ -225,6 +288,51 @@ class _GuardrailVisitor(ast.NodeVisitor):
                     f".format() on a string containing SQL keywords"
                 )
 
+        # Dynamic attribute/item access via operator module functions.
+        # operator.attrgetter('__builtins__') bypasses AST attribute checks
+        # because the dunder name is a string argument, not an ast.Attribute.
+        call_name: str | None = None
+        if isinstance(func, ast.Attribute) and func.attr in _DYNAMIC_ATTR_CALLS:
+            call_name = func.attr
+        elif isinstance(func, ast.Name) and func.id in _DYNAMIC_ATTR_CALLS:
+            call_name = func.id
+
+        if call_name is not None:
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    # attrgetter supports dotted paths like 'a.b.__globals__'
+                    for part in arg.value.split("."):
+                        if part in _BLOCKED_DUNDERS or part in _BLOCKED_FRAME_ATTRS:
+                            self.violations.append(
+                                f"Line {node.lineno}: dynamic attribute access "
+                                f"to '{part}' via {call_name}() is not allowed"
+                            )
+                        elif _DUNDER_PATTERN_RE.match(part):
+                            # Catch ANY dunder in operator function args —
+                            # no legitimate reason to use attrgetter/
+                            # methodcaller with dunders in a sandbox.
+                            self.violations.append(
+                                f"Line {node.lineno}: dynamic access to "
+                                f"dunder '{part}' via {call_name}() "
+                                f"is not allowed"
+                            )
+
+        self.generic_visit(node)
+
+    # ------------------------------------------------------------------
+    # Name checking (bare dunder references like __builtins__)
+    # ------------------------------------------------------------------
+
+    def visit_Name(self, node: ast.Name) -> None:
+        # x = __builtins__ uses ast.Name, not ast.Attribute.
+        # Block bare references to dunder names that appear in the
+        # blocked set — prevents direct access to the builtins object.
+        if node.id in _BLOCKED_DUNDERS:
+            self.violations.append(
+                f"Line {node.lineno}: reference to '{node.id}' "
+                f"is not allowed"
+            )
+
         self.generic_visit(node)
 
     # ------------------------------------------------------------------
@@ -240,6 +348,42 @@ class _GuardrailVisitor(ast.NodeVisitor):
                 f"Line {node.lineno}: access to '{attr}' attribute is not allowed"
             )
 
+        # Block frame/generator/coroutine introspection attributes.
+        if attr in _BLOCKED_FRAME_ATTRS:
+            self.violations.append(
+                f"Line {node.lineno}: access to '{attr}' attribute is not "
+                f"allowed (frame/generator introspection)"
+            )
+
+        # Block private module references (e.g. random._os → os module).
+        if attr in _BLOCKED_MODULE_ALIASES:
+            self.violations.append(
+                f"Line {node.lineno}: access to '{attr}' attribute is not "
+                f"allowed (module reference)"
+            )
+
+        self.generic_visit(node)
+
+    # ------------------------------------------------------------------
+    # Subscript checking (dict key access to blocked names)
+    # ------------------------------------------------------------------
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        # g['__builtins__'] uses ast.Subscript, not ast.Attribute.
+        # Check string keys against blocked dunder names.
+        if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            key = node.slice.value
+            if key in _BLOCKED_DUNDERS:
+                self.violations.append(
+                    f"Line {node.lineno}: subscript access with key "
+                    f"'{key}' is not allowed (blocked attribute name)"
+                )
+            if key in _BLOCKED_FRAME_ATTRS:
+                self.violations.append(
+                    f"Line {node.lineno}: subscript access with key "
+                    f"'{key}' is not allowed (frame introspection)"
+                )
+
         self.generic_visit(node)
 
     # ------------------------------------------------------------------
@@ -247,11 +391,31 @@ class _GuardrailVisitor(ast.NodeVisitor):
     # ------------------------------------------------------------------
 
     def visit_Constant(self, node: ast.Constant) -> None:
-        if not isinstance(node.value, str) or len(node.value) < 16:
+        if not isinstance(node.value, str):
             self.generic_visit(node)
             return
 
         value = node.value
+
+        # Bare string constants that exactly match a blocked attribute name.
+        # Catches e.g. ['__class__', '__bases__'] used with attrgetter(var).
+        if value in _BLOCKED_DUNDERS or value in _BLOCKED_FRAME_ATTRS:
+            self.violations.append(
+                f"Line {node.lineno}: string literal '{value}' matches "
+                f"a blocked attribute name"
+            )
+
+        # Format string attribute traversal — check before length gate
+        # because format specs like '{0.f_globals}' can be short.
+        if _FORMAT_ATTR_RE.search(value):
+            self.violations.append(
+                f"Line {node.lineno}: string contains format spec "
+                f"accessing a blocked attribute"
+            )
+
+        if len(value) < 16:
+            self.generic_visit(node)
+            return
 
         # Credential / secret patterns
         for name, pattern in _SECRET_PATTERNS:

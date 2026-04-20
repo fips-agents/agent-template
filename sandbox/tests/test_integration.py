@@ -268,18 +268,17 @@ print(x)
         assert "eval('dangerous')" in body["stdout"]
 
     @pytest.mark.asyncio
-    async def test_lambda_with_eval_name_attribute_is_allowed(self, client: AsyncClient):
-        """Assigning __name__ on a lambda does not invoke eval; should pass."""
+    async def test_lambda_with_eval_name_attribute_is_blocked(self, client: AsyncClient):
+        """Assigning __name__ is now blocked to prevent runtime caller-check spoof."""
         code = """
 f = lambda: None
 f.__name__ = "eval"
 print(f.__name__)
 """
         status, body = await execute(client, code)
-        # __name__ is not in _BLOCKED_DUNDERS; __globals__ and __subclasses__ are.
-        assert status == 200, f"expected 200, got {status}: {body}"
-        assert body["exit_code"] == 0
-        assert "eval" in body["stdout"]
+        # __name__ is in _BLOCKED_DUNDERS to prevent __name__ = 'trusted_module'
+        # spoof attacks against the runtime import hook's caller check.
+        assert status == 400, f"expected 400, got {status}: {body}"
 
     @pytest.mark.asyncio
     async def test_chained_string_methods_allowed(self, client: AsyncClient):
