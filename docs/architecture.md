@@ -139,7 +139,7 @@ Every BaseAgent subclass follows the same lifecycle:
 
 ## HTTP Server
 
-Most FIPS-Agents chat deployments sit behind an OpenAI-compatible HTTP endpoint so a UI, gateway, or another agent can call them through the ecosystem-standard `/v1/chat/completions` contract. `fipsagents.server.OpenAIChatServer` is the canonical implementation: a FastAPI app that takes a `BaseAgent` subclass and exposes `/v1/chat/completions` (sync + SSE), `/healthz`, and `/readyz` with no hand-written HTTP glue.
+Most FIPS-Agents chat deployments sit behind an OpenAI-compatible HTTP endpoint so a UI, gateway, or another agent can call them through the ecosystem-standard `/v1/chat/completions` contract. `fipsagents.server.OpenAIChatServer` is the canonical implementation: a FastAPI app that takes a `BaseAgent` subclass and exposes `/v1/chat/completions` (sync + SSE), `/v1/agent-info` (model config, system prompt, and LLM-visible tools for UI settings panels), `/healthz`, and `/readyz` with no hand-written HTTP glue.
 
 ```python
 from fipsagents.server import OpenAIChatServer
