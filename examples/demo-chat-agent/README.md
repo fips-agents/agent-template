@@ -138,10 +138,10 @@ replacements. After scaffolding, run:
 ```bash
 # Go imports
 cd demo-chat-gateway && find . -name "*.go" -not -path "./vendor/*" \
-  -exec sed -i '' 's|github.com/redhat-ai-americas/gateway-template|github.com/redhat-ai-americas/demo-chat-gateway|g' {} +
+  -exec sed -i '' 's|github.com/fips-agents/gateway-template|github.com/redhat-ai-americas/demo-chat-gateway|g' {} +
 
 cd demo-chat-ui && find . -name "*.go" -not -path "./vendor/*" \
-  -exec sed -i '' 's|github.com/redhat-ai-americas/ui-template|github.com/redhat-ai-americas/demo-chat-ui|g' {} +
+  -exec sed -i '' 's|github.com/fips-agents/ui-template|github.com/redhat-ai-americas/demo-chat-ui|g' {} +
 
 # Helm chart helper references
 cd demo-chat-gateway/chart/templates && sed -i '' 's|gateway-template\.|demo-chat-gateway.|g' *.yaml

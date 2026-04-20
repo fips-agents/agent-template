@@ -55,7 +55,7 @@ agent-template/
   planning/                # In-flight: requirements, scope, constraints
   packages/
     fipsagents/            # Shared BaseAgent package (pip-installable)
-  sandbox/                 # Code execution sandbox sidecar (FastAPI, UBI)
+  sandbox/                 # EXTRACTED to fips-agents/code-sandbox (pointer README remains)
   examples/                # Runnable demos (shared-memory, code-sandbox-agent, document-analysis)
   templates/
     agent-loop/            # Single-agent loop template

@@ -23,14 +23,17 @@ async def test_math_computation():
 
 @pytest.mark.asyncio
 async def test_stderr_output():
-    result = await execute_code('import sys; print("err", file=sys.stderr)')
+    result = await execute_code(
+        'import sys; print("err", file=sys.stderr)',
+        runtime_restrict=False,
+    )
     assert result.stderr == "err\n", f"unexpected stderr: {result.stderr!r}"
     assert result.exit_code == 0
 
 
 @pytest.mark.asyncio
 async def test_nonzero_exit():
-    result = await execute_code("import sys; sys.exit(1)")
+    result = await execute_code("import sys; sys.exit(1)", runtime_restrict=False)
     assert result.exit_code == 1, f"unexpected exit_code: {result.exit_code}"
 
 

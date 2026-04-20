@@ -41,7 +41,7 @@ asyncio.run(MyAgent().start())
 
 ## Used by
 
-This package is the shared framework for templates scaffolded by the [fips-agents CLI](https://github.com/redhat-ai-americas/agent-template):
+This package is the shared framework for templates scaffolded by the [fips-agents CLI](https://github.com/fips-agents/agent-template):
 
 - **agent-loop** — single-agent loop (`step()` in a loop)
 - **workflow** — directed graph of nodes with typed state
