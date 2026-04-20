@@ -132,3 +132,4 @@ The agent talks to these through configured URLs in agent.yaml. It does not depl
 - Do not hardcode model names or endpoints -- use agent.yaml with env var substitution
 - Do not create ConfigMaps for prompts -- prompts are baked into the image for traceability
 - Do not skip the `visibility` parameter on tools -- every tool must declare its plane
+- Do not assume OpenShift route timeouts are sufficient for multi-agent chains -- default is 30s. Add `oc annotate route <name> haproxy.router.openshift.io/timeout=180s` for routes serving agents that delegate to other agents.
