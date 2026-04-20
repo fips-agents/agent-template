@@ -16,7 +16,7 @@ The core abstraction is BaseAgent -- a pure Python async class that handles LLM 
 
 - [docs/](docs/) -- Architecture, design decisions, problem statement, and vision.
 - [planning/](planning/) -- Requirements, scope, constraints, and next steps.
-- [sandbox/](sandbox/) -- Code execution sandbox sidecar (FastAPI, layered isolation for `restricted-v2` SCC).
+- [fips-agents/code-sandbox](https://github.com/fips-agents/code-sandbox) -- Code execution sandbox sidecar (extracted to standalone repo).
 
 ## Infrastructure
 
@@ -24,6 +24,7 @@ Agents built from this template run on OpenShift and consume services deployed b
 
 ## Related Projects
 
+- [fips-agents/code-sandbox](https://github.com/fips-agents/code-sandbox) -- Code execution sandbox sidecar
 - [redhat-ai-americas/mcp-server-template](https://github.com/redhat-ai-americas/mcp-server-template) -- Sister template for MCP servers
 - [redhat-ai-americas/memory-hub](https://github.com/redhat-ai-americas/memory-hub) -- Optional enterprise memory layer
 - [BerriAI/litellm](https://github.com/BerriAI/litellm) -- LLM client layer
