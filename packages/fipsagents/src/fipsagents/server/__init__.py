@@ -185,6 +185,7 @@ class OpenAIChatServer:
     def _register_routes(self) -> None:
         self.app.get("/healthz")(self._healthz)
         self.app.get("/readyz")(self._readyz)
+        self.app.get("/v1/agent-info")(self._agent_info)
         self.app.post("/v1/chat/completions")(self._chat_completions)
 
     # -- Endpoint handlers ---------------------------------------------------
@@ -196,6 +197,36 @@ class OpenAIChatServer:
         if self._agent is None:
             return JSONResponse({"status": "not ready"}, status_code=503)
         return {"status": "ready"}
+
+    async def _agent_info(self):
+        if self._agent is None:
+            raise HTTPException(status_code=503, detail="Agent not ready")
+
+        agent = self._agent
+
+        # Extract system prompt from the first system message, if any.
+        system_prompt = ""
+        for msg in agent.messages:
+            if msg.get("role") == "system":
+                system_prompt = msg.get("content", "")
+                break
+
+        return JSONResponse({
+            "model": {
+                "name": agent.config.model.name,
+                "temperature": agent.config.model.temperature,
+                "max_tokens": agent.config.model.max_tokens,
+            },
+            "system_prompt": system_prompt,
+            "tools": [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                }
+                for t in agent.tools.get_llm_tools()
+            ],
+        })
 
     async def _chat_completions(self, req: ChatCompletionRequest):
         if self._agent is None:

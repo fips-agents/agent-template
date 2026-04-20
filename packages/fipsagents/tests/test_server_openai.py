@@ -24,6 +24,7 @@ from fipsagents.baseagent.events import (  # noqa: E402
     ToolCallDelta,
     ToolResultEvent,
 )
+from fipsagents.baseagent.tools import ToolRegistry  # noqa: E402
 from fipsagents.server import OpenAIChatServer  # noqa: E402
 
 
@@ -44,8 +45,11 @@ class _StubAgent(BaseAgent):
         # Bypass BaseAgent.__init__ — we own everything the server touches.
         self._events = events or []
         self.messages: list[dict] = []
+        self.tools = ToolRegistry()
         self.config = types.SimpleNamespace(
-            model=types.SimpleNamespace(name=model_name)
+            model=types.SimpleNamespace(
+                name=model_name, temperature=0.7, max_tokens=4096,
+            )
         )
 
     async def setup(self) -> None:
@@ -444,3 +448,66 @@ def test_per_request_lock_serializes_streams():
     # Both streams must end with [DONE]
     assert frames_a[-1] == "[DONE]", f"frames_a did not end with [DONE]: {frames_a}"
     assert frames_b[-1] == "[DONE]", f"frames_b did not end with [DONE]: {frames_b}"
+
+
+# ---------------------------------------------------------------------------
+# /v1/agent-info
+# ---------------------------------------------------------------------------
+
+
+def test_agent_info_returns_model_and_empty_defaults():
+    server = _build_server(model_name="gpt-oss-20b")
+    with TestClient(server.app) as client:
+        resp = client.get("/v1/agent-info")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["model"]["name"] == "gpt-oss-20b"
+    assert body["model"]["temperature"] == 0.7
+    assert body["model"]["max_tokens"] == 4096
+    assert body["system_prompt"] == ""
+    assert body["tools"] == []
+
+
+def test_agent_info_extracts_system_prompt():
+    server = _build_server()
+    with TestClient(server.app) as client:
+        # Inject a system message into agent.messages via the lifespan agent.
+        server._agent.messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "hi"},
+        ]
+        resp = client.get("/v1/agent-info")
+    body = resp.json()
+    assert body["system_prompt"] == "You are a helpful assistant."
+
+
+def test_agent_info_includes_llm_tools():
+    from fipsagents.baseagent.tools import ToolMeta
+
+    server = _build_server()
+    with TestClient(server.app) as client:
+        # Inject tools directly into the registry for testing.
+        server._agent.tools._tools["search"] = ToolMeta(
+            name="search",
+            description="Search the web",
+            visibility="llm_only",
+            fn=lambda: None,
+            is_async=False,
+            parameters={"type": "object", "properties": {"q": {"type": "string"}}},
+        )
+        # Agent-only tool that should NOT appear.
+        server._agent.tools._tools["internal_log"] = ToolMeta(
+            name="internal_log",
+            description="Internal logging",
+            visibility="agent_only",
+            fn=lambda: None,
+            is_async=False,
+        )
+        resp = client.get("/v1/agent-info")
+
+    body = resp.json()
+    assert len(body["tools"]) == 1
+    assert body["tools"][0]["name"] == "search"
+    assert body["tools"][0]["description"] == "Search the web"
+    assert body["tools"][0]["parameters"]["properties"]["q"]["type"] == "string"
