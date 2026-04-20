@@ -183,8 +183,8 @@ class OpenAIChatServer:
     # -- Route registration --------------------------------------------------
 
     def _register_routes(self) -> None:
-        self.app.get("/healthz")(self._healthz)
-        self.app.get("/readyz")(self._readyz)
+        self.app.api_route("/healthz", methods=["GET", "HEAD"])(self._healthz)
+        self.app.api_route("/readyz", methods=["GET", "HEAD"])(self._readyz)
         self.app.get("/v1/agent-info")(self._agent_info)
         self.app.post("/v1/chat/completions")(self._chat_completions)
 
@@ -267,6 +267,11 @@ class OpenAIChatServer:
 
         Fully drains the iterator so any post-``StreamComplete`` hooks
         in the subclass (e.g. memory writes) run to completion.
+
+        If no ``ContentDelta`` events are emitted (e.g. the agent executed
+        tools and the final content was appended directly to
+        ``agent.messages`` without streaming deltas), fall back to the
+        last assistant message in the conversation history.
         """
         parts: list[str] = []
         metrics: StreamMetrics | None = None
@@ -279,7 +284,19 @@ class OpenAIChatServer:
                 elif isinstance(event, StreamComplete):
                     metrics = event.metrics
                     finish_reason = event.finish_reason
-        return "".join(parts), metrics, finish_reason
+
+        content = "".join(parts)
+
+        # Fallback: if no ContentDelta events were yielded but the agent
+        # appended an assistant message (common after tool execution in
+        # subclasses that override astep_stream), use that content.
+        if not content and agent.messages:
+            for msg in reversed(agent.messages):
+                if msg.get("role") == "assistant" and msg.get("content"):
+                    content = msg["content"]
+                    break
+
+        return content, metrics, finish_reason
 
     # -- Streaming -----------------------------------------------------------
 
