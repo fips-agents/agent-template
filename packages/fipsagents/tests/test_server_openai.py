@@ -44,6 +44,7 @@ class _StubAgent(BaseAgent):
     def __init__(self, events=None, *, model_name: str = "stub-model", **kwargs):
         # Bypass BaseAgent.__init__ — we own everything the server touches.
         self._events = events or []
+        self._system_prompt: str = ""
         self.messages: list[dict] = []
         self.tools = ToolRegistry()
         self.config = types.SimpleNamespace(
@@ -51,6 +52,10 @@ class _StubAgent(BaseAgent):
                 name=model_name, temperature=0.7, max_tokens=4096,
             )
         )
+
+    def build_system_prompt(self) -> str:
+        """Return the stub's configured system prompt (no real file I/O)."""
+        return self._system_prompt
 
     async def setup(self) -> None:
         pass
@@ -472,11 +477,11 @@ def test_agent_info_returns_model_and_empty_defaults():
 def test_agent_info_extracts_system_prompt():
     server = _build_server()
     with TestClient(server.app) as client:
-        # Inject a system message into agent.messages via the lifespan agent.
-        server._agent.messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "hi"},
-        ]
+        # Set the system prompt on the stub agent so build_system_prompt()
+        # returns it.  We deliberately do NOT touch agent.messages here to
+        # confirm that the endpoint no longer reads from the message buffer
+        # (which gets overwritten by every chat request).
+        server._agent._system_prompt = "You are a helpful assistant."
         resp = client.get("/v1/agent-info")
     body = resp.json()
     assert body["system_prompt"] == "You are a helpful assistant."

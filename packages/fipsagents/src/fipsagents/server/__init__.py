@@ -204,12 +204,9 @@ class OpenAIChatServer:
 
         agent = self._agent
 
-        # Extract system prompt from the first system message, if any.
-        system_prompt = ""
-        for msg in agent.messages:
-            if msg.get("role") == "system":
-                system_prompt = msg.get("content", "")
-                break
+        # Always read from the prompt files, not agent.messages, which gets
+        # overwritten by _collect_sync / _stream on every chat request.
+        system_prompt = agent.build_system_prompt()
 
         return JSONResponse({
             "model": {
