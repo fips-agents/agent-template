@@ -11,8 +11,7 @@ model:
   temperature: 0.3
   max_tokens: 2048
 
-mcp_servers:
-  - url: ${TAVILY_MCP_URL:-https://mcp-server-cdc-tavily-restricted-mcp.apps.cluster-n7pd5.n7pd5.sandbox5167.opentlc.com/mcp/}
+mcp_servers: []
 
 tools:
   local_dir: ./tools
