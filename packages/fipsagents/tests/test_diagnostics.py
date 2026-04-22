@@ -14,7 +14,8 @@ from fipsagents.baseagent.diagnostics import probe_role_support
 # ---------------------------------------------------------------------------
 
 
-def _mock_litellm_response(prompt_tokens: int, content: str = "4") -> MagicMock:
+def _mock_response(prompt_tokens: int, content: str = "4") -> MagicMock:
+    """Build a MagicMock that looks like an OpenAI ChatCompletion."""
     resp = MagicMock()
     resp.choices = [MagicMock()]
     resp.choices[0].message.content = content
@@ -52,12 +53,14 @@ class TestCanaryCompletion:
     @pytest.mark.asyncio
     async def test_canary_passes_when_token_delta_positive(self):
         """Positive prompt_token delta indicates the role message was consumed."""
-        control_resp = _mock_litellm_response(prompt_tokens=10)
-        test_resp = _mock_litellm_response(prompt_tokens=22)
+        control_resp = _mock_response(prompt_tokens=10)
+        test_resp = _mock_response(prompt_tokens=22)
 
-        cls_mock, _ = _make_httpx_client(status_code=404)
-        with patch("litellm.acompletion", new=AsyncMock(side_effect=[control_resp, test_resp])), \
-             patch("httpx.AsyncClient", cls_mock):
+        httpx_cls_mock, _ = _make_httpx_client(status_code=404)
+        with patch("fipsagents.baseagent.diagnostics.AsyncOpenAI") as mock_openai_cls, \
+             patch("httpx.AsyncClient", httpx_cls_mock):
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(side_effect=[control_resp, test_resp])
             result = await probe_role_support(
                 model="test-model",
                 endpoint="http://localhost:8080",
@@ -71,12 +74,14 @@ class TestCanaryCompletion:
     @pytest.mark.asyncio
     async def test_canary_fails_when_no_token_delta(self):
         """Zero delta means the role message was silently dropped."""
-        control_resp = _mock_litellm_response(prompt_tokens=10)
-        test_resp = _mock_litellm_response(prompt_tokens=10)
+        control_resp = _mock_response(prompt_tokens=10)
+        test_resp = _mock_response(prompt_tokens=10)
 
-        cls_mock, _ = _make_httpx_client(status_code=404)
-        with patch("litellm.acompletion", new=AsyncMock(side_effect=[control_resp, test_resp])), \
-             patch("httpx.AsyncClient", cls_mock):
+        httpx_cls_mock, _ = _make_httpx_client(status_code=404)
+        with patch("fipsagents.baseagent.diagnostics.AsyncOpenAI") as mock_openai_cls, \
+             patch("httpx.AsyncClient", httpx_cls_mock):
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(side_effect=[control_resp, test_resp])
             result = await probe_role_support(
                 model="test-model",
                 endpoint="http://localhost:8080",
@@ -87,11 +92,13 @@ class TestCanaryCompletion:
         assert result.prompt_token_delta == 0
 
     @pytest.mark.asyncio
-    async def test_canary_handles_litellm_error(self):
-        """An exception from litellm marks the canary as failed with no delta."""
-        cls_mock, _ = _make_httpx_client(status_code=404)
-        with patch("litellm.acompletion", new=AsyncMock(side_effect=RuntimeError("model down"))), \
-             patch("httpx.AsyncClient", cls_mock):
+    async def test_canary_handles_completion_error(self):
+        """An exception from the OpenAI client marks the canary as failed with no delta."""
+        httpx_cls_mock, _ = _make_httpx_client(status_code=404)
+        with patch("fipsagents.baseagent.diagnostics.AsyncOpenAI") as mock_openai_cls, \
+             patch("httpx.AsyncClient", httpx_cls_mock):
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("model down"))
             result = await probe_role_support(
                 model="test-model",
                 endpoint="http://localhost:8080",
@@ -115,11 +122,14 @@ class TestTemplateInspection:
             "id": "granite-8b",
             "chat_template": "{% if role == 'developer' %}...{% endif %}",
         }
-        cls_mock, _ = _make_httpx_client(status_code=200, json_data=template_json)
-        with patch("litellm.acompletion", new=AsyncMock(side_effect=[
-            _mock_litellm_response(10),
-            _mock_litellm_response(22),
-        ])), patch("httpx.AsyncClient", cls_mock):
+        httpx_cls_mock, _ = _make_httpx_client(status_code=200, json_data=template_json)
+        with patch("fipsagents.baseagent.diagnostics.AsyncOpenAI") as mock_openai_cls, \
+             patch("httpx.AsyncClient", httpx_cls_mock):
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(side_effect=[
+                _mock_response(10),
+                _mock_response(22),
+            ])
             result = await probe_role_support(
                 model="test-model",
                 endpoint="http://localhost:8080",
@@ -135,11 +145,14 @@ class TestTemplateInspection:
             "id": "some-model",
             "chat_template": "{% if role == 'system' %}...{% endif %}",
         }
-        cls_mock, _ = _make_httpx_client(status_code=200, json_data=template_json)
-        with patch("litellm.acompletion", new=AsyncMock(side_effect=[
-            _mock_litellm_response(10),
-            _mock_litellm_response(22),
-        ])), patch("httpx.AsyncClient", cls_mock):
+        httpx_cls_mock, _ = _make_httpx_client(status_code=200, json_data=template_json)
+        with patch("fipsagents.baseagent.diagnostics.AsyncOpenAI") as mock_openai_cls, \
+             patch("httpx.AsyncClient", httpx_cls_mock):
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(side_effect=[
+                _mock_response(10),
+                _mock_response(22),
+            ])
             result = await probe_role_support(
                 model="test-model",
                 endpoint="http://localhost:8080",
@@ -151,11 +164,14 @@ class TestTemplateInspection:
     @pytest.mark.asyncio
     async def test_template_inconclusive_on_http_error(self):
         """An HTTP exception leaves template_supported as None (inconclusive)."""
-        cls_mock, _ = _make_httpx_client(raise_exc=RuntimeError("connection refused"))
-        with patch("litellm.acompletion", new=AsyncMock(side_effect=[
-            _mock_litellm_response(10),
-            _mock_litellm_response(22),
-        ])), patch("httpx.AsyncClient", cls_mock):
+        httpx_cls_mock, _ = _make_httpx_client(raise_exc=RuntimeError("connection refused"))
+        with patch("fipsagents.baseagent.diagnostics.AsyncOpenAI") as mock_openai_cls, \
+             patch("httpx.AsyncClient", httpx_cls_mock):
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(side_effect=[
+                _mock_response(10),
+                _mock_response(22),
+            ])
             result = await probe_role_support(
                 model="test-model",
                 endpoint="http://localhost:8080",
@@ -167,11 +183,14 @@ class TestTemplateInspection:
     @pytest.mark.asyncio
     async def test_template_inconclusive_when_no_chat_template_field(self):
         """Response JSON lacks a chat_template field entirely."""
-        cls_mock, _ = _make_httpx_client(status_code=200, json_data={"id": "model-1"})
-        with patch("litellm.acompletion", new=AsyncMock(side_effect=[
-            _mock_litellm_response(10),
-            _mock_litellm_response(22),
-        ])), patch("httpx.AsyncClient", cls_mock):
+        httpx_cls_mock, _ = _make_httpx_client(status_code=200, json_data={"id": "model-1"})
+        with patch("fipsagents.baseagent.diagnostics.AsyncOpenAI") as mock_openai_cls, \
+             patch("httpx.AsyncClient", httpx_cls_mock):
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(side_effect=[
+                _mock_response(10),
+                _mock_response(22),
+            ])
             result = await probe_role_support(
                 model="test-model",
                 endpoint="http://localhost:8080",
@@ -190,18 +209,20 @@ class TestCustomRoleParameter:
     @pytest.mark.asyncio
     async def test_custom_role_reflected_in_result_and_messages(self):
         """Passing role='assistant-prefill' flows through to the result and test call."""
-        control_resp = _mock_litellm_response(prompt_tokens=10)
-        test_resp = _mock_litellm_response(prompt_tokens=25)
+        control_resp = _mock_response(prompt_tokens=10)
+        test_resp = _mock_response(prompt_tokens=25)
 
-        cls_mock, _ = _make_httpx_client(status_code=404)
+        httpx_cls_mock, _ = _make_httpx_client(status_code=404)
         captured_calls: list = []
 
-        async def capturing_completion(**kwargs):
-            captured_calls.append(kwargs["messages"])
+        async def capturing_create(*, messages, **kwargs):
+            captured_calls.append(messages)
             return control_resp if len(captured_calls) == 1 else test_resp
 
-        with patch("litellm.acompletion", new=capturing_completion), \
-             patch("httpx.AsyncClient", cls_mock):
+        with patch("fipsagents.baseagent.diagnostics.AsyncOpenAI") as mock_openai_cls, \
+             patch("httpx.AsyncClient", httpx_cls_mock):
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = capturing_create
             result = await probe_role_support(
                 model="test-model",
                 endpoint="http://localhost:8080",

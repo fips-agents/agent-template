@@ -19,12 +19,12 @@ from fipsagents.baseagent.llm import (
 
 
 # ---------------------------------------------------------------------------
-# Helpers for building fake litellm response objects
+# Helpers for building fake OpenAI chat completion response objects
 # ---------------------------------------------------------------------------
 
 
 def _make_raw_response(content: str | None = "hello", tool_calls: Any = None) -> MagicMock:
-    """Build a MagicMock that looks like a litellm ModelResponse."""
+    """Build a MagicMock that looks like an OpenAI ChatCompletion."""
     message = MagicMock()
     message.content = content
     message.tool_calls = tool_calls
@@ -159,7 +159,8 @@ class TestParseJsonResponse:
 
 
 class TestLLMClientBaseKwargs:
-    def test_includes_model_temperature_max_tokens(self):
+    @patch("fipsagents.baseagent.llm.AsyncOpenAI")
+    def test_includes_model_temperature_max_tokens(self, _mock_cls):
         config = LLMConfig(name="test-model", temperature=0.5, max_tokens=512)
         client = LLMClient(config)
         kwargs = client._base_kwargs()
@@ -167,19 +168,26 @@ class TestLLMClientBaseKwargs:
         assert kwargs["temperature"] == 0.5
         assert kwargs["max_tokens"] == 512
 
-    def test_includes_api_base_when_endpoint_set(self):
+    @patch("fipsagents.baseagent.llm.AsyncOpenAI")
+    def test_endpoint_passed_to_client_constructor(self, mock_cls):
+        """Endpoint is set on the AsyncOpenAI client, not in call kwargs."""
         config = LLMConfig(endpoint="http://localhost:8080")
-        client = LLMClient(config)
-        kwargs = client._base_kwargs()
-        assert kwargs["api_base"] == "http://localhost:8080"
+        LLMClient(config)
+        mock_cls.assert_called_once_with(
+            base_url="http://localhost:8080",
+            api_key=mock_cls.call_args[1]["api_key"],  # don't assert on api_key value
+        )
 
-    def test_no_api_base_when_endpoint_none(self):
+    @patch("fipsagents.baseagent.llm.AsyncOpenAI")
+    def test_no_endpoint_passes_none_to_client(self, mock_cls):
+        """When endpoint is None, base_url=None is passed to the client."""
         config = LLMConfig(endpoint=None)
-        client = LLMClient(config)
-        kwargs = client._base_kwargs()
-        assert "api_base" not in kwargs
+        LLMClient(config)
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args[1]["base_url"] is None
 
-    def test_overrides_applied(self):
+    @patch("fipsagents.baseagent.llm.AsyncOpenAI")
+    def test_overrides_applied(self, _mock_cls):
         config = LLMConfig(temperature=0.7)
         client = LLMClient(config)
         kwargs = client._base_kwargs(temperature=0.1)
@@ -195,10 +203,12 @@ class TestLLMClientCallModel:
     @pytest.mark.asyncio
     async def test_call_model_returns_model_response(self):
         config = LLMConfig(name="test-model")
-        client = LLMClient(config)
         raw = _make_raw_response(content="the answer")
 
-        with patch("litellm.acompletion", new=AsyncMock(return_value=raw)):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=raw)
+            client = LLMClient(config)
             result = await client.call_model([{"role": "user", "content": "hi"}])
 
         assert isinstance(result, ModelResponse)
@@ -207,22 +217,27 @@ class TestLLMClientCallModel:
     @pytest.mark.asyncio
     async def test_call_model_passes_tools_kwarg(self):
         config = LLMConfig(name="test-model")
-        client = LLMClient(config)
         raw = _make_raw_response()
         tools = [{"type": "function", "function": {"name": "my_tool"}}]
 
-        with patch("litellm.acompletion", new=AsyncMock(return_value=raw)) as mock_completion:
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_create = AsyncMock(return_value=raw)
+            mock_client.chat.completions.create = mock_create
+            client = LLMClient(config)
             await client.call_model([{"role": "user", "content": "x"}], tools=tools)
 
-        call_kwargs = mock_completion.call_args[1]
+        call_kwargs = mock_create.call_args[1]
         assert call_kwargs["tools"] == tools
 
     @pytest.mark.asyncio
     async def test_call_model_raises_llm_error_on_failure(self):
         config = LLMConfig(name="test-model")
-        client = LLMClient(config)
 
-        with patch("litellm.acompletion", new=AsyncMock(side_effect=ConnectionError("down"))):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(side_effect=ConnectionError("down"))
+            client = LLMClient(config)
             with pytest.raises(LLMError, match="LLM call failed"):
                 await client.call_model([{"role": "user", "content": "x"}])
 
@@ -239,10 +254,12 @@ class TestLLMClientCallModelJson:
             value: int
 
         config = LLMConfig(name="test-model")
-        client = LLMClient(config)
         raw = _make_raw_response(content='{"value": 42}')
 
-        with patch("litellm.acompletion", new=AsyncMock(return_value=raw)):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=raw)
+            client = LLMClient(config)
             result = await client.call_model_json(
                 [{"role": "user", "content": "what is the answer?"}],
                 schema=Answer,
@@ -254,12 +271,14 @@ class TestLLMClientCallModelJson:
     @pytest.mark.asyncio
     async def test_raises_llm_error_when_no_content(self):
         config = LLMConfig(name="test-model")
-        client = LLMClient(config)
         raw = _make_raw_response(content=None)
         # Need the raw message.content to be None directly
         raw.choices[0].message.content = None
 
-        with patch("litellm.acompletion", new=AsyncMock(return_value=raw)):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=raw)
+            client = LLMClient(config)
             with pytest.raises(LLMError, match="no content"):
                 await client.call_model_json(
                     [{"role": "user", "content": "x"}],
@@ -276,10 +295,12 @@ class TestLLMClientCallModelValidated:
     @pytest.mark.asyncio
     async def test_succeeds_on_first_try(self):
         config = LLMConfig(name="test-model")
-        client = LLMClient(config)
         raw = _make_raw_response(content="valid answer")
 
-        with patch("litellm.acompletion", new=AsyncMock(return_value=raw)):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=raw)
+            client = LLMClient(config)
             result = await client.call_model_validated(
                 [{"role": "user", "content": "x"}],
                 validator_fn=lambda r: r.content,
@@ -290,13 +311,12 @@ class TestLLMClientCallModelValidated:
     @pytest.mark.asyncio
     async def test_retries_on_validation_failure(self):
         config = LLMConfig(name="test-model")
-        client = LLMClient(config)
 
         raw_bad = _make_raw_response(content="bad")
         raw_good = _make_raw_response(content="good")
         call_count = 0
 
-        async def mock_completion(**kwargs):
+        async def mock_create(**kwargs):
             nonlocal call_count
             call_count += 1
             return raw_bad if call_count < 3 else raw_good
@@ -306,7 +326,10 @@ class TestLLMClientCallModelValidated:
                 raise ValueError("not good enough")
             return resp.content
 
-        with patch("litellm.acompletion", new=mock_completion):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.chat.completions.create = mock_create
+            client = LLMClient(config)
             with patch("asyncio.sleep", new=AsyncMock()):
                 result = await client.call_model_validated(
                     [{"role": "user", "content": "x"}],
@@ -320,13 +343,15 @@ class TestLLMClientCallModelValidated:
     @pytest.mark.asyncio
     async def test_raises_llm_error_after_max_retries(self):
         config = LLMConfig(name="test-model")
-        client = LLMClient(config)
         raw = _make_raw_response(content="always bad")
 
         def always_fails(resp: ModelResponse) -> str:
             raise ValueError("never valid")
 
-        with patch("litellm.acompletion", new=AsyncMock(return_value=raw)):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=raw)
+            client = LLMClient(config)
             with patch("asyncio.sleep", new=AsyncMock()):
                 with pytest.raises(LLMError, match="Validation failed after"):
                     await client.call_model_validated(

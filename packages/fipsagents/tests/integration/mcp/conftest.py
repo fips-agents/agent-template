@@ -118,11 +118,11 @@ async def failing_tool(message: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _mock_litellm_response(
+def _mock_response(
     content: str | None = None,
     tool_calls: list[Any] | None = None,
 ) -> SimpleNamespace:
-    """Build a fake litellm non-streaming response."""
+    """Build a fake OpenAI non-streaming chat completion response."""
     message = SimpleNamespace(content=content, tool_calls=tool_calls)
     choice = SimpleNamespace(message=message)
     return SimpleNamespace(choices=[choice])
@@ -151,7 +151,7 @@ def _make_stream_chunk(
     finish_reason: str | None = None,
     reasoning_content: str | None = None,
 ) -> SimpleNamespace:
-    """Build a fake litellm streaming chunk."""
+    """Build a fake OpenAI streaming chunk."""
     delta = SimpleNamespace(
         content=content,
         tool_calls=tool_calls,

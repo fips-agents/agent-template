@@ -44,7 +44,7 @@ def add(a: int, b: int) -> str:
 
 
 def _chunk(*, content=None, tool_calls=None, finish_reason=None):
-    """Build a minimal mock litellm streaming chunk."""
+    """Build a minimal mock OpenAI streaming chunk."""
     from unittest.mock import MagicMock
 
     chunk = MagicMock()
@@ -60,7 +60,7 @@ def _chunk(*, content=None, tool_calls=None, finish_reason=None):
 
 
 def _tool_call_delta(*, index=0, id=None, name=None, arguments=None):
-    """Build a mock tool_call delta object as litellm would emit it."""
+    """Build a mock tool_call delta object as the OpenAI SDK would emit it."""
     from unittest.mock import MagicMock
 
     tc = MagicMock()

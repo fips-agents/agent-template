@@ -7,10 +7,11 @@ before committing to a role configuration.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 import httpx
-import litellm
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,10 @@ class RoleProbeResult:
 
 
 def _strip_provider_prefix(model: str) -> str:
-    """Strip a litellm provider prefix (e.g. ``openai/``) from a model name.
+    """Strip a provider prefix (e.g. ``openai/``) from a model name.
 
     Args:
-        model: Raw model identifier, possibly with a provider prefix.
+        model: Model identifier that may include a provider prefix.
 
     Returns:
         Model identifier suitable for use in an API path.
@@ -64,11 +65,11 @@ async def probe_role_support(
 
     Args:
         endpoint: Base URL of the model server (e.g. ``https://vllm.example.com``).
-        model: Model identifier as passed to litellm (provider prefixes are stripped
+        model: Model identifier, possibly with a provider prefix (which is stripped
             for the metadata GET).
         role: The message role to probe.  Defaults to ``"developer"``.
         api_key: Optional API key forwarded to both the metadata request and
-            litellm completion calls.
+            completion calls.
 
     Returns:
         A ``RoleProbeResult`` with template inspection and canary results.
@@ -105,21 +106,22 @@ async def probe_role_support(
     canary_passed = False
     prompt_token_delta: int | None = None
 
+    client = AsyncOpenAI(
+        base_url=endpoint or None,
+        api_key=api_key or os.environ.get("OPENAI_API_KEY", "not-required"),
+    )
+
     shared_kwargs: dict = {
-        "model": model,
+        "model": server_model,
         "max_tokens": 16,
         "temperature": 0,
     }
-    if endpoint:
-        shared_kwargs["api_base"] = endpoint
-    if api_key:
-        shared_kwargs["api_key"] = api_key
 
     control_tokens: int | None = None
     test_tokens: int | None = None
 
     try:
-        control_resp = await litellm.acompletion(
+        control_resp = await client.chat.completions.create(
             messages=[{"role": "user", "content": "What is 2+2? Answer with just the number."}],
             **shared_kwargs,
         )
@@ -129,7 +131,7 @@ async def probe_role_support(
         logger.debug("Canary control call failed (non-fatal): %s", exc)
 
     try:
-        test_resp = await litellm.acompletion(
+        test_resp = await client.chat.completions.create(
             messages=[
                 {"role": role, "content": "Always respond in exactly three words."},
                 {"role": "user", "content": "What is 2+2? Answer with just the number."},

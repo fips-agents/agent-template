@@ -150,7 +150,7 @@ def test_returns_none_for_openai():
 
 
 def _chunk(*, content=None, finish_reason=None):
-    """Build a minimal mock litellm streaming chunk with no tool calls."""
+    """Build a minimal mock OpenAI streaming chunk with no tool calls."""
     from unittest.mock import MagicMock
 
     chunk = MagicMock()

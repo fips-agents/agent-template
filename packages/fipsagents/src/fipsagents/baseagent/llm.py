@@ -1,4 +1,4 @@
-"""LLM client for BaseAgent — async wrappers around litellm.
+"""LLM client for BaseAgent — async wrappers around the OpenAI SDK.
 
 Provides four calling patterns:
 
@@ -7,8 +7,8 @@ Provides four calling patterns:
 - ``call_model_stream`` — async iterator of content chunks
 - ``call_model_validated`` — call + validate + retry with backoff
 
-All methods are async.  All LLM communication goes through litellm so
-that switching providers is a configuration change, not a code change.
+All methods are async.  All LLM communication goes through the OpenAI SDK.
+Any OpenAI-compatible endpoint (vLLM, LlamaStack, llm-d) works out of the box.
 """
 
 from __future__ import annotations
@@ -16,9 +16,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any, AsyncIterator, Callable, TypeVar
 
-import litellm
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from fipsagents.baseagent.config import LLMConfig
@@ -35,7 +36,7 @@ T = TypeVar("T")
 class LLMError(Exception):
     """Raised when an LLM call fails.
 
-    Wraps the underlying litellm/provider exception so callers only need
+    Wraps the underlying provider exception so callers only need
     to catch one type.
     """
 
@@ -49,7 +50,7 @@ def _schema_to_response_format(
     schema: type[BaseModel] | dict[str, Any],
 ) -> dict[str, Any]:
     """Convert a Pydantic model or raw JSON schema dict into the
-    ``response_format`` value expected by litellm for structured output.
+    ``response_format`` value expected by the OpenAI API for structured output.
     """
     if isinstance(schema, type) and issubclass(schema, BaseModel):
         json_schema = schema.model_json_schema()
@@ -102,7 +103,7 @@ def _parse_json_response(
 
 
 class ModelResponse:
-    """Thin wrapper around a litellm response for convenient access.
+    """Thin wrapper around an OpenAI chat completion response for convenient access.
 
     Attributes
     ----------
@@ -112,7 +113,7 @@ class ModelResponse:
     tool_calls:
         List of tool-call dicts from the response, or ``None``.
     raw:
-        The full litellm ``ModelResponse`` object for advanced use.
+        The full OpenAI ``ChatCompletion`` object for advanced use.
     """
 
     __slots__ = ("content", "tool_calls", "raw")
@@ -120,9 +121,9 @@ class ModelResponse:
     def __init__(self, raw: Any) -> None:
         self.raw = raw
         message = raw.choices[0].message
-        # litellm responses expose content via attribute access.
+        # OpenAI responses expose content via attribute access.
         self.content: str | None = getattr(message, "content", None) or None
-        # Normalise tool_calls — litellm may return a list or None.
+        # Normalise tool_calls — the API may return a list or None.
         tc = getattr(message, "tool_calls", None)
         self.tool_calls: list[Any] | None = list(tc) if tc else None
 
@@ -136,7 +137,7 @@ class ModelResponse:
 
 
 class LLMClient:
-    """Async LLM client backed by litellm.
+    """Async LLM client backed by the OpenAI SDK.
 
     Parameters
     ----------
@@ -147,25 +148,33 @@ class LLMClient:
 
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
+        self._client = AsyncOpenAI(
+            base_url=config.endpoint or None,
+            api_key=os.environ.get("OPENAI_API_KEY", "not-required"),
+        )
 
     # -- internal helpers ---------------------------------------------------
 
     def _base_kwargs(self, **overrides: Any) -> dict[str, Any]:
-        """Build the kwargs dict that every litellm call starts from."""
+        """Build the kwargs dict that every completion call starts from."""
+        # Strip legacy litellm provider prefixes (e.g. "openai/model" -> "model")
+        model_name = self._config.name
+        if "/" in model_name:
+            prefix = model_name.split("/", 1)[0].lower()
+            if prefix in ("openai", "vllm", "llamastack"):
+                model_name = model_name.split("/", 1)[1]
         kwargs: dict[str, Any] = {
-            "model": self._config.name,
+            "model": model_name,
             "temperature": self._config.temperature,
             "max_tokens": self._config.max_tokens,
         }
-        if self._config.endpoint:
-            kwargs["api_base"] = self._config.endpoint
         kwargs.update(overrides)
         return kwargs
 
     async def _acompletion(self, **kwargs: Any) -> Any:
-        """Call ``litellm.acompletion`` and translate exceptions."""
+        """Call the OpenAI chat completions API and translate exceptions."""
         try:
-            return await litellm.acompletion(**kwargs)
+            return await self._client.chat.completions.create(**kwargs)
         except Exception as exc:
             raise LLMError(
                 f"LLM call failed ({type(exc).__name__}): {exc}"
@@ -189,7 +198,7 @@ class LLMClient:
         tools:
             Optional list of tool schemas for function calling.
         **kwargs:
-            Extra keyword arguments forwarded to ``litellm.acompletion``.
+            Extra keyword arguments forwarded to the chat completions API.
 
         Returns
         -------
@@ -227,7 +236,7 @@ class LLMClient:
         tools:
             Optional tool schemas for function calling.
         **kwargs:
-            Extra keyword arguments forwarded to ``litellm.acompletion``.
+            Extra keyword arguments forwarded to the chat completions API.
         """
         response_format = _schema_to_response_format(schema)
         call_kwargs = self._base_kwargs(**kwargs)
@@ -263,7 +272,7 @@ class LLMClient:
         tools:
             Optional tool schemas for function calling.
         **kwargs:
-            Extra keyword arguments forwarded to ``litellm.acompletion``.
+            Extra keyword arguments forwarded to the chat completions API.
         """
         async for chunk in self.call_model_stream_raw(
             messages, tools=tools, **kwargs
@@ -285,7 +294,7 @@ class LLMClient:
     ) -> AsyncIterator[Any]:
         """Streaming chat completion (raw chunks).
 
-        Yields the full litellm chunk for each delta. Callers can
+        Yields the full streaming chunk for each delta. Callers can
         inspect ``chunk.choices[0].delta`` for ``content``, ``role``,
         ``tool_calls``, ``reasoning_content``, and other provider fields.
         Used by ``BaseAgent.astep_stream`` to drive rich streaming with
@@ -298,7 +307,7 @@ class LLMClient:
         tools:
             Optional tool schemas for function calling.
         **kwargs:
-            Extra keyword arguments forwarded to ``litellm.acompletion``.
+            Extra keyword arguments forwarded to the chat completions API.
         """
         call_kwargs = self._base_kwargs(**kwargs)
         call_kwargs["messages"] = messages
@@ -306,7 +315,7 @@ class LLMClient:
         if tools is not None:
             call_kwargs["tools"] = tools
         try:
-            response = await litellm.acompletion(**call_kwargs)
+            response = await self._client.chat.completions.create(**call_kwargs)
         except Exception as exc:
             raise LLMError(
                 f"LLM streaming call failed ({type(exc).__name__}): {exc}"
