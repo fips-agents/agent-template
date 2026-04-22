@@ -127,6 +127,7 @@ This agent is built on **fipsagents** (`BaseAgent`).
 
 - **Monorepo**: `packages/fipsagents/` — the source, tests, and full API reference
 - **PyPI**: `pip install fipsagents` (when scaffolded via `fips-agents create`)
+- **Vendored**: `fips-agents vendor` or `make vendor` copies the source into `src/fipsagents/` for full control
 
 Key methods on `BaseAgent`:
 
@@ -161,6 +162,8 @@ make test          # Run pytest
 make test-cov      # Run pytest with coverage
 make eval          # Run eval cases (mock LLM)
 make lint          # Run ruff linter
+make vendor        # Vendor fipsagents source (replaces PyPI dep)
+make update-framework  # Update vendored source from upstream
 make help          # Show all targets
 ```
 
