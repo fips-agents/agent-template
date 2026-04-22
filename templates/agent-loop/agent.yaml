@@ -1,4 +1,8 @@
-# agent.yaml -- Research Assistant
+# agent.yaml -- My Agent
+#
+# Framework: fipsagents (BaseAgent)
+#   Monorepo: packages/fipsagents/   |  PyPI: pip install fipsagents
+#   Docs:     see packages/fipsagents/README.md for the full API reference
 #
 # Configuration for a research-assistant agent built on BaseAgent.
 # Every value supports ${VAR:-default} env-var substitution so the same
@@ -7,6 +11,18 @@
 # Local dev:  sensible defaults work out of the box -- just run the agent.
 # Production: set env vars via ConfigMap / Secrets.  Override only what
 #             differs from the defaults below.
+
+# -- Agent identity ------------------------------------------------------------
+#
+# Name, description, and version for logging and the /v1/agent-info endpoint.
+# Populated by /create-agent from AGENT_PLAN.md.
+#
+# Production env vars:
+#   AGENT_NAME -- override the agent name per deployment
+agent:
+  name: ${AGENT_NAME:-my-agent}
+  description: "A brief description of what this agent does"
+  version: 0.1.0
 
 # -- LLM provider and generation settings ------------------------------------
 #
@@ -26,13 +42,25 @@ model:
 
 # -- MCP servers --------------------------------------------------------------
 #
-# Remote tool servers the agent connects to at startup.  Discovered tools
-# always default to llm_only visibility, regardless of tools.visibility_default
-# below.  This is intentional: MCP tools are surfaced to the LLM for reasoning,
-# while local tools default to agent_only unless their @tool decorator says
-# otherwise.
+# Remote tool servers the agent connects to at startup.  BaseAgent discovers
+# three capability types from each server:
 #
-# Uncomment and add entries as needed.  Each entry needs at minimum a `url`.
+#   Tools:     Auto-registered with llm_only visibility.  The LLM decides
+#              when to call them, just like local tools.
+#
+#   Prompts:   Available via self.get_mcp_prompt(name, arguments).
+#              Use self.list_mcp_prompts() to see what a server provides.
+#
+#   Resources: Available via self.read_resource(uri).
+#              Use self.list_mcp_resources() for discovery.
+#              Resource templates: self.list_mcp_resource_templates().
+#
+# Each entry needs either a `url` (HTTP transport) or a `command` (stdio):
+#
+#   - url: http://search-mcp:8080/mcp              # HTTP
+#   - command: /path/to/mcp-server                  # stdio
+#     args: [--verbose]
+#     env: {API_KEY: "${SEARCH_API_KEY}"}
 #
 # Production env vars (example):
 #   MCP_SEARCH_URL  -- URL for a web-search MCP server
@@ -57,8 +85,11 @@ tools:
 #
 # Markdown files with YAML frontmatter, one per file.
 # Loaded via self.load_prompt(name, **variables).
+# `system` designates which prompt becomes the system prompt.  Defaults to
+# "system" (i.e. prompts/system.md).  Supports env-var substitution.
 prompts:
   dir: ./prompts
+  system: system          # prompt file to load as the system prompt (prompts/system.md)
 
 # -- Agent loop ----------------------------------------------------------------
 #
@@ -89,6 +120,18 @@ loop:
 #   LOG_LEVEL -- e.g. WARNING
 logging:
   level: ${LOG_LEVEL:-INFO}
+
+# -- Server --------------------------------------------------------------------
+#
+# HTTP server binding for the OpenAI-compatible API.  The Helm chart's
+# service.port should match `port` here.
+#
+# Production env vars:
+#   HOST -- bind address (useful for local-only testing with 127.0.0.1)
+#   PORT -- bind port (some platforms inject this automatically)
+server:
+  host: ${HOST:-0.0.0.0}
+  port: ${PORT:-8080}
 
 # -- Memory backend (optional) -----------------------------------------------
 #

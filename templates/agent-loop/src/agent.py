@@ -1,4 +1,4 @@
-"""Research Assistant — example agent subclass demonstrating BaseAgent patterns.
+"""Research Assistant — agent subclass demonstrating BaseAgent patterns.
 
 Takes a research query, searches the web, validates relevance, and produces
 a structured report with citations.  Shows all three model-calling patterns:
@@ -7,7 +7,6 @@ a structured report with citations.  Shows all three model-calling patterns:
 
 from __future__ import annotations
 
-import json
 import logging
 
 from pydantic import BaseModel, Field
@@ -30,41 +29,12 @@ class ResearchAssistant(BaseAgent):
 
     async def step(self) -> StepResult:
         # 1. Call the model with LLM-visible tools (e.g. web_search).
-        #    The LLM decides whether to search.
+        #    The LLM decides whether to search.  run_tool_calls() handles
+        #    the dispatch loop: execute tools, append results, re-call model.
         response = await self.call_model()
+        response = await self.run_tool_calls(response)
 
-        # 2. Handle any tool calls the LLM made (search, follow-ups).
-        #    Include tool_call_id — required by the OpenAI-compatible API.
-        while response.tool_calls:
-            # Append assistant message with tool_calls to conversation history.
-            # Required: each tool_result must follow an assistant tool_use message.
-            self.messages.append({
-                "role": "assistant",
-                "content": response.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in response.tool_calls
-                ],
-            })
-            for tc in response.tool_calls:
-                fn = tc.function
-                args = json.loads(fn.arguments) if fn.arguments else {}
-                result = await self.tools.execute(fn.name, **args)
-                self.messages.append({
-                    "role": "tool",
-                    "content": result.result,
-                    "tool_call_id": tc.id,
-                })
-            response = await self.call_model()
-
-        # 3. Produce structured output via call_model_json
+        # 2. Produce structured output via call_model_json
         report_messages = self.messages + [
             {
                 "role": "user",
@@ -78,7 +48,7 @@ class ResearchAssistant(BaseAgent):
             ResearchReport, messages=report_messages
         )
 
-        # 4. Validate relevance via call_model_validated
+        # 3. Validate relevance via call_model_validated
         query = next(
             (m["content"] for m in self.messages if m["role"] == "user"),
             "",
@@ -105,7 +75,7 @@ class ResearchAssistant(BaseAgent):
         )
         logger.debug("Relevance validation passed: %s", relevance_check[:80])
 
-        # 5. Format citations using the agent-only tool (plane 1)
+        # 4. Format citations using the agent-only tool (plane 1)
         if report.citations:
             cite_result = await self.use_tool(
                 "format_citations",
@@ -139,10 +109,14 @@ class ResearchAssistant(BaseAgent):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    from fipsagents.baseagent import load_config
     from fipsagents.server import OpenAIChatServer
 
+    config = load_config("agent.yaml")
     server = OpenAIChatServer(
         agent_class=ResearchAssistant,
         config_path="agent.yaml",
+        title=config.agent.name,
+        version=config.agent.version,
     )
-    server.run()
+    server.run(host=config.server.host, port=config.server.port)

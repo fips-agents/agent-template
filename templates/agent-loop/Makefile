@@ -81,6 +81,10 @@ build: ## Build container image with podman (linux/amd64 for OpenShift)
 deploy: ## Deploy to OpenShift (make deploy PROJECT=<name>)
 	./deploy.sh $(PROJECT)
 
+.PHONY: redeploy
+redeploy: ## Force-redeploy to OpenShift (pulls fresh image, restarts pods)
+	./redeploy.sh $(PROJECT) $(IMAGE_TAG)
+
 .PHONY: clean
 clean: ## Remove agent resources from OpenShift (make clean PROJECT=<name>)
 	@if [ -z "$(PROJECT)" ]; then \
