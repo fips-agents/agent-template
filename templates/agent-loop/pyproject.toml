@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-template"
-version = "0.5.1"
+version = "0.6.0"
 description = "BaseAgent framework — production-ready AI agent for OpenShift"
 requires-python = ">=3.11"
 dependencies = [
