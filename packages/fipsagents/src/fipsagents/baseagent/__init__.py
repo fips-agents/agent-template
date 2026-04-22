@@ -3,7 +3,7 @@
 __version__ = "0.5.0.dev0"
 
 from fipsagents.baseagent.agent import BaseAgent, StepOutcome, StepResult
-from fipsagents.baseagent.config import AgentConfig, ConfigError, NodeConfig, SecurityConfig, load_config, load_config_from_string
+from fipsagents.baseagent.config import AgentConfig, AgentIdentity, ConfigError, NodeConfig, SecurityConfig, ServerConfig, load_config, load_config_from_string
 from fipsagents.baseagent.events import (
     ContentDelta,
     ReasoningDelta,
@@ -29,9 +29,11 @@ __all__ = [
     "StepResult",
     # config
     "AgentConfig",
+    "AgentIdentity",
     "ConfigError",
     "NodeConfig",
     "SecurityConfig",
+    "ServerConfig",
     "load_config",
     "load_config_from_string",
     # events (streaming)

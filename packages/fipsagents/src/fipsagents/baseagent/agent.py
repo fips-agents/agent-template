@@ -655,6 +655,92 @@ class BaseAgent(abc.ABC):
             logger.debug("Tool %s returned: %s", name, _truncate(result.result))
         return result
 
+    async def run_tool_calls(
+        self, response: ModelResponse, *, max_rounds: int = 50,
+    ) -> ModelResponse:
+        """Execute LLM-initiated tool calls and return the final response.
+
+        Drives the tool-call loop for the non-streaming path: appends the
+        assistant's tool-calling message, executes each tool via
+        :meth:`tools.execute`, appends tool-result messages, and calls the
+        model again.  Repeats until the model stops issuing tool calls or
+        *max_rounds* is reached.
+
+        For the **streaming** path, :meth:`astep_stream` handles its own
+        dispatch internally — do not use this method there.
+
+        Parameters
+        ----------
+        response:
+            The model response (from :meth:`call_model`) that may contain
+            tool calls.
+        max_rounds:
+            Safety valve — maximum number of call-execute-call cycles.
+            Prevents runaway loops if the model never stops calling tools.
+
+        Returns
+        -------
+        ModelResponse
+            The final model response with no pending tool calls.
+        """
+        import json as _json
+
+        round_count = 0
+        while response.tool_calls:
+            round_count += 1
+            if round_count > max_rounds:
+                logger.warning(
+                    "run_tool_calls hit max_rounds=%d — returning last response",
+                    max_rounds,
+                )
+                break
+
+            # Append assistant message with tool_calls to conversation history.
+            self.messages.append({
+                "role": "assistant",
+                "content": response.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in response.tool_calls
+                ],
+            })
+
+            # Execute each tool and append result.
+            for tc in response.tool_calls:
+                fn_name = tc.function.name
+                try:
+                    args = (
+                        _json.loads(tc.function.arguments)
+                        if tc.function.arguments
+                        else {}
+                    )
+                except _json.JSONDecodeError:
+                    args = {}
+
+                logger.info("run_tool_calls: executing %s", fn_name)
+                result = await self.tools.execute(fn_name, **args)
+                content_str = (
+                    result.result
+                    if not result.is_error
+                    else f"ERROR: {result.error}"
+                )
+                self.messages.append({
+                    "role": "tool",
+                    "content": content_str,
+                    "tool_call_id": tc.id,
+                })
+
+            response = await self.call_model()
+
+        return response
+
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         """Return OpenAI-compatible tool schemas for LLM-visible tools."""
         return self.tools.generate_schemas()
@@ -882,7 +968,8 @@ class BaseAgent(abc.ABC):
 
         # 1. Main system prompt.
         try:
-            system_prompt = self.prompts.get("system")
+            prompt_name = self.config.prompts.system if self.config else "system"
+            system_prompt = self.prompts.get(prompt_name)
             sections.append(system_prompt.render())
         except PromptNotFoundError:
             logger.debug("No 'system' prompt found — skipping")

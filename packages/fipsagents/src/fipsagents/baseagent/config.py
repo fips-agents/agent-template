@@ -152,6 +152,7 @@ class PromptsConfig(BaseModel):
     """Settings for prompt template discovery."""
 
     dir: str = "./prompts"
+    system: str = "system"
 
 
 class BackoffConfig(BaseModel):
@@ -286,15 +287,45 @@ class NodeConfig(BaseModel):
         return self
 
 
+class AgentIdentity(BaseModel):
+    """Agent name, description, and version for logging and API endpoints."""
+
+    name: str = "agent"
+    description: str = ""
+    version: str = "0.1.0"
+
+
+class ServerConfig(BaseModel):
+    """HTTP server binding configuration."""
+
+    host: str = "0.0.0.0"
+    port: int = Field(default=8080, gt=0, le=65535)
+
+    @field_validator("port", mode="before")
+    @classmethod
+    def _coerce_port(cls, v: Any) -> Any:
+        """Coerce string port values from env-var substitution."""
+        if isinstance(v, str):
+            try:
+                return int(v)
+            except ValueError:
+                raise ValueError(
+                    f"server.port must be an integer, got '{v}'"
+                ) from None
+        return v
+
+
 class AgentConfig(BaseModel):
     """Top-level agent configuration, corresponding to ``agent.yaml``."""
 
+    agent: AgentIdentity = Field(default_factory=AgentIdentity)
     model: LLMConfig = Field(default_factory=LLMConfig)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
     loop: LoopConfig = Field(default_factory=LoopConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    server: ServerConfig = Field(default_factory=ServerConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)

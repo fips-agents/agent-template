@@ -208,22 +208,35 @@ class OpenAIChatServer:
         # overwritten by _collect_sync / _stream on every chat request.
         system_prompt = agent.build_system_prompt()
 
-        return JSONResponse({
-            "model": {
-                "name": agent.config.model.name,
-                "temperature": agent.config.model.temperature,
-                "max_tokens": agent.config.model.max_tokens,
-            },
-            "system_prompt": system_prompt,
-            "tools": [
-                {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters,
-                }
-                for t in agent.tools.get_llm_tools()
-            ],
-        })
+        info: dict[str, Any] = {}
+
+        # Include agent identity if available in config.
+        if (
+            agent.config is not None
+            and hasattr(agent.config, "agent")
+        ):
+            info["agent"] = {
+                "name": agent.config.agent.name,
+                "description": agent.config.agent.description,
+                "version": agent.config.agent.version,
+            }
+
+        info["model"] = {
+            "name": agent.config.model.name,
+            "temperature": agent.config.model.temperature,
+            "max_tokens": agent.config.model.max_tokens,
+        }
+        info["system_prompt"] = system_prompt
+        info["tools"] = [
+            {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            }
+            for t in agent.tools.get_llm_tools()
+        ]
+
+        return JSONResponse(info)
 
     async def _chat_completions(self, req: ChatCompletionRequest):
         if self._agent is None:
