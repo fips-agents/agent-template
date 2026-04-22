@@ -99,6 +99,18 @@ clean: ## Remove agent resources from OpenShift (make clean PROJECT=<name>)
 	@echo "Done."
 
 # ---------------------------------------------------------------------------
+# Framework vendoring
+# ---------------------------------------------------------------------------
+
+.PHONY: vendor
+vendor: ## Vendor fipsagents source into this project (replaces PyPI dependency)
+	fips-agents vendor
+
+.PHONY: update-framework
+update-framework: ## Update vendored fipsagents to latest upstream version
+	fips-agents vendor --update
+
+# ---------------------------------------------------------------------------
 # Help
 # ---------------------------------------------------------------------------
 
