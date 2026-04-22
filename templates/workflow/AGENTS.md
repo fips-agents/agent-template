@@ -32,9 +32,8 @@ See `agent.yaml` for the full schema.
 ## Dependencies
 
 The workflow requires an LLM endpoint that speaks the OpenAI-compatible chat
-completions API. The template ships with `litellm` as the LLM client, which
-supports 100+ providers (vLLM, LlamaStack, Anthropic, OpenAI, Azure, Bedrock,
-and others) via model string prefix.
+completions API. The template uses the OpenAI async SDK, which connects to
+vLLM, LlamaStack, llm-d, or any other OpenAI-compatible endpoint.
 
 The workflow framework has no dependency on LangChain, LangGraph, or any
 external agent framework.

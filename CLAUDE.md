@@ -20,7 +20,7 @@ Read these before making any architectural decisions:
 These are settled. Do not revisit without explicit discussion.
 
 - **BaseAgent** is pure Python, async throughout, no framework dependencies (no LangChain, no LangGraph)
-- **litellm** is the LLM client -- provides OpenAI-compatible interface to 100+ providers
+- **openai** (async SDK) is the LLM client -- connects to any OpenAI-compatible endpoint (vLLM, LlamaStack, llm-d)
 - **FastMCP v3** is the MCP client -- not v2
 - **Two tool planes**: agent-code tools (plane 1, invisible to LLM) and LLM-callable tools (plane 2). Both go through BaseAgent for logging/RBAC/retry. Visibility per tool: `agent_only`, `llm_only`, `both`.
 - **@tool decorator** for local tools, same convention as FastMCP. Auto-discovered from `tools/` directory.
@@ -94,7 +94,7 @@ Makefile
 
 ## Dependencies
 
-- litellm -- LLM client
+- openai -- LLM client (async SDK)
 - fastmcp (v3) -- MCP client
 - memoryhub -- optional, MemoryHub memory backend
 - asyncpg -- optional, PGVector memory backend (`pip install fipsagents[pgvector]`)
@@ -127,7 +127,7 @@ The agent talks to these through configured URLs in agent.yaml. It does not depl
 ## Common Mistakes to Avoid
 
 - Do not import LlamaStack libraries into agent code -- LlamaStack is an external endpoint
-- Do not use the openai SDK directly -- use litellm for provider portability
+- Do not import openai directly -- use BaseAgent's `call_model*()` methods
 - Do not put tool dispatch logic in agent subclasses -- use `self.use_tool()`
 - Do not hardcode model names or endpoints -- use agent.yaml with env var substitution
 - Do not create ConfigMaps for prompts -- prompts are baked into the image for traceability

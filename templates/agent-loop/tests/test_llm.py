@@ -1,4 +1,4 @@
-"""Tests for fipsagents.baseagent.llm — LLM client wrapper around litellm."""
+"""Tests for fipsagents.baseagent.llm — LLM client wrapper around the OpenAI SDK."""
 
 from __future__ import annotations
 
@@ -33,11 +33,11 @@ def _make_config(**overrides: Any) -> LLMConfig:
     return LLMConfig(**defaults)
 
 
-def _make_litellm_response(
+def _make_response(
     content: str | None = "hello",
     tool_calls: list[Any] | None = None,
 ) -> MagicMock:
-    """Build a fake litellm ModelResponse with the given content/tool_calls."""
+    """Build a fake OpenAI ChatCompletion with the given content/tool_calls."""
     message = MagicMock()
     message.content = content
     message.get = lambda key, default=None: (
@@ -139,7 +139,7 @@ class TestParseJsonResponse:
 
 class TestModelResponse:
     def test_content_extraction(self):
-        raw = _make_litellm_response(content="world")
+        raw = _make_response(content="world")
         resp = ModelResponse(raw)
         assert resp.content == "world"
         assert resp.tool_calls is None
@@ -147,7 +147,7 @@ class TestModelResponse:
 
     def test_tool_calls_extraction(self):
         tc = [{"id": "call_1", "function": {"name": "foo", "arguments": "{}"}}]
-        raw = _make_litellm_response(content=None, tool_calls=tc)
+        raw = _make_response(content=None, tool_calls=tc)
         resp = ModelResponse(raw)
         assert resp.content is None
         assert resp.tool_calls is not None
@@ -155,7 +155,7 @@ class TestModelResponse:
         assert str(resp) == ""
 
     def test_raw_preserved(self):
-        raw = _make_litellm_response(content="hi")
+        raw = _make_response(content="hi")
         resp = ModelResponse(raw)
         assert resp.raw is raw
 
@@ -166,7 +166,7 @@ class TestModelResponse:
 
 
 class TestConfigPassthrough:
-    """Verify that LLMConfig values reach litellm.acompletion."""
+    """Verify that LLMConfig values reach the OpenAI chat completions API."""
 
     @pytest.mark.asyncio
     async def test_base_kwargs_forwarded(self):
@@ -176,41 +176,48 @@ class TestConfigPassthrough:
             temperature=0.3,
             max_tokens=512,
         )
-        client = LLMClient(config)
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response()
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response()
             )
+            client = LLMClient(config)
             await client.call_model(SAMPLE_MESSAGES)
-            call_kwargs = mock_litellm.acompletion.call_args[1]
+            # base_url is set on the client constructor, not in create() kwargs
+            mock_openai_cls.assert_called_once()
+            ctor_kwargs = mock_openai_cls.call_args[1]
+            assert ctor_kwargs["base_url"] == "http://host:9000/v1"
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
             assert call_kwargs["model"] == "my-model"
-            assert call_kwargs["api_base"] == "http://host:9000/v1"
+            assert "api_base" not in call_kwargs
             assert call_kwargs["temperature"] == 0.3
             assert call_kwargs["max_tokens"] == 512
             assert call_kwargs["messages"] is SAMPLE_MESSAGES
 
     @pytest.mark.asyncio
     async def test_extra_kwargs_forwarded(self):
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response()
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response()
             )
+            client = LLMClient(_make_config())
             await client.call_model(SAMPLE_MESSAGES, top_p=0.9, seed=42)
-            call_kwargs = mock_litellm.acompletion.call_args[1]
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
             assert call_kwargs["top_p"] == 0.9
             assert call_kwargs["seed"] == 42
 
     @pytest.mark.asyncio
     async def test_kwargs_override_config(self):
         """Caller-provided kwargs take precedence over config defaults."""
-        client = LLMClient(_make_config(temperature=0.5))
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response()
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response()
             )
+            client = LLMClient(_make_config(temperature=0.5))
             await client.call_model(SAMPLE_MESSAGES, temperature=0.0)
-            call_kwargs = mock_litellm.acompletion.call_args[1]
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
             assert call_kwargs["temperature"] == 0.0
 
 
@@ -222,58 +229,63 @@ class TestConfigPassthrough:
 class TestCallModel:
     @pytest.mark.asyncio
     async def test_returns_model_response(self):
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content="hi there")
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content="hi there")
             )
+            client = LLMClient(_make_config())
             result = await client.call_model(SAMPLE_MESSAGES)
             assert isinstance(result, ModelResponse)
             assert result.content == "hi there"
 
     @pytest.mark.asyncio
     async def test_tool_schemas_passed(self):
-        client = LLMClient(_make_config())
         tools = [{"type": "function", "function": {"name": "get_weather"}}]
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response()
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response()
             )
+            client = LLMClient(_make_config())
             await client.call_model(SAMPLE_MESSAGES, tools=tools)
-            call_kwargs = mock_litellm.acompletion.call_args[1]
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
             assert call_kwargs["tools"] is tools
 
     @pytest.mark.asyncio
     async def test_tools_omitted_when_none(self):
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response()
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response()
             )
+            client = LLMClient(_make_config())
             await client.call_model(SAMPLE_MESSAGES)
-            call_kwargs = mock_litellm.acompletion.call_args[1]
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
             assert "tools" not in call_kwargs
 
     @pytest.mark.asyncio
     async def test_tool_call_response(self):
         """When model returns tool calls, they are accessible on the response."""
         tc = [{"id": "call_99", "function": {"name": "do_thing", "arguments": '{"a": 1}'}}]
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content=None, tool_calls=tc)
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content=None, tool_calls=tc)
             )
+            client = LLMClient(_make_config())
             result = await client.call_model(SAMPLE_MESSAGES)
             assert result.tool_calls is not None
             assert result.tool_calls[0]["id"] == "call_99"
 
     @pytest.mark.asyncio
-    async def test_litellm_exception_wrapped(self):
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
+    async def test_openai_exception_wrapped(self):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
                 side_effect=RuntimeError("connection refused")
             )
+            client = LLMClient(_make_config())
             with pytest.raises(LLMError, match="connection refused"):
                 await client.call_model(SAMPLE_MESSAGES)
 
@@ -292,19 +304,20 @@ class TestCallModelJson:
             city: str
             temp_f: float
 
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(
                     content='{"city": "Portland", "temp_f": 55.0}'
                 )
             )
+            client = LLMClient(_make_config())
             result = await client.call_model_json(SAMPLE_MESSAGES, Weather)
             assert isinstance(result, Weather)
             assert result.city == "Portland"
             assert result.temp_f == 55.0
 
-            call_kwargs = mock_litellm.acompletion.call_args[1]
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
             rf = call_kwargs["response_format"]
             assert rf["type"] == "json_schema"
             assert rf["json_schema"]["name"] == "Weather"
@@ -312,21 +325,23 @@ class TestCallModelJson:
     @pytest.mark.asyncio
     async def test_dict_schema(self):
         schema = {"title": "Coord", "type": "object", "properties": {"x": {"type": "integer"}}}
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content='{"x": 7}')
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content='{"x": 7}')
             )
+            client = LLMClient(_make_config())
             result = await client.call_model_json(SAMPLE_MESSAGES, schema)
             assert result == {"x": 7}
 
     @pytest.mark.asyncio
     async def test_no_content_raises(self):
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content=None)
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content=None)
             )
+            client = LLMClient(_make_config())
             with pytest.raises(LLMError, match="no content"):
                 await client.call_model_json(
                     SAMPLE_MESSAGES, {"type": "object"}
@@ -334,11 +349,12 @@ class TestCallModelJson:
 
     @pytest.mark.asyncio
     async def test_invalid_json_from_model(self):
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content="{broken json")
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content="{broken json")
             )
+            client = LLMClient(_make_config())
             with pytest.raises(LLMError, match="invalid JSON"):
                 await client.call_model_json(
                     SAMPLE_MESSAGES, {"type": "object"}
@@ -346,16 +362,17 @@ class TestCallModelJson:
 
     @pytest.mark.asyncio
     async def test_tools_forwarded(self):
-        client = LLMClient(_make_config())
         tools = [{"type": "function", "function": {"name": "helper"}}]
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content='{}')
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content='{}')
             )
+            client = LLMClient(_make_config())
             await client.call_model_json(
                 SAMPLE_MESSAGES, {"type": "object"}, tools=tools
             )
-            call_kwargs = mock_litellm.acompletion.call_args[1]
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
             assert call_kwargs["tools"] is tools
 
 
@@ -369,17 +386,16 @@ class TestCallModelStream:
     async def test_yields_content_chunks(self):
         chunks_data = ["Hello", " ", "world"]
 
-        async def fake_acompletion(**kwargs):
-            async def _gen():
-                for text in chunks_data:
-                    delta = SimpleNamespace(content=text)
-                    choice = SimpleNamespace(delta=delta)
-                    yield SimpleNamespace(choices=[choice])
-            return _gen()
+        async def _gen():
+            for text in chunks_data:
+                delta = SimpleNamespace(content=text)
+                choice = SimpleNamespace(delta=delta)
+                yield SimpleNamespace(choices=[choice])
 
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = fake_acompletion
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=_gen())
+            client = LLMClient(_make_config())
             collected = []
             async for chunk in client.call_model_stream(SAMPLE_MESSAGES):
                 collected.append(chunk)
@@ -388,21 +404,20 @@ class TestCallModelStream:
     @pytest.mark.asyncio
     async def test_skips_none_content(self):
         """Chunks with None content (e.g. role-only deltas) are skipped."""
-        async def fake_acompletion(**kwargs):
-            async def _gen():
-                # First chunk: role only, no content
-                yield SimpleNamespace(
-                    choices=[SimpleNamespace(delta=SimpleNamespace(content=None))]
-                )
-                # Second chunk: actual content
-                yield SimpleNamespace(
-                    choices=[SimpleNamespace(delta=SimpleNamespace(content="data"))]
-                )
-            return _gen()
+        async def _gen():
+            # First chunk: role only, no content
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=None))]
+            )
+            # Second chunk: actual content
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="data"))]
+            )
 
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = fake_acompletion
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=_gen())
+            client = LLMClient(_make_config())
             collected = []
             async for chunk in client.call_model_stream(SAMPLE_MESSAGES):
                 collected.append(chunk)
@@ -410,47 +425,44 @@ class TestCallModelStream:
 
     @pytest.mark.asyncio
     async def test_stream_kwarg_set(self):
-        async def fake_acompletion(**kwargs):
-            assert kwargs["stream"] is True
+        async def _gen():
+            return
+            yield  # make it an async generator
 
-            async def _gen():
-                return
-                yield  # make it an async generator
-
-            return _gen()
-
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = fake_acompletion
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=_gen())
+            client = LLMClient(_make_config())
             async for _ in client.call_model_stream(SAMPLE_MESSAGES):
                 pass
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
+            assert call_kwargs["stream"] is True
 
     @pytest.mark.asyncio
     async def test_stream_tools_forwarded(self):
         tools = [{"type": "function", "function": {"name": "search"}}]
 
-        async def fake_acompletion(**kwargs):
-            assert kwargs["tools"] is tools
+        async def _gen():
+            return
+            yield
 
-            async def _gen():
-                return
-                yield
-
-            return _gen()
-
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = fake_acompletion
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=_gen())
+            client = LLMClient(_make_config())
             async for _ in client.call_model_stream(SAMPLE_MESSAGES, tools=tools):
                 pass
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
+            assert call_kwargs["tools"] is tools
 
     @pytest.mark.asyncio
     async def test_stream_exception_wrapped(self):
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
                 side_effect=ConnectionError("timeout")
             )
+            client = LLMClient(_make_config())
             with pytest.raises(LLMError, match="timeout"):
                 async for _ in client.call_model_stream(SAMPLE_MESSAGES):
                     pass
@@ -464,17 +476,18 @@ class TestCallModelStream:
 class TestCallModelValidated:
     @pytest.mark.asyncio
     async def test_succeeds_on_first_try(self):
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content="42")
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content="42")
             )
+            client = LLMClient(_make_config())
             result = await client.call_model_validated(
                 SAMPLE_MESSAGES,
                 lambda resp: int(resp.content),
             )
             assert result == 42
-            assert mock_litellm.acompletion.call_count == 1
+            assert mock_client.chat.completions.create.call_count == 1
 
     @pytest.mark.asyncio
     async def test_retries_then_succeeds(self):
@@ -488,19 +501,20 @@ class TestCallModelValidated:
                 raise ValueError(f"not ready yet (attempt {call_count})")
             return "valid"
 
-        client = LLMClient(_make_config())
         with (
-            patch("fipsagents.baseagent.llm.litellm") as mock_litellm,
+            patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls,
             patch("fipsagents.baseagent.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
         ):
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content="data")
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content="data")
             )
+            client = LLMClient(_make_config())
             result = await client.call_model_validated(
                 SAMPLE_MESSAGES, flaky_validator, max_retries=3
             )
             assert result == "valid"
-            assert mock_litellm.acompletion.call_count == 3
+            assert mock_client.chat.completions.create.call_count == 3
             # Two sleeps: after attempt 0 and attempt 1
             assert mock_sleep.call_count == 2
 
@@ -514,14 +528,15 @@ class TestCallModelValidated:
             attempt += 1
             raise ValueError("nope")
 
-        client = LLMClient(_make_config())
         with (
-            patch("fipsagents.baseagent.llm.litellm") as mock_litellm,
+            patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls,
             patch("fipsagents.baseagent.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
         ):
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content="x")
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content="x")
             )
+            client = LLMClient(_make_config())
             with pytest.raises(LLMError, match="Validation failed after 4 attempts"):
                 await client.call_model_validated(
                     SAMPLE_MESSAGES, always_fail, max_retries=3
@@ -532,14 +547,15 @@ class TestCallModelValidated:
 
     @pytest.mark.asyncio
     async def test_all_retries_exhausted(self):
-        client = LLMClient(_make_config())
         with (
-            patch("fipsagents.baseagent.llm.litellm") as mock_litellm,
+            patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls,
             patch("fipsagents.baseagent.llm.asyncio.sleep", new_callable=AsyncMock),
         ):
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content="bad")
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content="bad")
             )
+            client = LLMClient(_make_config())
             with pytest.raises(LLMError, match="Validation failed after 2 attempts") as exc_info:
                 await client.call_model_validated(
                     SAMPLE_MESSAGES,
@@ -552,49 +568,52 @@ class TestCallModelValidated:
     @pytest.mark.asyncio
     async def test_max_retries_zero(self):
         """With max_retries=0, only one attempt is made."""
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content="ok")
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content="ok")
             )
+            client = LLMClient(_make_config())
             result = await client.call_model_validated(
                 SAMPLE_MESSAGES,
                 lambda r: r.content.upper(),
                 max_retries=0,
             )
             assert result == "OK"
-            assert mock_litellm.acompletion.call_count == 1
+            assert mock_client.chat.completions.create.call_count == 1
 
     @pytest.mark.asyncio
     async def test_tools_forwarded(self):
         tools = [{"type": "function", "function": {"name": "validate"}}]
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
-                return_value=_make_litellm_response(content="ok")
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_response(content="ok")
             )
+            client = LLMClient(_make_config())
             await client.call_model_validated(
                 SAMPLE_MESSAGES,
                 lambda r: r.content,
                 tools=tools,
             )
-            call_kwargs = mock_litellm.acompletion.call_args[1]
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
             assert call_kwargs["tools"] is tools
 
     @pytest.mark.asyncio
     async def test_llm_error_propagates_immediately(self):
         """If the LLM call itself fails, the error propagates without retry."""
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
                 side_effect=RuntimeError("provider down")
             )
+            client = LLMClient(_make_config())
             with pytest.raises(LLMError, match="provider down"):
                 await client.call_model_validated(
                     SAMPLE_MESSAGES, lambda r: r.content
                 )
-            # Only one attempt — LLMError from call_model is not retried
-            assert mock_litellm.acompletion.call_count == 1
+            # Only one attempt -- LLMError from call_model is not retried
+            assert mock_client.chat.completions.create.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -603,7 +622,7 @@ class TestCallModelValidated:
 
 
 class TestErrorWrapping:
-    """Various litellm exception types should all become LLMError."""
+    """Various OpenAI SDK exception types should all become LLMError."""
 
     @pytest.mark.parametrize(
         "exc_class, exc_msg",
@@ -617,11 +636,12 @@ class TestErrorWrapping:
     )
     @pytest.mark.asyncio
     async def test_exception_types_wrapped(self, exc_class, exc_msg):
-        client = LLMClient(_make_config())
-        with patch("fipsagents.baseagent.llm.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
                 side_effect=exc_class(exc_msg)
             )
+            client = LLMClient(_make_config())
             with pytest.raises(LLMError) as exc_info:
                 await client.call_model(SAMPLE_MESSAGES)
             assert exc_msg in str(exc_info.value)

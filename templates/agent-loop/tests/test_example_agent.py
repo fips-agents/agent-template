@@ -57,11 +57,11 @@ def _make_config(**overrides: Any) -> AgentConfig:
     return AgentConfig(**defaults)
 
 
-def _mock_litellm_response(
+def _mock_response(
     content: str | None = None,
     tool_calls: list[Any] | None = None,
 ) -> MagicMock:
-    """Build a fake litellm response object matching ModelResponse expectations."""
+    """Build a fake OpenAI ChatCompletion object matching ModelResponse expectations."""
     message = SimpleNamespace(content=content, tool_calls=tool_calls)
     choice = SimpleNamespace(message=message)
     return SimpleNamespace(choices=[choice])
@@ -157,7 +157,7 @@ class TestResearchAssistantStep:
 
         # First call_model: no tool calls, just a text response
         first_response = ModelResponse(
-            _mock_litellm_response(content="Quantum computing uses qubits.")
+            _mock_response(content="Quantum computing uses qubits.")
         )
         # call_model_json: return a structured report
         report_data = ResearchReport(
@@ -167,7 +167,7 @@ class TestResearchAssistantStep:
         )
         # call_model_validated: validation passes
         validation_response = ModelResponse(
-            _mock_litellm_response(content="Yes, the report addresses the query.")
+            _mock_response(content="Yes, the report addresses the query.")
         )
 
         agent.llm.call_model = AsyncMock(
@@ -192,11 +192,11 @@ class TestResearchAssistantStep:
         # First call: LLM wants to search
         search_tc = _make_tool_call("web_search", {"query": "container orchestration"})
         first_response = ModelResponse(
-            _mock_litellm_response(content=None, tool_calls=[search_tc])
+            _mock_response(content=None, tool_calls=[search_tc])
         )
         # Second call: LLM is satisfied, no more tool calls
         second_response = ModelResponse(
-            _mock_litellm_response(
+            _mock_response(
                 content="Container orchestration manages containerized apps."
             )
         )
@@ -226,10 +226,10 @@ class TestResearchAssistantStep:
 
         search_tc = _make_tool_call("web_search", {"query": "container orchestration"})
         first_response = ModelResponse(
-            _mock_litellm_response(content=None, tool_calls=[search_tc])
+            _mock_response(content=None, tool_calls=[search_tc])
         )
         second_response = ModelResponse(
-            _mock_litellm_response(
+            _mock_response(
                 content="Container orchestration manages containerized apps."
             )
         )
@@ -287,7 +287,7 @@ class TestResearchAssistantStep:
         agent.add_message("user", "Tell me about Kubernetes.")
 
         first_response = ModelResponse(
-            _mock_litellm_response(content="Kubernetes is an orchestrator.")
+            _mock_response(content="Kubernetes is an orchestrator.")
         )
         report_data = ResearchReport(
             answer="Kubernetes orchestrates containers.",

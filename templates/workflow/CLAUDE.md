@@ -187,7 +187,7 @@ Uses `${VAR:-default}` for env var substitution. Key env vars:
 
 - **Do not edit `src/workflow/`.** It is the framework. Your code goes in `src/agent.py`, `tools/`, `prompts/`, `skills/`, and `rules/`.
 - **Do not implement `step()` on AgentNodes.** The core method is `process(state) -> state`. The workflow runner drives execution, not the agent loop.
-- **Do not import `openai` directly.** Use litellm through AgentNode's `call_model*` methods.
+- **Do not import `openai` directly.** Use AgentNode's `call_model*` methods.
 - **Do not hardcode model names or endpoints.** Use `agent.yaml` with `${VAR:-default}`.
 - **Do not skip `visibility` on tools.** Every tool must declare its plane.
 - **Do not omit `tool_call_id` when appending tool results.** The API requires it.
@@ -208,7 +208,7 @@ The image is immutable: code, tools, prompts, skills, rules, and `agent.yaml` de
 
 ## Dependencies
 
-- **litellm** -- LLM client (provider-portable)
+- **openai** -- LLM client (async SDK for OpenAI-compatible endpoints)
 - **fastmcp** (v3) -- MCP client
 - **pydantic** -- Config validation, state models, structured output
 - **pyyaml** -- Config parsing

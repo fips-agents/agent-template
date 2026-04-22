@@ -31,7 +31,7 @@ probes:
 # Leave blank to fall back to the defaults baked into the image.
 config:
   LOG_LEVEL: INFO
-  # litellm requires this to be set even for unauthenticated vLLM endpoints.
+  # The openai SDK requires this to be set even for unauthenticated vLLM endpoints.
   # Any non-empty string works; see agent.yaml's header comment for context.
   OPENAI_API_KEY: "not-required"
 

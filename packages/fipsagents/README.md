@@ -41,7 +41,7 @@ if __name__ == "__main__":
 
 ## What's included
 
-- **LLM client** via litellm — one interface for 100+ providers (vLLM, LlamaStack, OpenAI, Anthropic, Azure, Bedrock)
+- **LLM client** via the openai async SDK — connects to any OpenAI-compatible endpoint (vLLM, LlamaStack, llm-d)
 - **Two-plane tool system** — `@tool` decorator with `agent_only`, `llm_only`, or `both` visibility
 - **MCP client** via FastMCP v3 — connect to remote servers (tools, prompts, and resources)
 - **Prompt loading** — Markdown with YAML frontmatter

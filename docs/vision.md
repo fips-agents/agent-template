@@ -8,7 +8,7 @@ A developer runs `fips-agents create agent my-agent`, selects a template variant
 
 **Agent code stays small even as capability grows.** BaseAgent handles LLM communication, tool dispatch, MCP connections, prompt loading, skill management, memory access, and lifecycle. The subclass implements only the agent's unique behavior. Adding a new tool means writing a decorated function in `tools/`. Adding a new prompt means dropping a Markdown file in `prompts/`. Adding memory means running `memoryhub config init`. None of these changes require modifying the agent subclass.
 
-**Switching LLM providers is a configuration change.** Through litellm, the same agent code works against vLLM, LlamaStack, Anthropic, OpenAI, Azure, Bedrock, and 100+ other providers. Moving from a local vLLM instance to a cloud-hosted model for comparison testing requires changing a model string and endpoint URL in `agent.yaml`, not rewriting code.
+**Switching LLM endpoints is a configuration change.** The same agent code works against vLLM, LlamaStack, llm-d, or any OpenAI-compatible endpoint. Moving from a local vLLM instance to a cloud-hosted model for comparison testing requires changing a model name and endpoint URL in `agent.yaml`, not rewriting code.
 
 **Teams converge on a shared structure.** When every agent follows the same directory layout, deployment pattern, and base class, code review becomes faster, onboarding becomes simpler, and agents become interchangeable in multi-agent architectures. A developer who has worked on one agent can immediately navigate any other.
 

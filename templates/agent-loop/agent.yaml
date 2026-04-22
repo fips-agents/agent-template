@@ -26,13 +26,13 @@ agent:
 
 # -- LLM provider and generation settings ------------------------------------
 #
-# litellm routes the call, so `name` uses litellm model strings.
-# Point `endpoint` at vLLM, LlamaStack, or any OpenAI-compatible API.
+# `name` is the model identifier passed to the OpenAI-compatible endpoint.
+# Point `endpoint` at vLLM, LlamaStack, llm-d, or any OpenAI-compatible API.
 #
 # Production env vars:
 #   MODEL_ENDPOINT  -- vLLM / LlamaStack URL (e.g. https://vllm.apps.cluster.example.com/v1)
 #   MODEL_NAME      -- deployed model identifier
-#   OPENAI_API_KEY  -- required by litellm even for unauthenticated vLLM endpoints;
+#   OPENAI_API_KEY  -- required by the openai SDK even for unauthenticated vLLM endpoints;
 #                      set to any non-empty string (e.g. "not-required")
 model:
   endpoint: ${MODEL_ENDPOINT:-http://llamastack:8321/v1}

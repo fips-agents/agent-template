@@ -1,6 +1,6 @@
 # Architecture
 
-agent-template is a monorepo of agent templates for the `fips-agents` CLI. It scaffolds production-ready AI agents that deploy to OpenShift, communicate with LLMs through litellm's 100+ provider integrations, and let developers focus on the work that actually differentiates their agent: prompts, tools, model selection, and evals.
+agent-template is a monorepo of agent templates for the `fips-agents` CLI. It scaffolds production-ready AI agents that deploy to OpenShift, communicate with LLMs through the OpenAI SDK, and let developers focus on the work that actually differentiates their agent: prompts, tools, model selection, and evals.
 
 This document describes the system architecture, core abstractions, and the reasoning behind each design decision.
 
@@ -32,9 +32,9 @@ BaseAgent is the core abstraction. It is pure Python, async throughout, and carr
 
 ### LLM Client
 
-All LLM communication goes through litellm, which provides a unified OpenAI-compatible interface to 100+ providers (vLLM, LlamaStack, Anthropic, OpenAI, Azure, Bedrock, and others). Switching providers is a configuration change -- update the model string prefix and endpoint URL -- not a code change.
+All LLM communication goes through the OpenAI async SDK, which connects to any OpenAI-compatible endpoint (vLLM, LlamaStack, llm-d). Switching endpoints is a configuration change -- update the model name and endpoint URL in `agent.yaml` -- not a code change.
 
-**Important:** litellm's OpenAI provider requires `OPENAI_API_KEY` to be set even when connecting to unauthenticated endpoints (e.g., a vLLM instance with no auth). Set it to any non-empty string (e.g., `OPENAI_API_KEY=not-required`) in the agent's environment. Without this, litellm raises `AuthenticationError` before the request is sent.
+**Important:** The OpenAI SDK requires `OPENAI_API_KEY` to be set even when connecting to unauthenticated endpoints (e.g., a vLLM instance with no auth). Set it to any non-empty string (e.g., `OPENAI_API_KEY=not-required`) in the agent's environment. Without this, the SDK raises `AuthenticationError` before the request is sent.
 
 BaseAgent exposes five methods for model interaction:
 
@@ -488,13 +488,13 @@ The `src/fipsagents/baseagent/` package contains the framework (installed via th
 
 The dependency footprint is deliberately minimal:
 
-- **litellm** -- LLM client providing the OpenAI-compatible interface to 100+ providers
+- **openai** -- LLM client (async SDK) for OpenAI-compatible endpoints (vLLM, LlamaStack, llm-d)
 - **FastMCP v3** -- MCP client for remote tool server integration
 - **memoryhub SDK** -- optional; MemoryHub programmatic access (one of several pluggable memory backends)
 - **asyncpg** -- optional; PGVector memory backend (`pip install fipsagents[pgvector]`)
 - **FastAPI + uvicorn** -- optional; OpenAI-compatible HTTP server (`pip install fipsagents[server]`)
 - **pydantic** -- configuration validation and structured output schemas
-- **httpx** -- async HTTP (also used internally by litellm and FastMCP)
+- **httpx** -- async HTTP (also used internally by FastMCP)
 - **python-frontmatter** -- parsing YAML frontmatter in prompt and skill files
 
 Everything else comes from the Python standard library. There are no agent framework dependencies. This is intentional: frameworks impose opinions about control flow, state management, and composition that conflict with keeping the BaseAgent abstraction simple and the developer's subclass small.

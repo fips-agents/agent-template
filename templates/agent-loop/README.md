@@ -42,7 +42,7 @@ environment variable substitution — same file works for local dev and producti
 | Section | Key env vars | Purpose |
 |---------|-------------|---------|
 | `agent` | `AGENT_NAME` | Name, description, version |
-| `model` | `MODEL_ENDPOINT`, `MODEL_NAME` | LLM provider (via litellm) |
+| `model` | `MODEL_ENDPOINT`, `MODEL_NAME` | LLM endpoint (OpenAI-compatible) |
 | `mcp_servers` | `MCP_*_URL` | Remote MCP server connections |
 | `prompts` | — | Prompt directory and system prompt designation |
 | `server` | `HOST`, `PORT` | HTTP server binding |

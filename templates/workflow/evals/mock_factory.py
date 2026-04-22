@@ -1,4 +1,4 @@
-"""Mock object factories for eval workflow instances and LLM responses."""
+"""Mock object factories for eval workflow instances and OpenAI SDK responses."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from evals.discovery import (
 )
 
 
-def _build_mock_litellm_response(
+def _build_mock_response(
     content: str | None = None,
     tool_calls: list[Any] | None = None,
 ) -> Any:
-    """Construct a fake litellm response matching ModelResponse expectations."""
+    """Construct a fake OpenAI ChatCompletion matching ModelResponse expectations."""
     message = SimpleNamespace(content=content, tool_calls=tool_calls)
     choice = SimpleNamespace(message=message)
     return SimpleNamespace(choices=[choice])
@@ -53,13 +53,13 @@ def _build_mock_responses(
         # Simulate a tool call then a text response.
         search_tc = _make_tool_call_obj(tool_name, {"query": query})
         side_effects.append(
-            ModelResponse(_build_mock_litellm_response(tool_calls=[search_tc]))
+            ModelResponse(_build_mock_response(tool_calls=[search_tc]))
         )
 
     # Text response after tool calls (or as the only response).
     side_effects.append(
         ModelResponse(
-            _build_mock_litellm_response(
+            _build_mock_response(
                 content=f"Based on research about '{query}', here are the findings."
             )
         )
@@ -69,7 +69,7 @@ def _build_mock_responses(
     summary_text = f"Summary of research on '{query}': key findings and conclusions."
     side_effects.append(
         ModelResponse(
-            _build_mock_litellm_response(content=summary_text)
+            _build_mock_response(content=summary_text)
         )
     )
 

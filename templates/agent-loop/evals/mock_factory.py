@@ -1,4 +1,4 @@
-"""Mock object factories for eval agent instances and LLM responses."""
+"""Mock object factories for eval agent instances and OpenAI SDK responses."""
 
 from __future__ import annotations
 
@@ -45,11 +45,11 @@ def _build_mock_instance(model_class: type) -> Any:
     return model_class(**mock_data)
 
 
-def _build_mock_litellm_response(
+def _build_mock_response(
     content: str | None = None,
     tool_calls: list[Any] | None = None,
 ) -> Any:
-    """Construct a fake litellm response matching ModelResponse expectations."""
+    """Construct a fake OpenAI ChatCompletion matching ModelResponse expectations."""
     message = SimpleNamespace(content=content, tool_calls=tool_calls)
     choice = SimpleNamespace(message=message)
     return SimpleNamespace(choices=[choice])
@@ -91,7 +91,7 @@ def _build_mock_responses(
         # No LLM-visible tools — skip tool call simulation, just return text.
         side_effects.append(
             ModelResponse(
-                _build_mock_litellm_response(
+                _build_mock_response(
                     content=f"Based on analysis of '{query}', here are the findings."
                 )
             )
@@ -100,17 +100,17 @@ def _build_mock_responses(
         # Simulate multiple tool call rounds.
         tc1 = _make_tool_call_obj(tool_name, {"query": query})
         side_effects.append(
-            ModelResponse(_build_mock_litellm_response(tool_calls=[tc1]))
+            ModelResponse(_build_mock_response(tool_calls=[tc1]))
         )
         tc2 = _make_tool_call_obj(
             tool_name, {"query": f"{query} detailed comparison"}
         )
         side_effects.append(
-            ModelResponse(_build_mock_litellm_response(tool_calls=[tc2]))
+            ModelResponse(_build_mock_response(tool_calls=[tc2]))
         )
         side_effects.append(
             ModelResponse(
-                _build_mock_litellm_response(
+                _build_mock_response(
                     content=f"After thorough research on '{query}', here are the findings."
                 )
             )
@@ -119,11 +119,11 @@ def _build_mock_responses(
         # Single tool call round.
         search_tc = _make_tool_call_obj(tool_name, {"query": query})
         side_effects.append(
-            ModelResponse(_build_mock_litellm_response(tool_calls=[search_tc]))
+            ModelResponse(_build_mock_response(tool_calls=[search_tc]))
         )
         side_effects.append(
             ModelResponse(
-                _build_mock_litellm_response(
+                _build_mock_response(
                     content=f"Based on my research about '{query}', here are the findings."
                 )
             )

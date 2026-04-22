@@ -10,8 +10,8 @@
 
 # -- LLM provider and generation settings ------------------------------------
 #
-# litellm routes the call, so `name` uses litellm model strings.
-# Point `endpoint` at vLLM, LlamaStack, or any OpenAI-compatible API.
+# `name` is the model identifier passed to the OpenAI-compatible endpoint.
+# Point `endpoint` at vLLM, LlamaStack, llm-d, or any OpenAI-compatible API.
 #
 # Production env vars:
 #   MODEL_ENDPOINT  -- vLLM / LlamaStack URL (e.g. https://vllm.apps.cluster.example.com/v1)

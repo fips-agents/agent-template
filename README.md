@@ -1,6 +1,6 @@
 # agent-template
 
-Agent templates for the `fips-agents` CLI. Scaffolds production-ready AI agents that deploy to OpenShift, communicate with LLMs via litellm (100+ providers), and let developers focus on prompts, tools, model selection, and evals.
+Agent templates for the `fips-agents` CLI. Scaffolds production-ready AI agents that deploy to OpenShift, communicate with LLMs via the OpenAI async SDK (any OpenAI-compatible endpoint), and let developers focus on prompts, tools, model selection, and evals.
 
 ## Status
 
@@ -10,7 +10,7 @@ Both templates (agent-loop and workflow) are implemented, along with the shared 
 
 A developer runs `fips-agents create agent my-agent`, selects a template variant (agent loop or agentic workflow), and gets a project that compiles, runs locally, and deploys to OpenShift via Helm. The scaffolded project includes AI-assisted slash commands (`/plan-agent`, `/create-agent`, `/exercise-agent`, `/deploy-agent`) that guide development from design through deployment.
 
-The core abstraction is BaseAgent -- a pure Python async class that handles LLM communication (via litellm), tool dispatch across two planes (agent-code and LLM-callable), MCP client connections (FastMCP v3), prompt loading, skill management (agentskills.io spec), and lifecycle. A typical agent subclass is 20-30 lines.
+The core abstraction is BaseAgent -- a pure Python async class that handles LLM communication (via the OpenAI async SDK), tool dispatch across two planes (agent-code and LLM-callable), MCP client connections (FastMCP v3), prompt loading, skill management (agentskills.io spec), and lifecycle. A typical agent subclass is 20-30 lines.
 
 ## Documentation
 
@@ -27,6 +27,5 @@ Agents built from this template run on OpenShift and consume services deployed b
 - [fips-agents/code-sandbox](https://github.com/fips-agents/code-sandbox) -- Code execution sandbox sidecar
 - [fips-agents/mcp-server-template](https://github.com/fips-agents/mcp-server-template) -- Sister template for MCP servers
 - [redhat-ai-americas/memory-hub](https://github.com/redhat-ai-americas/memory-hub) -- Optional enterprise memory layer
-- [BerriAI/litellm](https://github.com/BerriAI/litellm) -- LLM client layer
 - [agentskills.io](https://agentskills.io/specification) -- Skills specification
 - [agents.md](https://agents.md/) -- AGENTS.md open standard

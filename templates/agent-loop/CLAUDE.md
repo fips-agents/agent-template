@@ -208,7 +208,7 @@ The agent runs locally with zero external config using the defaults.
 
 ## Common Mistakes
 
-- **Do not import `openai` directly.** Use litellm through BaseAgent's `call_model*` methods.
+- **Do not import `openai` directly.** Use BaseAgent's `call_model*` methods.
 - **Do not import LlamaStack libraries.** LlamaStack is an external endpoint, not a library dependency.
 - **Do not hardcode model names or endpoints.** Use `agent.yaml` with `${VAR:-default}`.
 - **Do not skip `visibility` on tools.** Every tool must declare its plane.
@@ -232,7 +232,7 @@ The image is immutable: code, tools, prompts, skills, rules, and `agent.yaml` de
 
 ## Dependencies
 
-- **litellm** -- LLM client (provider-portable)
+- **openai** -- LLM client (async SDK for OpenAI-compatible endpoints)
 - **fastmcp** (v3) -- MCP client
 - **pydantic** -- Config validation and structured output schemas
 - **pyyaml** -- Config parsing
