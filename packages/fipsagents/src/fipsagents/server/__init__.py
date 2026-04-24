@@ -59,6 +59,15 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     temperature: float | None = None
     max_tokens: int | None = None
+    top_p: float | None = None
+    frequency_penalty: float | None = None
+    presence_penalty: float | None = None
+    logprobs: bool | None = None
+    top_logprobs: int | None = None
+    # vLLM-specific parameters — forwarded via extra_body.
+    top_k: int | None = None
+    repetition_penalty: float | None = None
+    reasoning_effort: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +88,37 @@ def _messages_to_dicts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
             d["tool_call_id"] = m.tool_call_id
         out.append(d)
     return out
+
+
+def _extract_overrides(req: ChatCompletionRequest) -> dict[str, Any]:
+    """Extract non-None sampling parameters from the request.
+
+    Standard OpenAI parameters go at the top level. vLLM-specific parameters
+    (top_k, repetition_penalty, reasoning_effort) are placed inside
+    ``extra_body`` so the openai SDK forwards them without validation errors.
+    """
+    overrides: dict[str, Any] = {}
+    extra_body: dict[str, Any] = {}
+
+    # Standard OpenAI parameters.
+    for key in (
+        "temperature", "max_tokens", "top_p", "frequency_penalty",
+        "presence_penalty", "logprobs", "top_logprobs",
+    ):
+        val = getattr(req, key, None)
+        if val is not None:
+            overrides[key] = val
+
+    # vLLM-specific parameters — must go via extra_body.
+    for key in ("top_k", "repetition_penalty", "reasoning_effort"):
+        val = getattr(req, key, None)
+        if val is not None:
+            extra_body[key] = val
+
+    if extra_body:
+        overrides["extra_body"] = extra_body
+
+    return overrides
 
 
 def _sync_response(
@@ -246,10 +286,11 @@ class OpenAIChatServer:
         agent = self._agent
         model_name = req.model or agent.config.model.name
         incoming = _messages_to_dicts(req.messages)
+        overrides = _extract_overrides(req)
 
         if not req.stream:
             content, metrics, finish_reason = await self._collect_sync(
-                agent, incoming
+                agent, incoming, overrides=overrides
             )
             return JSONResponse(
                 _sync_response(
@@ -261,7 +302,7 @@ class OpenAIChatServer:
             )
 
         return StreamingResponse(
-            self._stream(incoming, model_name),
+            self._stream(incoming, model_name, overrides=overrides),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -276,6 +317,8 @@ class OpenAIChatServer:
         self,
         agent: BaseAgent,
         incoming: list[dict[str, Any]],
+        *,
+        overrides: dict[str, Any] | None = None,
     ) -> tuple[str, StreamMetrics | None, str]:
         """Drive ``astep_stream`` for a non-streaming response.
 
@@ -292,7 +335,7 @@ class OpenAIChatServer:
         finish_reason = "stop"
         async with self._agent_lock:
             agent.messages = list(incoming)
-            async for event in agent.astep_stream(max_iterations=10):
+            async for event in agent.astep_stream(max_iterations=10, **(overrides or {})):
                 if isinstance(event, ContentDelta):
                     parts.append(event.content)
                 elif isinstance(event, StreamComplete):
@@ -328,6 +371,8 @@ class OpenAIChatServer:
         self,
         incoming: list[dict[str, Any]],
         model_name: str,
+        *,
+        overrides: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """Drive the agent's event stream, serialising to OpenAI SSE chunks.
 
@@ -341,7 +386,7 @@ class OpenAIChatServer:
             self._agent.messages = list(incoming)
 
             try:
-                events = self._agent.astep_stream(max_iterations=10)
+                events = self._agent.astep_stream(max_iterations=10, **(overrides or {}))
                 async for chunk in stream_events_as_sse(events, model_name):
                     yield chunk
             except Exception:
