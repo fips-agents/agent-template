@@ -1,8 +1,0 @@
-# fipsagents is installed from vendor/fipsagents/[server] in the Dockerfile
-# (pulling FastAPI + uvicorn transitively via the extra).  The pin here
-# ensures any stray resolution uses the vendored dev build, not a PyPI
-# release.
-fipsagents>=0.5.0.dev0
-litellm>=1.83.0
-httpx>=0.28.0
-memoryhub

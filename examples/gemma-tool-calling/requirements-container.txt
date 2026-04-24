@@ -1,4 +1,0 @@
-fipsagents-0.6.0.dev0-py3-none-any.whl
-litellm>=1.83.0
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0

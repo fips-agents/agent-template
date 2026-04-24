@@ -1,5 +1,0 @@
-fipsagents>=0.4.0
-litellm>=1.83.0
-httpx>=0.28.0
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0

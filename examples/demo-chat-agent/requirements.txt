@@ -1,2 +1,0 @@
-# Local dev requirements. Same as requirements-container.txt for parity.
--r requirements-container.txt

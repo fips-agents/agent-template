@@ -1,7 +1,0 @@
--e ../../packages/fipsagents
-litellm>=1.83.0
-httpx>=0.28.0
-# Sandbox sidecar deps (for local dev — in production these are in the
-# sandbox container image, not the agent image)
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
