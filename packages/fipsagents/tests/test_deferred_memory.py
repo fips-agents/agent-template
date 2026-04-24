@@ -154,6 +154,7 @@ def _make_agent(
     injection_tag: str = "user_memories",
     max_results: int = 50,
     min_weight: float = 0.0,
+    loading_pattern: str | None = None,
 ) -> BaseAgent:
     """Build a minimal BaseAgent for deferred-memory tests."""
     config = AgentConfig(
@@ -166,6 +167,7 @@ def _make_agent(
             injection_tag=injection_tag,
             max_results=max_results,
             min_weight=min_weight,
+            loading_pattern=loading_pattern,
         ),
     )
 
@@ -707,4 +709,125 @@ async def test_min_weight_default_preserves_no_weight_field() -> None:
     assert "Has weight field" not in injected, (
         f"Expected result with weight=0.5 to be filtered by min_weight=0.9: "
         f"{injected!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Config-level loading_pattern tests (#89)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_config_loading_pattern_overrides_sdk() -> None:
+    """Config loading_pattern='lazy' overrides SDK project_config pattern='eager'.
+
+    Even though the MemoryHub project_config says 'eager', the config-level
+    setting takes precedence and defers injection to the post-turn path.
+    """
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "Config overrides SDK memory"}],
+        project_config=_FakeProjectConfig(pattern="eager"),
+    )
+    agent = _make_agent(memory=mem, loading_pattern="lazy")
+    agent.messages = _seeded_messages()
+
+    await agent._inject_deferred_memory()
+
+    # With config_pattern="lazy", deferred injection MUST run (not the
+    # eager path), so a new message should be inserted.
+    assert len(agent.messages) == 3, (
+        f"Expected config loading_pattern='lazy' to trigger injection "
+        f"(3 messages), got {len(agent.messages)}: {agent.messages}"
+    )
+    assert "Config overrides SDK memory" in agent.messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_config_loading_pattern_lazy_with_null_project_config() -> None:
+    """Config loading_pattern='lazy' works for file-based backends (project_config=None).
+
+    This is the key regression test: before this fix, _inject_deferred_memory()
+    returned early when project_config was None regardless of config settings.
+    """
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "File backend memory"}],
+        project_config=None,
+    )
+    agent = _make_agent(memory=mem, loading_pattern="lazy")
+    agent.messages = _seeded_messages()
+
+    await agent._inject_deferred_memory()
+
+    assert len(agent.messages) == 3, (
+        f"Expected config loading_pattern='lazy' with null project_config to inject "
+        f"memory (3 messages), got {len(agent.messages)}: {agent.messages}"
+    )
+    assert mem.search_calls, (
+        "Expected search() to be called for file-based backend with loading_pattern='lazy'"
+    )
+    assert "File backend memory" in agent.messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_config_loading_pattern_eager_with_null_project_config() -> None:
+    """Config loading_pattern='eager' with null project_config → _inject_deferred_memory is a no-op."""
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "Should not appear via deferred"}],
+        project_config=None,
+    )
+    agent = _make_agent(memory=mem, loading_pattern="eager")
+    original = _seeded_messages()
+    agent.messages = [dict(m) for m in original]
+
+    await agent._inject_deferred_memory()
+
+    assert agent.messages == original, (
+        "loading_pattern='eager' must make _inject_deferred_memory a no-op"
+    )
+    assert len(mem.search_calls) == 0, (
+        "loading_pattern='eager' must not call search() in deferred path"
+    )
+
+
+@pytest.mark.asyncio
+async def test_config_loading_pattern_none_falls_through_to_sdk() -> None:
+    """No config-level pattern + SDK pattern='lazy' → deferred injection runs."""
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "SDK lazy memory"}],
+        project_config=_FakeProjectConfig(pattern="lazy"),
+    )
+    # loading_pattern=None (default) means fall through to SDK
+    agent = _make_agent(memory=mem, loading_pattern=None)
+    agent.messages = _seeded_messages()
+
+    await agent._inject_deferred_memory()
+
+    assert len(agent.messages) == 3, (
+        f"Expected SDK pattern='lazy' to trigger injection when config_pattern is None, "
+        f"got {len(agent.messages)} messages"
+    )
+    assert "SDK lazy memory" in agent.messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_build_memory_prefix_respects_config_loading_pattern() -> None:
+    """build_memory_prefix() returns None when config loading_pattern is deferred.
+
+    Even with memories available and no SDK project_config, a config-level
+    loading_pattern='lazy' must cause build_memory_prefix() to defer.
+    """
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "Should be deferred"}],
+        project_config=None,
+    )
+    agent = _make_agent(memory=mem, loading_pattern="lazy")
+
+    result = await agent.build_memory_prefix()
+
+    assert result is None, (
+        f"Expected build_memory_prefix() to return None for loading_pattern='lazy', "
+        f"got: {result!r}"
+    )
+    assert len(mem.search_calls) == 0, (
+        "build_memory_prefix() must not call search() when pattern is deferred"
     )

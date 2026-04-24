@@ -259,6 +259,15 @@ class MemoryConfig(BaseModel):
       - ``max_results``      — Maximum number of memories to retrieve.
       - ``min_weight``       — Minimum weight threshold for retrieved memories.
                                Results below this weight are filtered out.
+
+    Loading:
+      - ``loading_pattern``  — When to retrieve memories.  ``eager``
+                               (default when unset) loads at setup time.
+                               ``lazy``, ``lazy_with_rebias``, and ``jit``
+                               defer to after the first user message.
+                               When set, overrides the pattern from
+                               ``.memoryhub.yaml``.  Required for
+                               file-based backends that want deferred loading.
     """
 
     _BUDGET_PRESETS: ClassVar[dict[str, dict[str, Any]]] = {
@@ -277,6 +286,7 @@ class MemoryConfig(BaseModel):
     budget: Literal["small", "medium", "large", "custom"] | None = None
     max_results: int = 50
     min_weight: float = 0.0
+    loading_pattern: Literal["eager", "lazy", "lazy_with_rebias", "jit"] | None = None
 
     @model_validator(mode="before")
     @classmethod

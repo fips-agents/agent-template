@@ -1019,22 +1019,30 @@ class BaseAgent(abc.ABC):
         Subclasses override this to customise the query, formatting, or
         to return ``None`` unconditionally if they prefer per-turn recall.
         """
-        # Check loading pattern from .memoryhub.yaml via the SDK.
+        # Resolve loading pattern: config-level takes precedence, then SDK,
+        # then default to eager.
+        config_pattern = self.config.memory.loading_pattern
         project_config = self.memory.project_config
-        if project_config is not None:
+
+        if config_pattern is not None:
+            pattern = config_pattern
+        elif project_config is not None:
             try:
                 pattern = project_config.memory_loading.pattern
             except AttributeError:
                 pattern = "eager"  # pre-pattern SDK — treat as eager
+        else:
+            pattern = "eager"
 
-            if pattern != "eager":
-                logger.debug(
-                    "Memory loading pattern is %r — deferring to post-turn retrieval",
-                    pattern,
-                )
-                return None
+        if pattern != "eager":
+            logger.debug(
+                "Memory loading pattern is %r — deferring to post-turn retrieval",
+                pattern,
+            )
+            return None
 
-            # Eager: retrieve the project's weight-ordered working set.
+        # Eager path: retrieve memories at setup time.
+        if project_config is not None:
             search_kwargs: dict[str, Any] = {"mode": "index", "max_results": self.config.memory.max_results}
             project_id = getattr(project_config, "project_id", None)
             if project_id:
@@ -1074,14 +1082,19 @@ class BaseAgent(abc.ABC):
         failures never crash the agent loop.
         """
         try:
+            # Resolve loading pattern: config-level > SDK > default (eager).
+            config_pattern = self.config.memory.loading_pattern
             project_config = self.memory.project_config
-            if project_config is None:
-                return  # Non-MemoryHub backend — build_memory_prefix fallback.
 
-            try:
-                pattern = project_config.memory_loading.pattern
-            except AttributeError:
-                return  # Pre-pattern SDK — eager already handled by setup().
+            if config_pattern is not None:
+                pattern = config_pattern
+            elif project_config is not None:
+                try:
+                    pattern = project_config.memory_loading.pattern
+                except AttributeError:
+                    pattern = "eager"  # Pre-pattern SDK — eager already handled by setup().
+            else:
+                pattern = "eager"
 
             if not pattern or pattern == "eager":
                 return  # Already handled in setup().
