@@ -152,6 +152,8 @@ def _make_agent(
     max_prefix_chars: int = 8000,
     injection_mode: str = "prefix",
     injection_tag: str = "user_memories",
+    max_results: int = 50,
+    min_weight: float = 0.0,
 ) -> BaseAgent:
     """Build a minimal BaseAgent for deferred-memory tests."""
     config = AgentConfig(
@@ -162,6 +164,8 @@ def _make_agent(
             max_prefix_chars=max_prefix_chars,
             injection_mode=injection_mode,
             injection_tag=injection_tag,
+            max_results=max_results,
+            min_weight=min_weight,
         ),
     )
 
@@ -507,4 +511,200 @@ def test_collect_sync_strips_echoed_tags() -> None:
     ).strip()
     assert result == "Here is my response.\n\nMore text.", (
         f"Unexpected stripped content: {result!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Budget preset tests (#87)
+# ---------------------------------------------------------------------------
+
+
+def test_budget_small_sets_defaults() -> None:
+    """MemoryConfig(budget='small') applies the small-tier preset values."""
+    cfg = MemoryConfig(budget="small")
+    assert cfg.max_prefix_chars == 500, (
+        f"Expected max_prefix_chars=500, got {cfg.max_prefix_chars}"
+    )
+    assert cfg.max_results == 5, (
+        f"Expected max_results=5, got {cfg.max_results}"
+    )
+    assert cfg.min_weight == 0.7, (
+        f"Expected min_weight=0.7, got {cfg.min_weight}"
+    )
+
+
+def test_budget_medium_sets_defaults() -> None:
+    """MemoryConfig(budget='medium') applies the medium-tier preset values."""
+    cfg = MemoryConfig(budget="medium")
+    assert cfg.max_prefix_chars == 4000, (
+        f"Expected max_prefix_chars=4000, got {cfg.max_prefix_chars}"
+    )
+    assert cfg.max_results == 20, (
+        f"Expected max_results=20, got {cfg.max_results}"
+    )
+    assert cfg.min_weight == 0.5, (
+        f"Expected min_weight=0.5, got {cfg.min_weight}"
+    )
+
+
+def test_budget_large_sets_defaults() -> None:
+    """MemoryConfig(budget='large') applies the large-tier preset values."""
+    cfg = MemoryConfig(budget="large")
+    assert cfg.max_prefix_chars == 8000, (
+        f"Expected max_prefix_chars=8000, got {cfg.max_prefix_chars}"
+    )
+    assert cfg.max_results == 50, (
+        f"Expected max_results=50, got {cfg.max_results}"
+    )
+    assert cfg.min_weight == 0.3, (
+        f"Expected min_weight=0.3, got {cfg.min_weight}"
+    )
+
+
+def test_budget_none_uses_field_defaults() -> None:
+    """MemoryConfig() with no budget uses the field-level defaults."""
+    cfg = MemoryConfig()
+    assert cfg.max_prefix_chars == 8000, (
+        f"Expected default max_prefix_chars=8000, got {cfg.max_prefix_chars}"
+    )
+    assert cfg.max_results == 50, (
+        f"Expected default max_results=50, got {cfg.max_results}"
+    )
+    assert cfg.min_weight == 0.0, (
+        f"Expected default min_weight=0.0, got {cfg.min_weight}"
+    )
+
+
+def test_budget_explicit_override() -> None:
+    """An explicit field value wins over the budget preset for that field only."""
+    cfg = MemoryConfig(budget="small", max_results=15)
+    # Explicit value overrides the preset's max_results=5.
+    assert cfg.max_results == 15, (
+        f"Expected explicit max_results=15 to override preset, got {cfg.max_results}"
+    )
+    # Non-overridden fields still come from the preset.
+    assert cfg.max_prefix_chars == 500, (
+        f"Expected preset max_prefix_chars=500, got {cfg.max_prefix_chars}"
+    )
+    assert cfg.min_weight == 0.7, (
+        f"Expected preset min_weight=0.7, got {cfg.min_weight}"
+    )
+
+
+def test_budget_custom_uses_field_defaults() -> None:
+    """budget='custom' is not a named preset and falls through to field defaults."""
+    cfg = MemoryConfig(budget="custom")
+    assert cfg.max_prefix_chars == 8000, (
+        f"Expected field default max_prefix_chars=8000, got {cfg.max_prefix_chars}"
+    )
+    assert cfg.max_results == 50, (
+        f"Expected field default max_results=50, got {cfg.max_results}"
+    )
+    assert cfg.min_weight == 0.0, (
+        f"Expected field default min_weight=0.0, got {cfg.min_weight}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_deferred_max_results_passed_to_search() -> None:
+    """max_results from MemoryConfig is forwarded as a kwarg to search()."""
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "Memory A"}],
+        project_config=_FakeProjectConfig(pattern="lazy"),
+    )
+    agent = _make_agent(memory=mem, max_results=3)
+    agent.messages = _seeded_messages()
+
+    await agent._inject_deferred_memory()
+
+    assert len(mem.search_calls) == 1, (
+        f"Expected exactly one search call, got {len(mem.search_calls)}"
+    )
+    _, kwargs = mem.search_calls[0]
+    assert kwargs.get("max_results") == 3, (
+        f"Expected max_results=3 in search kwargs, got {kwargs!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_deferred_min_weight_filters_results() -> None:
+    """Results below min_weight are filtered out before injection."""
+    mem = FakeMemoryHubClient(
+        [
+            {"id": "a", "content": "High weight", "weight": 0.9},
+            {"id": "b", "content": "Low weight", "weight": 0.3},
+            {"id": "c", "content": "Medium weight", "weight": 0.7},
+        ],
+        project_config=_FakeProjectConfig(pattern="lazy"),
+    )
+    agent = _make_agent(memory=mem, min_weight=0.6)
+    agent.messages = _seeded_messages()
+
+    await agent._inject_deferred_memory()
+
+    injected = agent.messages[1]["content"]
+    assert "High weight" in injected, (
+        f"Expected 'High weight' (0.9 >= 0.6) to be present: {injected!r}"
+    )
+    assert "Medium weight" in injected, (
+        f"Expected 'Medium weight' (0.7 >= 0.6) to be present: {injected!r}"
+    )
+    assert "Low weight" not in injected, (
+        f"Expected 'Low weight' (0.3 < 0.6) to be filtered out: {injected!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_deferred_min_weight_zero_no_filter() -> None:
+    """min_weight=0.0 (default) passes all results through regardless of weight."""
+    mem = FakeMemoryHubClient(
+        [
+            {"id": "a", "content": "Very low", "weight": 0.01},
+            {"id": "b", "content": "Zero weight", "weight": 0.0},
+            {"id": "c", "content": "Normal", "weight": 0.8},
+        ],
+        project_config=_FakeProjectConfig(pattern="lazy"),
+    )
+    agent = _make_agent(memory=mem, min_weight=0.0)
+    agent.messages = _seeded_messages()
+
+    await agent._inject_deferred_memory()
+
+    # All three should appear since min_weight=0.0 disables filtering.
+    injected = agent.messages[1]["content"]
+    assert "Very low" in injected, (
+        f"Expected 'Very low' to pass min_weight=0.0 filter: {injected!r}"
+    )
+    assert "Zero weight" in injected, (
+        f"Expected 'Zero weight' to pass min_weight=0.0 filter: {injected!r}"
+    )
+    assert "Normal" in injected, (
+        f"Expected 'Normal' to pass min_weight=0.0 filter: {injected!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_min_weight_default_preserves_no_weight_field() -> None:
+    """Results missing a 'weight' key default to 1.0 and are never filtered."""
+    mem = FakeMemoryHubClient(
+        [
+            {"id": "a", "content": "No weight field"},
+            {"id": "b", "content": "Has weight field", "weight": 0.5},
+        ],
+        project_config=_FakeProjectConfig(pattern="lazy"),
+    )
+    # Use a strict min_weight — the weightless result must still survive.
+    agent = _make_agent(memory=mem, min_weight=0.9)
+    agent.messages = _seeded_messages()
+
+    await agent._inject_deferred_memory()
+
+    injected = agent.messages[1]["content"]
+    assert "No weight field" in injected, (
+        f"Expected result without 'weight' key to default to 1.0 and pass "
+        f"min_weight=0.9 filter: {injected!r}"
+    )
+    assert "Has weight field" not in injected, (
+        f"Expected result with weight=0.5 to be filtered by min_weight=0.9: "
+        f"{injected!r}"
     )

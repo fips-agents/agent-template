@@ -1035,7 +1035,7 @@ class BaseAgent(abc.ABC):
                 return None
 
             # Eager: retrieve the project's weight-ordered working set.
-            search_kwargs: dict[str, Any] = {"mode": "index", "max_results": 50}
+            search_kwargs: dict[str, Any] = {"mode": "index", "max_results": self.config.memory.max_results}
             project_id = getattr(project_config, "project_id", None)
             if project_id:
                 search_kwargs["project_id"] = project_id
@@ -1047,6 +1047,10 @@ class BaseAgent(abc.ABC):
 
         if not results:
             return None
+
+        min_w = self.config.memory.min_weight
+        if min_w > 0:
+            results = [r for r in results if r.get("weight", 1.0) >= min_w]
 
         parts = [r.get("content", "") for r in results]
         parts = [p for p in parts if p.strip()]  # drop blanks
@@ -1103,12 +1107,18 @@ class BaseAgent(abc.ABC):
                 return
 
             # Search memory using the user message as the query.
-            search_kwargs: dict[str, Any] = {}
+            search_kwargs: dict[str, Any] = {"max_results": self.config.memory.max_results}
             project_id = getattr(project_config, "project_id", None)
             if project_id:
                 search_kwargs["project_id"] = project_id
             results = await self.memory.search(query, **search_kwargs)
 
+            if not results:
+                return
+
+            min_w = self.config.memory.min_weight
+            if min_w > 0:
+                results = [r for r in results if r.get("weight", 1.0) >= min_w]
             if not results:
                 return
 

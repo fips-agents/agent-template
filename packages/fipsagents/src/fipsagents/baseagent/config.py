@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -240,7 +240,32 @@ class MemoryConfig(BaseModel):
       - ``injection_tag``    — XML tag name wrapping user-turn memories
                                (default ``user_memories``).  Only used when
                                ``injection_mode`` is ``user_turn``.
+
+    Budget presets:
+      - ``budget``           — Shorthand that sets defaults for
+                               ``max_prefix_chars``, ``max_results``, and
+                               ``min_weight`` based on model tier:
+
+                               =======  ================  ===========  ==========
+                               Budget   max_prefix_chars  max_results  min_weight
+                               =======  ================  ===========  ==========
+                               small    500               5            0.7
+                               medium   4000              20           0.5
+                               large    8000              50           0.3
+                               =======  ================  ===========  ==========
+
+                               Explicit field values always override the preset.
+                               ``custom`` and ``None`` use field defaults.
+      - ``max_results``      — Maximum number of memories to retrieve.
+      - ``min_weight``       — Minimum weight threshold for retrieved memories.
+                               Results below this weight are filtered out.
     """
+
+    _BUDGET_PRESETS: ClassVar[dict[str, dict[str, Any]]] = {
+        "small": {"max_prefix_chars": 500, "max_results": 5, "min_weight": 0.7},
+        "medium": {"max_prefix_chars": 4000, "max_results": 20, "min_weight": 0.5},
+        "large": {"max_prefix_chars": 8000, "max_results": 50, "min_weight": 0.3},
+    }
 
     backend: Literal["memoryhub", "markdown", "sqlite", "pgvector", "llamastack", "custom", "null"] | None = None
     config_path: str = ".memoryhub.yaml"
@@ -249,6 +274,21 @@ class MemoryConfig(BaseModel):
     max_prefix_chars: int = 8000
     injection_mode: Literal["prefix", "user_turn"] = "prefix"
     injection_tag: str = "user_memories"
+    budget: Literal["small", "medium", "large", "custom"] | None = None
+    max_results: int = 50
+    min_weight: float = 0.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_budget_presets(cls, data: Any) -> Any:
+        """Fill in budget-controlled fields that the user didn't set."""
+        if not isinstance(data, dict):
+            return data
+        budget = data.get("budget")
+        if budget and budget in cls._BUDGET_PRESETS:
+            for key, val in cls._BUDGET_PRESETS[budget].items():
+                data.setdefault(key, val)
+        return data
 
     @field_validator("backend", mode="before")
     @classmethod
