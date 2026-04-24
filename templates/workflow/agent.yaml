@@ -95,6 +95,7 @@ logging:
 # backend: which backend to use.  When omitted, auto-detects by looking
 #          for .memoryhub.yaml (backward compatible).
 #   memoryhub -- MemoryHub SDK (default when .memoryhub.yaml exists)
+#   markdown  -- Human-readable markdown file(s) (zero dependencies)
 #   sqlite    -- Local SQLite with FTS5 search (zero dependencies)
 #   pgvector  -- PostgreSQL + pgvector for semantic search
 #   custom    -- Bring your own MemoryClientBase subclass
@@ -108,12 +109,40 @@ logging:
 # backend_class: dotted import path, only used when backend: custom
 #   Example: myproject.memory.RedisMemoryClient
 #
+# Budget presets (set one and forget individual tuning):
+#   budget: small   -- 500 chars, 5 results, min_weight 0.7  (8K-16K models)
+#   budget: medium  -- 4K chars, 20 results, min_weight 0.5  (32K-128K models)
+#   budget: large   -- 8K chars, 50 results, min_weight 0.3  (128K+ models)
+#   Explicit values for max_prefix_chars/max_results/min_weight override presets.
+#
+# Injection mode (how memories reach the model):
+#   injection_mode: prefix     -- (default) separate message before user turn
+#   injection_mode: user_turn  -- append to user message inside XML tags;
+#                                 required for small models (8K-16K) that
+#                                 ignore system-level memory
+#   injection_tag: user_memories  -- XML tag name (only with user_turn mode)
+#
+# Loading pattern (when to retrieve memories):
+#   loading_pattern: eager           -- at setup time (default, best for prefix caching)
+#   loading_pattern: lazy            -- after first user message arrives
+#   loading_pattern: lazy_with_rebias -- lazy + re-retrieve after topic shift
+#   loading_pattern: jit             -- just-in-time, every turn
+#   For MemoryHub backends, .memoryhub.yaml pattern takes precedence unless
+#   loading_pattern is set explicitly here.
+#
 # Production env vars:
 #   MEMORY_BACKEND -- override the backend choice per deployment
 memory:
   backend: ${MEMORY_BACKEND:-}
   config_path: .memoryhub.yaml
   # backend_class: null
+  # budget: medium             # or: small, large, custom
+  # injection_mode: prefix     # or: user_turn
+  # injection_tag: user_memories
+  # loading_pattern: eager     # or: lazy, lazy_with_rebias, jit
+  # max_prefix_chars: 8000     # 0 disables limit
+  # max_results: 50
+  # min_weight: 0.0            # 0.0 = no filtering
 
 # -- Security ------------------------------------------------------------------
 #

@@ -347,6 +347,57 @@ Subclasses override `build_memory_prefix()` to customise the query, formatting, 
 
 The markdown backend's `search(query="")` is designed to pair well with this: it returns every section or file in stable file order, so the prefix is deterministic across restarts. Other backends (SQLite, PGVector, MemoryHub) can use the same pattern; results are retrieved once at session start and pinned for the session's lifetime.
 
+### Deferred loading and injection modes
+
+The prefix-cache pattern works well for frontier models with large context windows.
+Small models (8K-16K context, e.g. Granite 3.3 8B) have two problems: (1) a
+system-level memory prefix consumes a significant fraction of their context, and (2)
+they tend to treat system-prompt content as suggestions rather than instructions.
+
+`_inject_deferred_memory()` addresses both issues. It runs at the top of
+`astep_stream()`, before the first model call, and is controlled by two config fields:
+
+**`injection_mode`** controls *where* memories land:
+
+- `prefix` (default) -- inserts a new message before the user turn, same
+  behavior as the setup-time prefix but deferred to after the user message arrives.
+- `user_turn` -- appends memories to the user message inside
+  `<injection_tag>...</injection_tag>` XML tags. Small models treat user-message
+  content as higher-salience context, so this path yields better recall.
+
+**`loading_pattern`** controls *when* memories are retrieved:
+
+- `eager` (default) -- at `setup()` time via `build_memory_prefix()`. Best for
+  prefix-cache hit rates with frontier models.
+- `lazy` -- after the first user message. The user's text becomes the search query.
+- `lazy_with_rebias` -- lazy, plus re-retrieves when the topic shifts.
+- `jit` -- retrieves every turn (not yet fully implemented; currently behaves like lazy).
+
+For MemoryHub backends, the loading pattern from `.memoryhub.yaml` is used unless
+`loading_pattern` is set explicitly in `agent.yaml` (config-level takes precedence).
+For file-based backends (markdown, sqlite), set `loading_pattern` in `agent.yaml` directly.
+
+**`budget`** is a shorthand that sets `max_prefix_chars`, `max_results`, and `min_weight`
+based on model tier:
+
+| Budget | max_prefix_chars | max_results | min_weight | Target models |
+|--------|-----------------|-------------|------------|---------------|
+| `small` | 500 | 5 | 0.7 | Granite 8B, similar 8K-16K models |
+| `medium` | 4000 | 20 | 0.5 | Granite 70B, 32K-128K models |
+| `large` | 8000 | 50 | 0.3 | GPT-OSS 20B, 128K+ models |
+
+Explicit field values always override the budget preset. Example `agent.yaml`:
+
+```yaml
+memory:
+  budget: small
+  injection_mode: user_turn
+  loading_pattern: lazy
+```
+
+This configures the agent for a small model: deferred loading, user-turn injection,
+and a tight memory budget (500 chars, 5 results, min weight 0.7).
+
 **The SDK path** exposes `self.memory` for programmatic access from agent code. This is for cases where the agent logic itself needs to read or write memories -- caching intermediate results, maintaining state across iterations, or implementing retrieval patterns that the LLM shouldn't control directly.
 
 **The MCP path** (MemoryHub only) makes MemoryHub's tools available to the LLM through the standard MCP client. The LLM can read and write memories as part of its tool-calling workflow.
