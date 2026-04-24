@@ -377,6 +377,7 @@ class BaseAgent(abc.ABC):
         self,
         *,
         max_iterations: int = 10,
+        **model_kwargs: Any,
     ) -> AsyncIterator[StreamEvent]:
         """Streaming agent loop. Yields typed ``StreamEvent`` values.
 
@@ -438,7 +439,7 @@ class BaseAgent(abc.ABC):
                 self._reasoning_parser.reset()
 
             async for chunk in self.llm.call_model_stream_raw(
-                self.messages, tools=tools_arg
+                self.messages, tools=tools_arg, **model_kwargs
             ):
                 try:
                     choice = chunk.choices[0]
@@ -479,6 +480,7 @@ class BaseAgent(abc.ABC):
                 tc_list = getattr(delta, "tool_calls", None) or []
                 for tc in tc_list:
                     idx = getattr(tc, "index", 0) or 0
+                    is_new = idx not in tool_buf
                     buf = tool_buf.setdefault(
                         idx, {"id": None, "name": None, "arguments": ""}
                     )
@@ -487,8 +489,6 @@ class BaseAgent(abc.ABC):
                     tc_name = getattr(fn, "name", None) if fn else None
                     tc_args = getattr(fn, "arguments", None) if fn else None
 
-                    # First delta for this index usually carries id+name.
-                    first = buf["id"] is None and tc_id is not None
                     if tc_id and not buf["id"]:
                         buf["id"] = tc_id
                     if tc_name and not buf["name"]:
@@ -496,12 +496,27 @@ class BaseAgent(abc.ABC):
                     if tc_args:
                         buf["arguments"] += tc_args
 
-                    yield ToolCallDelta(
-                        index=idx,
-                        call_id=buf["id"] if first else None,
-                        name=buf["name"] if first else None,
-                        arguments_delta=tc_args or "",
-                    )
+                    # Emit an opening chunk (with id + name) for the first
+                    # delta of each tool call.  If the provider didn't send
+                    # an id on the first chunk, generate a synthetic one so
+                    # downstream SSE serialization always has something to key on.
+                    if is_new:
+                        if not buf["id"]:
+                            import uuid as _uuid
+                            buf["id"] = f"chatcmpl-tool-{_uuid.uuid4().hex[:16]}"
+                        yield ToolCallDelta(
+                            index=idx,
+                            call_id=buf["id"],
+                            name=buf["name"] or "",
+                            arguments_delta=tc_args or "",
+                        )
+                    else:
+                        yield ToolCallDelta(
+                            index=idx,
+                            call_id=None,
+                            name=None,
+                            arguments_delta=tc_args or "",
+                        )
 
                 turn_finish = getattr(choice, "finish_reason", None)
                 if turn_finish:

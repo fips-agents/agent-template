@@ -50,7 +50,11 @@ class _StubAgent(BaseAgent):
         self.config = types.SimpleNamespace(
             model=types.SimpleNamespace(
                 name=model_name, temperature=0.7, max_tokens=4096,
-            )
+            ),
+            memory=types.SimpleNamespace(
+                injection_mode="prefix",
+                injection_tag="user_memories",
+            ),
         )
 
     def build_system_prompt(self) -> str:
