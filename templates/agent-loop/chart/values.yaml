@@ -57,6 +57,42 @@ route:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
 
+# -- LLM adapter sidecar (optional) ------------------------------------------
+# Enable to route LLM traffic to off-platform providers (Anthropic, AWS
+# Bedrock, Azure OpenAI).  The sidecar shares the pod network namespace and
+# listens on localhost:8081.  The framework routes traffic here automatically
+# when model.provider is non-openai.
+#
+# Prerequisites:
+#   1. Set model.provider in agent.yaml (or MODEL_PROVIDER env var) to the
+#      target provider: "anthropic", "bedrock", or "azure".
+#   2. Create a Kubernetes Secret with provider credentials:
+#        Anthropic: ANTHROPIC_API_KEY
+#        AWS Bedrock: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+#        Azure OpenAI: AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT
+#   3. Build and push the adapter image from packages/llm-adapter/.
+llm_adapter:
+  enabled: false
+  # Provider selects translation mode inside the adapter container.
+  # Must match model.provider in agent.yaml.
+  provider: openai
+  image:
+    repository: llm-adapter
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # Secret containing provider credentials.  Injected as env vars into the
+  # adapter sidecar.  Example:
+  #   secretRef:
+  #     name: anthropic-credentials
+  secretRef: {}
+
 # -- Code execution sandbox sidecar (optional) --------------------------------
 # Enable to run LLM-generated Python code safely.  The sidecar shares the pod
 # network namespace, so the code_executor tool reaches it at localhost:8000.

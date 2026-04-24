@@ -315,6 +315,7 @@ async def memoryhub_real_llm_agent() -> AsyncIterator[BaseAgent]:
     """
     config = _make_config(
         model=LLMConfig(
+            provider="openai",
             endpoint=_LLM_ENDPOINT,
             name=_LLM_MODEL,
             temperature=0.0,
@@ -401,4 +402,25 @@ class TestMemoryHubRealLLM:
         assert any(c for c in assistant_content), (
             f"Assistant message exists but has no content. "
             f"Messages: {assistant_msgs}"
+        )
+
+    @pytest.mark.timeout(60)
+    async def test_real_llm_with_explicit_openai_provider(
+        self, memoryhub_real_llm_agent: BaseAgent,
+    ) -> None:
+        """Explicit provider='openai' works identically to the default."""
+        agent = memoryhub_real_llm_agent
+        # Verify the provider field is set (it should default to openai).
+        assert agent.config.model.provider == "openai"
+        agent.add_message(
+            "user", "What projects do I have? Use the memory tool with action list_projects."
+        )
+
+        result = await agent.step()
+
+        assert result.outcome == StepOutcome.DONE
+        tool_msgs = [m for m in agent.messages if m.get("role") == "tool"]
+        assert tool_msgs, (
+            "LLM did not call any tools — expected memory(list_projects). "
+            f"Messages: {[m.get('role') for m in agent.messages]}"
         )

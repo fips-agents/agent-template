@@ -92,6 +92,15 @@ def _substitute_recursive(
 
 
 # ---------------------------------------------------------------------------
+# Adapter sidecar constants
+# ---------------------------------------------------------------------------
+
+_ADAPTER_PORT: int = 8081
+_ADAPTER_ENDPOINT: str = f"http://localhost:{_ADAPTER_PORT}/v1"
+_OFF_PLATFORM_PROVIDERS: frozenset[str] = frozenset({"anthropic", "bedrock", "azure"})
+
+
+# ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
 
@@ -99,6 +108,7 @@ def _substitute_recursive(
 class LLMConfig(BaseModel):
     """LLM provider and generation settings."""
 
+    provider: Literal["openai", "anthropic", "bedrock", "azure"] = "openai"
     endpoint: str | None = None
     name: str = "meta-llama/Llama-3.3-70B-Instruct"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)

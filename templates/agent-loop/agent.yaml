@@ -26,15 +26,26 @@ agent:
 
 # -- LLM provider and generation settings ------------------------------------
 #
-# `name` is the model identifier passed to the OpenAI-compatible endpoint.
-# Point `endpoint` at vLLM, LlamaStack, llm-d, or any OpenAI-compatible API.
+# `provider` selects the LLM backend.  Defaults to "openai" (any OpenAI-
+# compatible endpoint: vLLM, LlamaStack, llm-d).  Set to "anthropic",
+# "bedrock", or "azure" to route traffic through the adapter sidecar at
+# localhost:8081/v1.  The adapter sidecar must be enabled in
+# chart/values.yaml (llm_adapter.enabled: true).
+#
+# When provider is non-openai, MODEL_ENDPOINT is ignored -- the framework
+# routes traffic to the sidecar automatically.
+#
+# `name` is the model identifier passed to the endpoint (or adapter).
+# `endpoint` points at vLLM, LlamaStack, llm-d, or any OpenAI-compatible API.
 #
 # Production env vars:
-#   MODEL_ENDPOINT  -- vLLM / LlamaStack URL (e.g. https://vllm.apps.cluster.example.com/v1)
+#   MODEL_PROVIDER  -- openai | anthropic | bedrock | azure
+#   MODEL_ENDPOINT  -- vLLM / LlamaStack URL (ignored for non-openai providers)
 #   MODEL_NAME      -- deployed model identifier
-#   OPENAI_API_KEY  -- required by the openai SDK even for unauthenticated vLLM endpoints;
-#                      set to any non-empty string (e.g. "not-required")
+#   OPENAI_API_KEY  -- required by the openai SDK even for unauthenticated vLLM
+#                      endpoints; set to any non-empty string (e.g. "not-required")
 model:
+  provider: ${MODEL_PROVIDER:-openai}
   endpoint: ${MODEL_ENDPOINT:-http://llamastack:8321/v1}
   name: ${MODEL_NAME:-meta-llama/Llama-3.3-70B-Instruct}
   temperature: 0.7

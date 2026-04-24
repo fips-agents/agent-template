@@ -39,7 +39,7 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "agent-template.fullname" . }}-config
-          {{- if or .Values.env .Values.sandbox.enabled }}
+          {{- if or .Values.env .Values.sandbox.enabled .Values.llm_adapter.enabled }}
           env:
             {{- if .Values.env }}
             {{- toYaml .Values.env | nindent 12 }}
@@ -47,6 +47,10 @@ spec:
             {{- if .Values.sandbox.enabled }}
             - name: SANDBOX_URL
               value: "http://localhost:8000"
+            {{- end }}
+            {{- if .Values.llm_adapter.enabled }}
+            - name: LLM_ADAPTER_URL
+              value: "http://localhost:8081/v1"
             {{- end }}
           {{- end }}
           resources:
@@ -104,6 +108,43 @@ spec:
           volumeMounts:
             - name: sandbox-tmp
               mountPath: /tmp
+        {{- end }}
+        {{- if .Values.llm_adapter.enabled }}
+        - name: llm-adapter
+          image: "{{ .Values.llm_adapter.image.repository }}:{{ .Values.llm_adapter.image.tag }}"
+          imagePullPolicy: {{ .Values.llm_adapter.image.pullPolicy }}
+          ports:
+            - name: adapter
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: ADAPTER_PROVIDER
+              value: {{ .Values.llm_adapter.provider | quote }}
+          {{- if .Values.llm_adapter.secretRef.name }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.llm_adapter.secretRef.name }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.llm_adapter.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+            periodSeconds: 10
         {{- end }}
       {{- if .Values.sandbox.enabled }}
       volumes:

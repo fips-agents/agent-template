@@ -17,7 +17,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar
 
-from fipsagents.baseagent.config import AgentConfig, McpServerConfig, load_config
+from fipsagents.baseagent.config import (
+    AgentConfig,
+    McpServerConfig,
+    load_config,
+    _ADAPTER_ENDPOINT,
+    _OFF_PLATFORM_PROVIDERS,
+)
 from fipsagents.baseagent.events import (
     ContentDelta,
     ReasoningDelta,
@@ -131,13 +137,36 @@ class BaseAgent(abc.ABC):
         logging.basicConfig(level=self.config.logging.level)
 
         logger.info(
-            "Setting up agent — model=%s, endpoint=%s",
+            "Setting up agent — provider=%s, model=%s, endpoint=%s",
+            self.config.model.provider,
             self.config.model.name,
             self.config.model.endpoint,
         )
 
         # 3. LLM client
-        self.llm = LLMClient(self.config.model)
+        #    For off-platform providers, the adapter sidecar translates
+        #    requests from OpenAI wire format to the provider's native API.
+        #    Rewrite the endpoint to the sidecar before constructing the client.
+        effective_model_cfg = self.config.model
+        if self.config.model.provider in _OFF_PLATFORM_PROVIDERS:
+            if self.config.model.endpoint is not None:
+                logger.warning(
+                    "model.endpoint (%s) is ignored when provider=%s; "
+                    "traffic is routed to the adapter sidecar at %s",
+                    self.config.model.endpoint,
+                    self.config.model.provider,
+                    _ADAPTER_ENDPOINT,
+                )
+            effective_model_cfg = self.config.model.model_copy(
+                update={"endpoint": _ADAPTER_ENDPOINT},
+            )
+            logger.info(
+                "Provider=%s — routing LLM traffic through adapter "
+                "sidecar at %s",
+                self.config.model.provider,
+                _ADAPTER_ENDPOINT,
+            )
+        self.llm = LLMClient(effective_model_cfg)
 
         # 4. Tool discovery
         tools_dir = base / self.config.tools.local_dir

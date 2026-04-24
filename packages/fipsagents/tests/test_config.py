@@ -277,6 +277,63 @@ class TestLLMConfig:
         cfg = LLMConfig()
         assert "Llama" in cfg.name or cfg.name  # has some default
 
+    def test_default_provider_is_openai(self):
+        cfg = LLMConfig()
+        assert cfg.provider == "openai"
+
+    @pytest.mark.parametrize("provider", ["openai", "anthropic", "bedrock", "azure"])
+    def test_valid_providers(self, provider):
+        cfg = LLMConfig(provider=provider)
+        assert cfg.provider == provider
+
+    def test_invalid_provider_raises_validation_error(self):
+        with pytest.raises(ValidationError):
+            LLMConfig(provider="grok")
+
+    def test_provider_from_yaml(self):
+        config = load_config_from_string(
+            "model:\n  provider: anthropic\n",
+        )
+        assert config.model.provider == "anthropic"
+
+    def test_provider_default_in_yaml(self):
+        config = load_config_from_string("model:\n  name: test\n")
+        assert config.model.provider == "openai"
+
+
+# ---------------------------------------------------------------------------
+# Provider endpoint rewrite
+# ---------------------------------------------------------------------------
+
+
+class TestProviderEndpointRewrite:
+    """Verify that setup() rewrites endpoint for off-platform providers."""
+
+    def test_openai_provider_preserves_endpoint(self):
+        cfg = LLMConfig(
+            provider="openai",
+            endpoint="http://vllm:8000/v1",
+        )
+        # openai provider should not trigger a rewrite.
+        from fipsagents.baseagent.config import _OFF_PLATFORM_PROVIDERS
+
+        assert cfg.provider not in _OFF_PLATFORM_PROVIDERS
+
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "azure"])
+    def test_off_platform_provider_in_set(self, provider):
+        from fipsagents.baseagent.config import (
+            _ADAPTER_ENDPOINT,
+            _OFF_PLATFORM_PROVIDERS,
+        )
+
+        assert provider in _OFF_PLATFORM_PROVIDERS
+        # model_copy produces the rewritten config.
+        cfg = LLMConfig(provider=provider, endpoint="http://original:8000/v1")
+        rewritten = cfg.model_copy(update={"endpoint": _ADAPTER_ENDPOINT})
+        assert rewritten.endpoint == "http://localhost:8081/v1"
+        # Original config is unchanged.
+        assert cfg.endpoint == "http://original:8000/v1"
+
 
 # ---------------------------------------------------------------------------
 # BackoffConfig
