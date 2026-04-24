@@ -44,6 +44,11 @@ class MemoryClientBase:
     methods so agent code never needs to check which implementation it has.
     """
 
+    @property
+    def project_config(self) -> Any | None:
+        """Backend-specific project config. Returns None by default."""
+        return None
+
     async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Search memories by query string."""
         raise NotImplementedError
@@ -116,6 +121,11 @@ class MemoryClient(MemoryClientBase):
 
     def __init__(self, sdk: Any) -> None:
         self._sdk = sdk
+
+    @property
+    def project_config(self) -> Any | None:
+        """The SDK's ProjectConfig, or None for older SDKs."""
+        return getattr(self._sdk, "_project_config", None)
 
     async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         try:

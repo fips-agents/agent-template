@@ -1002,16 +1002,46 @@ class BaseAgent(abc.ABC):
         It stays pinned there for the life of the session — never
         re-queried per turn — so inference-server prefix caches stay warm.
 
-        The default implementation calls ``self.memory.search("")`` to
-        retrieve all memories in backend-native order, joins their
-        ``content`` fields, and truncates at
-        ``config.memory.max_prefix_chars``.  Returns ``None`` when the
-        backend produces no results (including ``NullMemoryClient``).
+        The default implementation reads the loading pattern from
+        ``.memoryhub.yaml``.  For the ``eager`` pattern it retrieves the
+        project's weight-ordered working set via
+        ``search(query="", project_id=..., mode="index")``.  For deferred
+        patterns (``lazy``, ``lazy_with_rebias``, ``jit``) it returns
+        ``None`` — those patterns load memories after the first user turn.
+
+        Returns ``None`` when the backend produces no results (including
+        ``NullMemoryClient``), when no project config is available, or
+        when the loading pattern defers retrieval.
 
         Subclasses override this to customise the query, formatting, or
         to return ``None`` unconditionally if they prefer per-turn recall.
         """
-        results = await self.memory.search("")
+        # Check loading pattern from .memoryhub.yaml via the SDK.
+        project_config = self.memory.project_config
+        if project_config is not None:
+            try:
+                pattern = project_config.memory_loading.pattern
+            except AttributeError:
+                pattern = "eager"  # pre-pattern SDK — treat as eager
+
+            if pattern != "eager":
+                logger.debug(
+                    "Memory loading pattern is %r — deferring to post-turn retrieval",
+                    pattern,
+                )
+                return None
+
+            # Eager: retrieve the project's weight-ordered working set.
+            search_kwargs: dict[str, Any] = {"mode": "index", "max_results": 50}
+            project_id = getattr(project_config, "project_id", None)
+            if project_id:
+                search_kwargs["project_id"] = project_id
+            results = await self.memory.search("", **search_kwargs)
+        else:
+            # No project config (non-MemoryHub backend or old SDK) —
+            # fall back to a broad query.
+            results = await self.memory.search("general context")
+
         if not results:
             return None
 
