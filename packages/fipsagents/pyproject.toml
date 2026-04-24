@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fipsagents"
-version = "0.8.0"
+version = "0.9.0"
 description = "Production-ready AI agent framework for FIPS/OpenShift environments"
 readme = "README.md"
 license = {file = "LICENSE"}
