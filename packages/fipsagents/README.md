@@ -47,9 +47,9 @@ if __name__ == "__main__":
 - **Prompt loading** — Markdown with YAML frontmatter
 - **Skills** — agentskills.io progressive disclosure
 - **Configuration** — YAML with `${VAR:-default}` env var substitution
-- **MemoryHub** — optional persistent memory (dual-path: MCP for LLM, SDK for agent code)
+- **Pluggable memory** — memoryhub, markdown, sqlite, pgvector, llamastack, custom, or null. Budget presets (`small`/`medium`/`large`) auto-tune for model context size. Deferred loading, user-turn injection for small models, and per-turn recall patterns
 - **Protective patterns** — max iterations, exponential backoff, rate limiting
-- **HTTP server** — OpenAI-compatible `/v1/chat/completions` endpoint with streaming
+- **HTTP server** — OpenAI-compatible `/v1/chat/completions` endpoint with streaming and extended sampling parameters (top_p, top_k, repetition_penalty, reasoning_effort)
 - **`run_tool_calls()`** — one-line tool dispatch loop for non-streaming agents
 - **Agent identity** — name, description, version exposed via `/v1/agent-info`
 
