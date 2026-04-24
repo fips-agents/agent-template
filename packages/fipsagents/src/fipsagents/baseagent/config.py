@@ -231,6 +231,15 @@ class MemoryConfig(BaseModel):
       - ``max_prefix_chars`` — Maximum character length for the memory prefix.
                                Prevents large backends from dumping their
                                entire store.  0 disables the limit.
+      - ``injection_mode``   — Where to place retrieved memories:
+                               ``prefix`` (default) inserts a separate message
+                               before the user turn.  ``user_turn`` appends
+                               memories to the user message inside XML tags,
+                               which small models (8K-16K) treat as
+                               higher-salience context.
+      - ``injection_tag``    — XML tag name wrapping user-turn memories
+                               (default ``user_memories``).  Only used when
+                               ``injection_mode`` is ``user_turn``.
     """
 
     backend: Literal["memoryhub", "markdown", "sqlite", "pgvector", "llamastack", "custom", "null"] | None = None
@@ -238,6 +247,8 @@ class MemoryConfig(BaseModel):
     backend_class: str | None = None
     prefix_role: Literal["system", "developer"] = "system"
     max_prefix_chars: int = 8000
+    injection_mode: Literal["prefix", "user_turn"] = "prefix"
+    injection_tag: str = "user_memories"
 
     @field_validator("backend", mode="before")
     @classmethod

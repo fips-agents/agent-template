@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -300,6 +301,16 @@ class OpenAIChatServer:
 
         content = "".join(parts)
 
+        # Strip echoed memory injection tags from the response. When
+        # injection_mode is "user_turn" the framework wraps memories in
+        # <injection_tag>…</injection_tag> before sending them to the model.
+        # Some models echo those tags back verbatim; strip them defensively.
+        if agent.config.memory.injection_mode == "user_turn":
+            tag = re.escape(agent.config.memory.injection_tag)
+            content = re.sub(
+                rf"<{tag}>.*?</{tag}>", "", content, flags=re.DOTALL
+            ).strip()
+
         # Fallback: if no ContentDelta events were yielded but the agent
         # appended an assistant message (common after tool execution in
         # subclasses that override astep_stream), use that content.
@@ -318,7 +329,13 @@ class OpenAIChatServer:
         incoming: list[dict[str, Any]],
         model_name: str,
     ) -> AsyncIterator[str]:
-        """Drive the agent's event stream, serialising to OpenAI SSE chunks."""
+        """Drive the agent's event stream, serialising to OpenAI SSE chunks.
+
+        NOTE: Memory injection tags are stripped in ``_collect_sync`` for
+        non-streaming responses. For streaming, tag echoing is rare and
+        cross-chunk stripping would add latency/complexity. If needed, a
+        post-processing filter can be added later.
+        """
         async with self._agent_lock:
             assert self._agent is not None
             self._agent.messages = list(incoming)
