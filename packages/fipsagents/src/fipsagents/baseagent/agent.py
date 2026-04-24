@@ -1065,8 +1065,9 @@ class BaseAgent(abc.ABC):
             results = await self.memory.search("", **search_kwargs)
         else:
             # No project config (non-MemoryHub backend or old SDK) —
-            # fall back to a broad query.
-            results = await self.memory.search("general context")
+            # empty query returns all results in backend-native order,
+            # which is the right behavior for markdown/sqlite backends.
+            results = await self.memory.search("")
 
         if not results:
             return None

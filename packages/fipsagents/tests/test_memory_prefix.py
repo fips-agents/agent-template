@@ -477,7 +477,7 @@ async def test_deferred_pattern_returns_none(pattern: str) -> None:
 @pytest.mark.asyncio
 async def test_fallback_when_no_project_config() -> None:
     """When project_config is None (non-MemoryHub backend), search is
-    called with query='general context' — the legacy fallback path."""
+    called with query='' — the legacy fallback path (empty query returns all)."""
     mem = FakeMemoryHubClient(
         [{"id": "a", "content": "fallback data"}],
         project_config=None,
@@ -488,6 +488,6 @@ async def test_fallback_when_no_project_config() -> None:
     assert result == "fallback data"
     assert len(mem.search_calls) == 1
     query, kwargs = mem.search_calls[0]
-    assert query == "general context"
+    assert query == ""
     assert "mode" not in kwargs
     assert "project_id" not in kwargs
