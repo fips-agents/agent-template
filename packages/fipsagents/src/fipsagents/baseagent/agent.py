@@ -403,6 +403,9 @@ class BaseAgent(abc.ABC):
         """
         self._require_llm()
 
+        # Deferred memory injection — runs before the first model call.
+        await self._inject_deferred_memory()
+
         metrics = StreamMetrics()
         loop = asyncio.get_running_loop()
         start_time = loop.time()
@@ -1057,6 +1060,93 @@ class BaseAgent(abc.ABC):
             joined = joined[:limit] + "\n\n… [truncated]"
 
         return joined
+
+    async def _inject_deferred_memory(self) -> None:
+        """Inject memories after the first user message for deferred patterns.
+
+        Called at the top of :meth:`astep_stream` before the first model call.
+        No-ops for ``eager`` patterns (already handled by :meth:`setup`) and
+        for non-MemoryHub backends.  Wraps all logic in try/except so memory
+        failures never crash the agent loop.
+        """
+        try:
+            project_config = self.memory.project_config
+            if project_config is None:
+                return  # Non-MemoryHub backend — build_memory_prefix fallback.
+
+            try:
+                pattern = project_config.memory_loading.pattern
+            except AttributeError:
+                return  # Pre-pattern SDK — eager already handled by setup().
+
+            if not pattern or pattern == "eager":
+                return  # Already handled in setup().
+
+            # Find the last user message to use as the search query.
+            user_msg: dict[str, Any] | None = None
+            user_msg_idx: int = -1
+            for i in range(len(self.messages) - 1, -1, -1):
+                if self.messages[i].get("role") == "user":
+                    user_msg = self.messages[i]
+                    user_msg_idx = i
+                    break
+
+            if user_msg is None:
+                return
+
+            query = user_msg.get("content", "") or ""
+            tag = self.config.memory.injection_tag
+            injection_mode = self.config.memory.injection_mode
+
+            # Guard against double injection in user_turn mode.
+            if injection_mode == "user_turn" and f"<{tag}>" in query:
+                return
+
+            # Search memory using the user message as the query.
+            search_kwargs: dict[str, Any] = {}
+            project_id = getattr(project_config, "project_id", None)
+            if project_id:
+                search_kwargs["project_id"] = project_id
+            results = await self.memory.search(query, **search_kwargs)
+
+            if not results:
+                return
+
+            parts = [r.get("content", "") for r in results]
+            parts = [p for p in parts if p.strip()]
+            if not parts:
+                return
+
+            joined = "\n\n---\n\n".join(parts)
+
+            limit = self.config.memory.max_prefix_chars
+            if limit and len(joined) > limit:
+                joined = joined[:limit] + "\n\n… [truncated]"
+
+            if injection_mode == "user_turn":
+                self.messages[user_msg_idx]["content"] = (
+                    query + f"\n\n<{tag}>\n{joined}\n</{tag}>"
+                )
+                logger.debug(
+                    "Deferred memory injected into user turn (%d chars, pattern=%r)",
+                    len(joined), pattern,
+                )
+            else:
+                # prefix mode: insert a new message immediately before the user message.
+                self.messages.insert(
+                    user_msg_idx,
+                    {"role": self.config.memory.prefix_role, "content": joined},
+                )
+                logger.debug(
+                    "Deferred memory injected as prefix before user turn "
+                    "(%d chars, role=%r, pattern=%r)",
+                    len(joined), self.config.memory.prefix_role, pattern,
+                )
+        except Exception:
+            logger.warning(
+                "Deferred memory injection failed — continuing without memories",
+                exc_info=True,
+            )
 
 
 # ---------------------------------------------------------------------------
