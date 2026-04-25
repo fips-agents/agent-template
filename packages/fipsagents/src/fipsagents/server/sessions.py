@@ -92,9 +92,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at  TEXT NOT NULL
 )"""
 
-    def __init__(self, db_path: str = "./agent.db") -> None:
+    def __init__(self, db_path: str = "./agent.db", *, connection: Any = None) -> None:
         self._db_path = db_path
-        self._db: Any = None  # aiosqlite.Connection, typed loosely to keep import lazy
+        self._db: Any = connection  # Pre-set if managed
+        self._managed = connection is not None
         self._initialized = False
 
     async def _get_db(self) -> Any:
@@ -181,7 +182,7 @@ CREATE TABLE IF NOT EXISTS sessions (
         return deleted
 
     async def close(self) -> None:
-        if self._db is not None:
+        if self._db is not None and not self._managed:
             await self._db.close()
             self._db = None
             self._initialized = False
@@ -311,10 +312,11 @@ def create_session_store(
     *,
     sqlite_path: str = "./agent.db",
     database_url: str = "",
+    sqlite_connection: Any = None,
 ) -> SessionStore:
     """Create a session store from config values."""
     if backend == "sqlite":
-        return SqliteSessionStore(sqlite_path)
+        return SqliteSessionStore(sqlite_path, connection=sqlite_connection)
     elif backend == "postgres":
         if not database_url:
             raise ValueError("PostgresSessionStore requires database_url")

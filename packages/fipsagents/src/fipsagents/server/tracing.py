@@ -1,9 +1,8 @@
 """Trace data model and persistence backends.
 
-A trace represents one request through the agent. It contains spans
-representing operations: model calls, tool executions, memory lookups.
-The ``TraceCollector`` (in ``collector.py``) builds traces from
-``StreamEvent``s; this module provides the data model and storage.
+Traces capture one request through the agent as a tree of spans.
+``TraceCollector`` (in ``collector.py``) builds them from ``StreamEvent``s;
+this module provides the data model and storage.
 """
 
 from __future__ import annotations
@@ -34,9 +33,8 @@ def _utc_now_iso() -> str:
 class Span:
     """A single operation within a trace.
 
-    ``start_time`` / ``end_time`` are :func:`time.monotonic` values --
-    relative, not wall clock. They exist for computing durations. The
-    parent :class:`Trace` carries wall-clock timestamps in ISO 8601.
+    ``start_time``/``end_time`` are monotonic values for duration math;
+    the parent :class:`Trace` carries wall-clock timestamps in ISO 8601.
     """
 
     trace_id: str
@@ -122,6 +120,41 @@ class Trace:
         )
 
 
+def _spans_from_dicts(raw: list[dict[str, Any]]) -> list[Span]:
+    """Reconstruct Span objects from serialised dicts."""
+    return [
+        Span(
+            trace_id=s["trace_id"],
+            span_id=s["span_id"],
+            parent_span_id=s.get("parent_span_id"),
+            name=s.get("name", ""),
+            start_time=s.get("start_time", 0.0),
+            end_time=s.get("end_time"),
+            status=s.get("status", "ok"),
+            attributes=s.get("attributes", {}),
+            events=s.get("events", []),
+        )
+        for s in raw
+    ]
+
+
+def _summary_from_dict(d: dict[str, Any]) -> TraceSummary:
+    """Reconstruct a TraceSummary from a serialised dict."""
+    return TraceSummary(
+        trace_id=d["trace_id"],
+        started_at=d["started_at"],
+        ended_at=d.get("ended_at"),
+        model=d.get("model"),
+        session_id=d.get("session_id"),
+        status=d.get("status", "ok"),
+        duration_ms=d.get("duration_ms"),
+        span_count=d.get("span_count", 0),
+        tool_calls=d.get("tool_calls", 0),
+        prompt_tokens=d.get("prompt_tokens"),
+        completion_tokens=d.get("completion_tokens"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
@@ -203,9 +236,10 @@ CREATE TABLE IF NOT EXISTS traces (
         "ON traces (started_at)"
     )
 
-    def __init__(self, db_path: str = "./agent.db") -> None:
+    def __init__(self, db_path: str = "./agent.db", *, connection: Any = None) -> None:
         self._db_path = db_path
-        self._db: Any = None  # aiosqlite.Connection, typed loosely to keep import lazy
+        self._db: Any = connection  # Pre-set if managed
+        self._managed = connection is not None
         self._initialized = False
 
     async def _get_db(self) -> Any:
@@ -257,21 +291,7 @@ CREATE TABLE IF NOT EXISTS traces (
         if row is None:
             return None
 
-        spans_raw = json.loads(row[6])
-        spans = [
-            Span(
-                trace_id=s["trace_id"],
-                span_id=s["span_id"],
-                parent_span_id=s.get("parent_span_id"),
-                name=s.get("name", ""),
-                start_time=s.get("start_time", 0.0),
-                end_time=s.get("end_time"),
-                status=s.get("status", "ok"),
-                attributes=s.get("attributes", {}),
-                events=s.get("events", []),
-            )
-            for s in spans_raw
-        ]
+        spans = _spans_from_dicts(json.loads(row[6]))
 
         return Trace(
             trace_id=row[0],
@@ -296,20 +316,7 @@ CREATE TABLE IF NOT EXISTS traces (
         for (summary_json,) in rows:
             if summary_json is None:
                 continue
-            d = json.loads(summary_json)
-            summaries.append(TraceSummary(
-                trace_id=d["trace_id"],
-                started_at=d["started_at"],
-                ended_at=d.get("ended_at"),
-                model=d.get("model"),
-                session_id=d.get("session_id"),
-                status=d.get("status", "ok"),
-                duration_ms=d.get("duration_ms"),
-                span_count=d.get("span_count", 0),
-                tool_calls=d.get("tool_calls", 0),
-                prompt_tokens=d.get("prompt_tokens"),
-                completion_tokens=d.get("completion_tokens"),
-            ))
+            summaries.append(_summary_from_dict(json.loads(summary_json)))
         return summaries
 
     async def delete_before(self, cutoff: datetime) -> int:
@@ -325,9 +332,168 @@ CREATE TABLE IF NOT EXISTS traces (
         return deleted
 
     async def close(self) -> None:
-        if self._db is not None:
+        if self._db is not None and not self._managed:
             await self._db.close()
             self._db = None
+            self._initialized = False
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL
+# ---------------------------------------------------------------------------
+
+
+class PostgresTraceStore(TraceStore):
+    """Enterprise trace persistence via asyncpg."""
+
+    _CREATE_TABLE = """\
+CREATE TABLE IF NOT EXISTS traces (
+    trace_id    TEXT PRIMARY KEY,
+    started_at  TIMESTAMPTZ NOT NULL,
+    ended_at    TIMESTAMPTZ,
+    model       TEXT,
+    session_id  TEXT,
+    status      TEXT NOT NULL DEFAULT 'ok',
+    spans       JSONB NOT NULL,
+    summary     JSONB
+)"""
+    _CREATE_INDEX = (
+        "CREATE INDEX IF NOT EXISTS idx_traces_started "
+        "ON traces (started_at)"
+    )
+
+    def __init__(self, database_url: str) -> None:
+        self._database_url = database_url
+        self._pool: Any = None  # asyncpg.Pool
+        self._initialized = False
+
+    async def _get_pool(self) -> Any:
+        if self._pool is None:
+            import asyncpg
+            self._pool = await asyncpg.create_pool(self._database_url)
+        if not self._initialized:
+            await self._ensure_table()
+        return self._pool
+
+    async def _ensure_table(self) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(self._CREATE_TABLE)
+            await conn.execute(self._CREATE_INDEX)
+        self._initialized = True
+
+    async def save_trace(self, trace: Trace) -> None:
+        pool = await self._get_pool()
+        spans_json = json.dumps([asdict(s) for s in trace.spans], default=str)
+        summary_json = json.dumps(asdict(trace.to_summary()), default=str)
+        # Convert ISO 8601 strings to datetime for TIMESTAMPTZ columns.
+        started_dt = datetime.fromisoformat(trace.started_at)
+        ended_dt = (
+            datetime.fromisoformat(trace.ended_at)
+            if trace.ended_at else None
+        )
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO traces "
+                "(trace_id, started_at, ended_at, model, session_id, "
+                "status, spans, summary) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
+                "ON CONFLICT (trace_id) DO UPDATE "
+                "SET ended_at = EXCLUDED.ended_at, "
+                "status = EXCLUDED.status, "
+                "spans = EXCLUDED.spans, summary = EXCLUDED.summary",
+                trace.trace_id,
+                started_dt,
+                ended_dt,
+                trace.model,
+                trace.session_id,
+                trace.status,
+                spans_json,
+                summary_json,
+            )
+        logger.debug(
+            "PostgresTraceStore: saved trace %s (%d spans)",
+            trace.trace_id, len(trace.spans),
+        )
+
+    async def get_trace(self, trace_id: str) -> Trace | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT trace_id, started_at, ended_at, model, "
+                "session_id, status, spans "
+                "FROM traces WHERE trace_id = $1",
+                trace_id,
+            )
+        if row is None:
+            return None
+
+        spans_data = row["spans"]
+        # asyncpg auto-decodes JSONB to Python objects.
+        if isinstance(spans_data, str):
+            spans_data = json.loads(spans_data)
+        spans = _spans_from_dicts(spans_data)
+
+        return Trace(
+            trace_id=row["trace_id"],
+            started_at=(
+                row["started_at"].isoformat()
+                if hasattr(row["started_at"], "isoformat")
+                else row["started_at"]
+            ),
+            ended_at=(
+                row["ended_at"].isoformat()
+                if row["ended_at"]
+                and hasattr(row["ended_at"], "isoformat")
+                else row["ended_at"]
+            ),
+            model=row["model"],
+            session_id=row["session_id"],
+            status=row["status"],
+            spans=spans,
+        )
+
+    async def list_traces(
+        self, *, limit: int = 50, offset: int = 0
+    ) -> list[TraceSummary]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT summary FROM traces "
+                "ORDER BY started_at DESC LIMIT $1 OFFSET $2",
+                limit, offset,
+            )
+
+        summaries: list[TraceSummary] = []
+        for row in rows:
+            summary_data = row["summary"]
+            if summary_data is None:
+                continue
+            # asyncpg auto-decodes JSONB.
+            if isinstance(summary_data, str):
+                summary_data = json.loads(summary_data)
+            summaries.append(_summary_from_dict(summary_data))
+        return summaries
+
+    async def delete_before(self, cutoff: datetime) -> int:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM traces WHERE started_at < $1",
+                cutoff,
+            )
+        # asyncpg returns "DELETE N"
+        deleted = int(result.split()[-1])
+        if deleted:
+            logger.debug(
+                "PostgresTraceStore: housekeeping removed %d traces",
+                deleted,
+            )
+        return deleted
+
+    async def close(self) -> None:
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
             self._initialized = False
 
 
@@ -341,13 +507,13 @@ def create_trace_store(
     *,
     sqlite_path: str = "./agent.db",
     database_url: str = "",
+    sqlite_connection: Any = None,
 ) -> TraceStore:
     """Create a trace store from config values."""
     if backend == "sqlite":
-        return SqliteTraceStore(sqlite_path)
+        return SqliteTraceStore(sqlite_path, connection=sqlite_connection)
     if backend == "postgres":
-        logger.warning(
-            "PostgresTraceStore is not yet implemented; "
-            "traces will use NullTraceStore (structured logging only)"
-        )
+        if not database_url:
+            raise ValueError("PostgresTraceStore requires database_url")
+        return PostgresTraceStore(database_url)
     return NullTraceStore()

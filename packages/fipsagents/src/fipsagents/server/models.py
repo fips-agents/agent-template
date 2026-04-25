@@ -2,18 +2,39 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from fipsagents.baseagent.events import StreamMetrics
+
+
+# Session ID format: 1-128 alphanumeric characters, hyphens, or underscores.
+_SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 
 
 # ---------------------------------------------------------------------------
 # Request / response schema
 # ---------------------------------------------------------------------------
+
+
+class CreateSessionRequest(BaseModel):
+    """Request body for POST /v1/sessions."""
+
+    session_id: str | None = None
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, v: str | None) -> str | None:
+        if v is not None and not _SESSION_ID_RE.match(v):
+            raise ValueError(
+                "session_id must be 1-128 characters: "
+                "letters, digits, hyphens, or underscores"
+            )
+        return v
 
 
 class ChatMessage(BaseModel):
@@ -39,7 +60,21 @@ class ChatCompletionRequest(BaseModel):
     repetition_penalty: float | None = None
     reasoning_effort: str | None = None
     # Session persistence (extension field, not part of OpenAI API).
-    session_id: str | None = None
+    session_id: str | None = Field(
+        default=None,
+        description="Session ID for conversation persistence. "
+        "If provided but no session exists, one is created automatically.",
+    )
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, v: str | None) -> str | None:
+        if v is not None and not _SESSION_ID_RE.match(v):
+            raise ValueError(
+                "session_id must be 1-128 characters: "
+                "letters, digits, hyphens, or underscores"
+            )
+        return v
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ from fipsagents.serialization.openai_sse import stream_events_as_sse
 
 from .models import (
     ChatCompletionRequest,
+    CreateSessionRequest,
     _extract_overrides,
     _messages_to_dicts,
     _sync_response,
@@ -78,6 +79,7 @@ class OpenAIChatServer:
         self._session_store: SessionStore | None = None
         self._trace_store: TraceStore | None = None
         self._housekeeping_task: asyncio.Task | None = None
+        self._sqlite_mgr: Any = None
 
         app_title = title if title is not None else agent_class.__name__
         self.app = FastAPI(
@@ -99,15 +101,31 @@ class OpenAIChatServer:
 
         # Initialize session and trace stores from config.
         server_cfg = self._agent.config.server
+        sqlite_conn = None
+
+        has_sqlite_feature = (
+            server_cfg.storage.backend == "sqlite"
+            and (server_cfg.sessions.enabled or server_cfg.traces.enabled)
+        )
+        if has_sqlite_feature:
+            from .sqlite import SqliteConnectionManager
+
+            self._sqlite_mgr = SqliteConnectionManager()
+            sqlite_conn = await self._sqlite_mgr.acquire(
+                server_cfg.storage.sqlite_path,
+            )
+
         self._session_store = create_session_store(
             server_cfg.storage.backend if server_cfg.sessions.enabled else None,
             sqlite_path=server_cfg.storage.sqlite_path,
             database_url=server_cfg.storage.database_url,
+            sqlite_connection=sqlite_conn,
         )
         self._trace_store = create_trace_store(
             server_cfg.storage.backend if server_cfg.traces.enabled else None,
             sqlite_path=server_cfg.storage.sqlite_path,
             database_url=server_cfg.storage.database_url,
+            sqlite_connection=sqlite_conn,
         )
 
         # Only run housekeeping if at least one feature has a persistent backend.
@@ -126,9 +144,11 @@ class OpenAIChatServer:
                     await self._housekeeping_task
                 except asyncio.CancelledError:
                     pass
+            await self._agent.shutdown()
             await self._session_store.close()
             await self._trace_store.close()
-            await self._agent.shutdown()
+            if self._sqlite_mgr:
+                await self._sqlite_mgr.close_all()
             self._agent = None
 
     # -- Housekeeping --------------------------------------------------------
@@ -232,11 +252,10 @@ class OpenAIChatServer:
 
         return JSONResponse(info)
 
-    async def _create_session(self, body: dict[str, Any] | None = Body(default=None)):
+    async def _create_session(self, body: CreateSessionRequest = Body(default_factory=CreateSessionRequest)):
         if self._session_store is None:
             raise HTTPException(status_code=503, detail="Server not ready")
-        session_id = body.get("session_id") if body else None
-        sid = await self._session_store.create(session_id)
+        sid = await self._session_store.create(body.session_id)
         return JSONResponse({"session_id": sid}, status_code=201)
 
     async def _get_session(self, session_id: str):
@@ -296,6 +315,8 @@ class OpenAIChatServer:
             stored = await self._session_store.load(req.session_id)
             if stored:
                 incoming = stored + incoming
+            else:
+                logger.info("Session %s not found; will auto-create on save", req.session_id)
 
         # Tracing: create collector if sampling says yes.
         collector: TraceCollector | None = None

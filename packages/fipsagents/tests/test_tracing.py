@@ -353,3 +353,7 @@ class TestCreateTraceStore:
     def test_sqlite(self):
         store = create_trace_store("sqlite")
         assert isinstance(store, SqliteTraceStore)
+
+    def test_postgres_requires_url(self):
+        with pytest.raises(ValueError, match="requires database_url"):
+            create_trace_store("postgres")

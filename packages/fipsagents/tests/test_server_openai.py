@@ -561,6 +561,76 @@ def test_agent_info_extracts_system_prompt():
     assert body["system_prompt"] == "You are a helpful assistant."
 
 
+# ---------------------------------------------------------------------------
+# Session ID validation
+# ---------------------------------------------------------------------------
+
+
+def test_create_session_with_valid_id():
+    """POST /v1/sessions with a valid custom ID succeeds."""
+    from fipsagents.server.models import CreateSessionRequest
+
+    req = CreateSessionRequest(session_id="my-session_123")
+    assert req.session_id == "my-session_123"
+
+
+def test_create_session_with_no_id():
+    """POST /v1/sessions with no body auto-generates."""
+    from fipsagents.server.models import CreateSessionRequest
+
+    req = CreateSessionRequest()
+    assert req.session_id is None
+
+
+def test_create_session_rejects_invalid_characters():
+    """Session IDs with invalid characters are rejected."""
+    from fipsagents.server.models import CreateSessionRequest
+
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CreateSessionRequest(session_id="has spaces!")
+
+
+def test_create_session_rejects_too_long():
+    """Session IDs over 128 characters are rejected."""
+    from fipsagents.server.models import CreateSessionRequest
+
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CreateSessionRequest(session_id="a" * 129)
+
+
+def test_chat_request_rejects_invalid_session_id():
+    """ChatCompletionRequest rejects invalid session_id format."""
+    from fipsagents.server.models import ChatCompletionRequest, ChatMessage
+
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="hi")],
+            session_id="invalid/path/../id",
+        )
+
+
+def test_chat_request_accepts_valid_session_id():
+    """ChatCompletionRequest accepts valid session_id."""
+    from fipsagents.server.models import ChatCompletionRequest, ChatMessage
+
+    req = ChatCompletionRequest(
+        messages=[ChatMessage(role="user", content="hi")],
+        session_id="sess_abc123",
+    )
+    assert req.session_id == "sess_abc123"
+
+
+# ---------------------------------------------------------------------------
+# /v1/agent-info
+# ---------------------------------------------------------------------------
+
+
 def test_agent_info_includes_llm_tools():
     from fipsagents.baseagent.tools import ToolMeta
 
