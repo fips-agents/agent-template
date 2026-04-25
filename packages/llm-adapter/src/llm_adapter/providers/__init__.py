@@ -28,3 +28,4 @@ from llm_adapter.providers import anthropic as _anthropic  # noqa: F401, E402
 from llm_adapter.providers import azure as _azure  # noqa: F401, E402
 from llm_adapter.providers import bedrock as _bedrock  # noqa: F401, E402
 from llm_adapter.providers import bedrock_converse as _bedrock_converse  # noqa: F401, E402
+from llm_adapter.providers import openai_compat as _openai_compat  # noqa: F401, E402
