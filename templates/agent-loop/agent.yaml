@@ -144,6 +144,66 @@ server:
   host: ${HOST:-0.0.0.0}
   port: ${PORT:-8080}
 
+  # -- Storage backend (optional) -----------------------------------------------
+  #
+  # Shared storage for session persistence and trace collection.
+  # When backend is null (default), both features degrade to no-ops --
+  # fully backward-compatible.
+  #
+  # Production env vars:
+  #   STORAGE_BACKEND -- "sqlite" or "postgres"
+  #   SQLITE_PATH     -- path to SQLite file (default: ./agent.db)
+  #   DATABASE_URL    -- PostgreSQL connection string (for postgres backend)
+  storage:
+    backend: ${STORAGE_BACKEND:-}
+    sqlite_path: ${SQLITE_PATH:-./agent.db}
+  #   database_url: ${DATABASE_URL:-}
+
+  # -- Session persistence (optional) -------------------------------------------
+  #
+  # Enables conversation continuity across requests.  Requires a storage
+  # backend (sqlite or postgres) to persist session state.
+  #
+  # REST endpoints:  POST /v1/sessions, GET /v1/sessions/{id},
+  #                  DELETE /v1/sessions/{id}
+  # Per-request:     pass session_id on ChatCompletionRequest to reuse context
+  # Auto-create:     sessions are created on first use (explicit POST optional)
+  sessions:
+    enabled: ${SESSIONS_ENABLED:-false}
+    max_age_hours: 168           # sessions expire after 7 days
+
+  # -- Trace collection (optional) ----------------------------------------------
+  #
+  # TraceCollector observes astep_stream() and builds span trees from
+  # StreamEvents.  Traces are queryable via GET /v1/traces.
+  #
+  # exporter:
+  #   store  -- persist to the storage backend (default when enabled)
+  #   otel   -- export to OpenTelemetry Collector via OTLP (requires [otel] extra)
+  #
+  # Production env vars:
+  #   TRACES_ENABLED  -- "true" to enable
+  #   OTEL_ENDPOINT   -- OTLP gRPC endpoint (e.g. http://otel-collector:4317)
+  traces:
+    enabled: ${TRACES_ENABLED:-false}
+    sampling_rate: 1.0
+  #   exporter: store            # or: otel
+  #   otel_endpoint: ${OTEL_ENDPOINT:-}
+  #   service_name: ${OTEL_SERVICE_NAME:-fipsagents}
+
+  # -- Prometheus metrics (optional) --------------------------------------------
+  #
+  # Records request/tool/token counters and duration histograms.
+  # Exposed at GET /metrics in Prometheus text format.
+  # Requires the [metrics] extra:  pip install fipsagents[metrics]
+  #
+  # Available metrics:
+  #   agent_requests_total, agent_request_duration_seconds,
+  #   agent_model_call_duration_seconds, agent_tool_call_total,
+  #   agent_tokens_total
+  metrics:
+    enabled: ${METRICS_ENABLED:-false}
+
 # -- Memory backend (optional) -----------------------------------------------
 #
 # Controls which memory backend the agent uses.

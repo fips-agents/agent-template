@@ -21,6 +21,7 @@ These are settled. Do not revisit without explicit discussion.
 
 - **BaseAgent** is pure Python, async throughout, no framework dependencies (no LangChain, no LangGraph)
 - **openai** (async SDK) is the LLM client -- connects to any OpenAI-compatible endpoint (vLLM, LlamaStack, llm-d)
+- **LLM adapter** at `packages/llm-adapter/` is a sidecar FastAPI service translating OpenAI-compatible requests to 8 provider APIs (Anthropic, Bedrock, Bedrock Converse, Azure OpenAI, OpenAI-compatible, Ollama, llama.cpp, Vertex AI/Gemini). Scaffolded as source code into the project (not a pip dependency). Packaging decision: stays as a scaffolded sidecar (Option B). If we ever publish to PyPI as `fipsagents-llm-adapter` (Option A), the scaffolded-source path must remain first-class -- same dual-path model as BaseAgent. Rationale: fips-agents is building blocks, not a framework; scaffolded source minimizes dependency surface and gives developers full control.
 - **FastMCP v3** is the MCP client -- not v2
 - **Two tool planes**: agent-code tools (plane 1, invisible to LLM) and LLM-callable tools (plane 2). Both go through BaseAgent for logging/RBAC/retry. Visibility per tool: `agent_only`, `llm_only`, `both`.
 - **@tool decorator** for local tools, same convention as FastMCP. Auto-discovered from `tools/` directory.
