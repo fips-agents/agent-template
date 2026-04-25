@@ -15,7 +15,7 @@ class AdapterConfig(BaseModel):
     classmethod.  No pydantic-settings dependency is required.
     """
 
-    provider: Literal["anthropic", "bedrock", "azure"] = "anthropic"
+    provider: Literal["anthropic", "bedrock", "bedrock-converse", "azure"] = "anthropic"
     port: int = 8081
     log_level: str = "INFO"
 
