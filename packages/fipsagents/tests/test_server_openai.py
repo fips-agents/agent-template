@@ -55,6 +55,22 @@ class _StubAgent(BaseAgent):
                 injection_mode="prefix",
                 injection_tag="user_memories",
             ),
+            server=types.SimpleNamespace(
+                storage=types.SimpleNamespace(
+                    backend=None,
+                    sqlite_path="./agent.db",
+                    database_url="",
+                ),
+                sessions=types.SimpleNamespace(
+                    enabled=False,
+                    max_age_hours=168,
+                ),
+                traces=types.SimpleNamespace(
+                    enabled=False,
+                    max_age_hours=168,
+                    sampling_rate=1.0,
+                ),
+            ),
         )
 
     def build_system_prompt(self) -> str:
