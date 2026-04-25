@@ -29,3 +29,4 @@ from llm_adapter.providers import azure as _azure  # noqa: F401, E402
 from llm_adapter.providers import bedrock as _bedrock  # noqa: F401, E402
 from llm_adapter.providers import bedrock_converse as _bedrock_converse  # noqa: F401, E402
 from llm_adapter.providers import openai_compat as _openai_compat  # noqa: F401, E402
+from llm_adapter.providers import ollama as _ollama  # noqa: F401, E402
