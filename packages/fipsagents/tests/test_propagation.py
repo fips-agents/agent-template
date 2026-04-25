@@ -3,7 +3,6 @@
 import pytest
 
 from fipsagents.server.propagation import (
-    TraceContext,
     extract_trace_context,
     inject_trace_context,
 )

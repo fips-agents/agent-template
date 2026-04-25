@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime
 
 from .propagation import _string_to_span_id, _string_to_trace_id
-from .tracing import NullTraceStore, Span, Trace, TraceSummary, TraceStore
+from .tracing import NullTraceStore, Trace, TraceSummary, TraceStore
 
 logger = logging.getLogger(__name__)
 

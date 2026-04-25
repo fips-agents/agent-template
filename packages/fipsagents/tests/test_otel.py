@@ -4,9 +4,9 @@ import pytest
 
 otel_sdk = pytest.importorskip("opentelemetry.sdk")
 
-from fipsagents.server.otel import OTELTraceStore
-from fipsagents.server.propagation import _string_to_span_id, _string_to_trace_id
-from fipsagents.server.tracing import (
+from fipsagents.server.otel import OTELTraceStore  # noqa: E402
+from fipsagents.server.propagation import _string_to_span_id, _string_to_trace_id  # noqa: E402
+from fipsagents.server.tracing import (  # noqa: E402
     NullTraceStore,
     Span,
     Trace,
