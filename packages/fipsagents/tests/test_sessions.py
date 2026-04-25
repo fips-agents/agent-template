@@ -1,6 +1,5 @@
 """Tests for session persistence backends."""
 
-import json
 
 import pytest
 import pytest_asyncio
@@ -169,7 +168,7 @@ class TestSqliteSessionStore:
     async def test_create_duplicate_id_raises(self, sqlite_store):
         """Creating a session with an existing ID raises IntegrityError."""
         import aiosqlite
-        sid = await sqlite_store.create("dup-id")
+        await sqlite_store.create("dup-id")
         with pytest.raises(aiosqlite.IntegrityError):
             await sqlite_store.create("dup-id")
 

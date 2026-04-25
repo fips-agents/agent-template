@@ -43,6 +43,10 @@ These are settled. Do not revisit without explicit discussion.
 - **Workflow state** is a typed Pydantic model with `extra="forbid"`. Data only -- execution metadata stays in structured logs.
 - **@node decorator** marks classes for workflow registration, mirroring the @tool pattern.
 - **SecurityConfig** in `AgentConfig` -- global `mode` (`enforce`/`observe`) with per-layer override (`tool_inspection.mode`, `guardrails.mode`). `ToolInspector` scans tool call arguments for secrets, C2 patterns, and prompt injection before execution. Audit findings log to `fipsagents.security.audit`. Wired in `setup()` step 4b.
+- **Session persistence** is server-layer only — `SessionStore` ABC with `NullSessionStore` (default, ephemeral), `SqliteSessionStore` (edge/dev), `PostgresSessionStore` (enterprise). BaseAgent has no concept of sessions; the server handles load-before / save-after around each request. REST endpoints: `POST /v1/sessions`, `GET /v1/sessions/{id}`, `DELETE /v1/sessions/{id}`. Optional `session_id` field on `ChatCompletionRequest`.
+- **Tracing** is server-layer only — `TraceCollector` wraps `astep_stream()` as a pure observer, building span trees from `StreamEvent`s without modifying them. `TraceStore` ABC with `NullTraceStore` (structured JSON logging, default) and `SqliteTraceStore`. Query endpoints: `GET /v1/traces`, `GET /v1/traces/{id}`. Sampling rate configurable.
+- **Shared storage layer** — `ServerConfig` has `StorageConfig` (`backend: null | sqlite | postgres`), `SessionsConfig` (`enabled`, `max_age_hours`), `TracesConfig` (`enabled`, `max_age_hours`, `sampling_rate`). Both sessions and traces share the storage backend. When backend is `null`, both features degrade to no-ops (fully backward-compatible).
+- **Server module structure** — `fipsagents.server` is a proper package: `app.py` (OpenAIChatServer), `models.py` (request/response schemas), `sessions.py` (session stores), `tracing.py` (trace model + stores), `collector.py` (TraceCollector). `__init__.py` re-exports `OpenAIChatServer`, `ChatCompletionRequest`, `ChatMessage`.
 - **`probe_role_support()`** is a diagnostic utility in `fipsagents.baseagent.diagnostics` -- probes whether a deployed model supports a given message role (e.g. `developer`). Template inspection (best-effort, checks vLLM model metadata) + canary completion (prompt token delta). Not on the hot path.
 - **`ThinkTagParser`** in `fipsagents.baseagent.reasoning` -- streaming parser that separates `<think>…</think>` blocks from content deltas. Auto-enabled for Granite and DeepSeek models (via `create_reasoning_parser(model_name)`). Wired in `setup()` step 11 and `astep_stream`. Falls back gracefully when vLLM's `--reasoning-parser` already handles extraction server-side.
 - **`McpServerConfig`** supports two YAML-configurable transports: HTTP (`url`) and stdio (`command`/`args`/`env`/`cwd`). Pydantic validator enforces exactly one. `connect_mcp()` also accepts FastMCP server objects for in-process transport (programmatic, not YAML).
@@ -101,6 +105,7 @@ Makefile
 - fastmcp (v3) -- MCP client
 - memoryhub -- optional, MemoryHub memory backend
 - asyncpg -- optional, PGVector memory backend (`pip install fipsagents[pgvector]`)
+- aiosqlite -- optional, SQLite session/trace backends (``pip install fipsagents[server]``)
 - pydantic -- config and schema validation
 - httpx -- async HTTP
 - python-frontmatter -- parsing prompt/skill files
@@ -140,3 +145,5 @@ The agent talks to these through configured URLs in agent.yaml. It does not depl
 - Do not rely on system-prompt placement for memory grounding with small models -- Granite 3.3 8B and similar models treat system-prompt content as suggestions. Use `injection_mode: user_turn` in agent.yaml to append memories to user messages where the model treats them as high-salience context.
 - Do not hardcode memory retrieval limits -- use `budget: small` (or medium/large) in agent.yaml to get sensible defaults for `max_prefix_chars`, `max_results`, and `min_weight` based on the model's context window. Explicit values override the preset.
 - Do not forget `loading_pattern` for file-based backends -- markdown and sqlite backends have no `.memoryhub.yaml` and no `project_config`, so deferred loading patterns only work when `loading_pattern` is set explicitly in agent.yaml.
+- Do not put session or trace logic in BaseAgent -- sessions and traces are server-layer concerns. BaseAgent works with `self.messages` and emits `StreamEvent`s; the server wraps those with persistence and observation.
+- Do not assume sessions exist without explicit creation -- `POST /v1/sessions` must be called first. The `save()` method auto-upserts, but the REST contract expects explicit creation.

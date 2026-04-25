@@ -2,8 +2,7 @@
 
 import pytest
 import pytest_asyncio
-from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fipsagents.baseagent.events import (
     ContentDelta,
@@ -18,7 +17,6 @@ from fipsagents.server.tracing import (
     Span,
     SqliteTraceStore,
     Trace,
-    TraceSummary,
     create_trace_store,
 )
 

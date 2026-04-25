@@ -25,7 +25,6 @@ from fipsagents.serialization.openai_sse import stream_events_as_sse
 
 from .models import (
     ChatCompletionRequest,
-    ChatMessage,
     _extract_overrides,
     _messages_to_dicts,
     _sync_response,
