@@ -15,8 +15,8 @@ from llm_adapter.models import (
     Tool,
     ToolFunction,
 )
-from llm_adapter.providers.azure import (
-    AzureProvider,
+from llm_adapter.providers.azure import AzureProvider
+from llm_adapter.providers._openai_helpers import (
     _build_request_kwargs,
     _stream_response,
     _translate_response,
