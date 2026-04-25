@@ -45,6 +45,7 @@ pgvector = [
 server = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
+    "aiosqlite>=0.20.0",
 ]
 dev = [
     "pytest>=7.0",

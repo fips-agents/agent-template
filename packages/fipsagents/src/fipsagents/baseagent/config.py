@@ -366,11 +366,57 @@ class AgentIdentity(BaseModel):
     version: str = "0.1.0"
 
 
+class StorageConfig(BaseModel):
+    """Shared storage backend for sessions and traces.
+
+    When ``backend`` is ``null`` (default), no persistence — features
+    degrade gracefully to no-ops. ``sqlite`` uses a single file for
+    both sessions and traces. ``postgres`` uses a shared connection pool.
+    """
+
+    backend: Literal["sqlite", "postgres"] | None = None
+    sqlite_path: str = "./agent.db"
+    database_url: str = ""
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _coerce_empty_backend(cls, v: Any) -> Any:
+        """Coerce empty strings to None (from ``${STORAGE_BACKEND:-}``)."""
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _coerce_empty_url(cls, v: Any) -> Any:
+        if isinstance(v, str) and v.strip() == "":
+            return ""
+        return v
+
+
+class SessionsConfig(BaseModel):
+    """Session persistence settings."""
+
+    enabled: bool = False
+    max_age_hours: int = Field(default=168, ge=0)
+
+
+class TracesConfig(BaseModel):
+    """Trace collection settings."""
+
+    enabled: bool = False
+    max_age_hours: int = Field(default=168, ge=0)
+    sampling_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
 class ServerConfig(BaseModel):
-    """HTTP server binding configuration."""
+    """HTTP server binding and feature configuration."""
 
     host: str = "0.0.0.0"
     port: int = Field(default=8080, gt=0, le=65535)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
+    sessions: SessionsConfig = Field(default_factory=SessionsConfig)
+    traces: TracesConfig = Field(default_factory=TracesConfig)
 
     @field_validator("port", mode="before")
     @classmethod
