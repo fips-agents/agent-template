@@ -195,6 +195,100 @@ fipsagents.serialization.responses_api:stream_events_as_responses               
 
 The type signature `(events: AsyncIterator[StreamEvent], model_name: str, ...) -> AsyncIterator[str]` is the contract. No base class, no registry -- grep for the function name to know what exists.
 
+## Observability
+
+Sessions, traces, and metrics are server-layer concerns -- BaseAgent has no concept of any of them. The server wraps each request with persistence and observation; the agent works with `self.messages` and emits `StreamEvent`s. All observability features share a storage backend configured once in `agent.yaml` and degrade to silent no-ops when disabled.
+
+### Storage Backend
+
+`ServerConfig` has a `StorageConfig` that selects a single backend (`null`, `sqlite`, or `postgres`) shared by sessions and traces:
+
+```yaml
+server:
+  storage:
+    backend: sqlite                    # null | sqlite | postgres
+    sqlite_path: ./agent.db
+    # postgres_dsn: postgresql://...   # for backend: postgres
+  sessions:
+    enabled: true
+    max_age_hours: 168
+  traces:
+    enabled: true
+    max_age_hours: 72
+    sampling_rate: 1.0
+  metrics:
+    enabled: false
+```
+
+When backend is `null`, both sessions and traces degrade to no-ops (fully backward-compatible). `SqliteConnectionManager` (in `fipsagents.server.sqlite`) deduplicates connections by resolved file path, so sessions and traces sharing the same SQLite database get a single connection pool rather than two.
+
+### Sessions
+
+`SessionStore` is an ABC with three implementations: `NullSessionStore` (default, ephemeral -- messages live only for the request lifetime), `SqliteSessionStore` (edge/dev), and `PostgresSessionStore` (enterprise). The server loads conversation history before each request and saves it after, so the agent subclass never touches persistence directly.
+
+REST endpoints: `POST /v1/sessions`, `GET /v1/sessions/{id}`, `DELETE /v1/sessions/{id}`.
+
+`CreateSessionRequest` is a Pydantic model that validates session IDs: alphanumeric characters, hyphens, and underscores only, 1-128 characters. The same validation applies to the optional `session_id` field on `ChatCompletionRequest`. Sessions support two creation modes: explicit creation via `POST /v1/sessions`, and auto-create-on-first-use -- when a `session_id` is passed on a chat completion request, the `save()` method uses upsert semantics and creates the session if it doesn't exist. The explicit endpoint is optional but recommended when you need to control the ID or check for duplicates.
+
+### Traces
+
+`TraceCollector` wraps `astep_stream()` as a pure observer, building span trees from `StreamEvent`s without modifying them. It produces `Trace` objects containing a tree of `Span`s (model calls, tool executions, full request lifecycle). `TraceStore` is an ABC with three implementations:
+
+- `NullTraceStore` -- structured JSON logging, no persistence (default)
+- `SqliteTraceStore` -- edge and development use
+- `PostgresTraceStore` -- enterprise use; JSONB spans, `TIMESTAMPTZ` timestamps, `asyncpg` connection pool. Mirrors the `PostgresSessionStore` implementation pattern.
+
+Query endpoints: `GET /v1/traces`, `GET /v1/traces/{id}`. Sampling rate is configurable via `server.traces.sampling_rate`.
+
+### Prometheus Metrics
+
+`MetricsCollector` follows the same observer pattern as `TraceCollector` -- it wraps request handling and records counters and histograms without modifying the agent's behavior. Five metrics are tracked:
+
+- `agent_requests_total` -- request count by status
+- `agent_request_duration_seconds` -- end-to-end request latency histogram
+- `agent_model_call_duration_seconds` -- per-model-call latency histogram
+- `agent_tool_call_total` -- tool invocation count by tool name
+- `agent_tokens_total` -- token consumption by direction (prompt/completion)
+
+Exposed at `GET /metrics` in Prometheus text format. Requires the `[metrics]` optional extra (`prometheus_client`). When metrics are disabled, `NullMetricsCollector` is a silent no-op.
+
+```yaml
+server:
+  metrics:
+    enabled: true
+```
+
+```toml
+pip install 'fipsagents[metrics]'
+```
+
+### OTEL Trace Export
+
+`OTELTraceStore` wraps an inner `TraceStore` (typically `SqliteTraceStore` or `PostgresTraceStore`) and translates internal `Span` objects to OpenTelemetry spans exported via OTLP. Span IDs are deterministically hashed (SHA-256 of the internal string ID) so traces are reproducible. Monotonic timestamps from `StreamMetrics` are converted to wall-clock times anchored on `Trace.started_at`.
+
+```yaml
+server:
+  traces:
+    enabled: true
+    exporter: otel
+    otel_endpoint: http://otel-collector:4317
+    service_name: my-agent
+```
+
+```toml
+pip install 'fipsagents[otel]'  # opentelemetry-sdk + opentelemetry-exporter-otlp-proto-grpc
+```
+
+### Distributed Trace Propagation
+
+Multi-agent deployments (workflow graphs with `RemoteNode`) propagate trace context across HTTP boundaries using the W3C Trace Context specification. `propagation.py` provides two functions:
+
+`extract_trace_context(headers)` pulls `traceparent` from incoming request headers and returns a `(trace_id, parent_span_id)` tuple. `TraceCollector` accepts these as `parent_trace_id` and `parent_span_id` to join the distributed trace.
+
+`inject_trace_context(headers, trace_id, span_id)` sets the `traceparent` header on outgoing requests. `RemoteNode.set_trace_context()` calls this before delegating to a downstream agent, so the downstream agent's traces are children of the calling node's span.
+
+The result is a single trace tree spanning all agents in a workflow, viewable in any W3C-compliant trace backend (Jaeger, Tempo, the OTEL collector).
+
 ## Prompts
 
 Prompts are Markdown files with YAML frontmatter, stored one-per-file in the `prompts/` directory:

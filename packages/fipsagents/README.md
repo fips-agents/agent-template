@@ -14,6 +14,18 @@ With optional MemoryHub support:
 pip install fipsagents[server,memory]
 ```
 
+With Prometheus metrics endpoint:
+
+```bash
+pip install fipsagents[server,metrics]
+```
+
+With OpenTelemetry trace export:
+
+```bash
+pip install fipsagents[server,otel]
+```
+
 Or vendor the source directly into your project for full control:
 
 ```bash
