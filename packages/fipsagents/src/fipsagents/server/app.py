@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 try:
-    from fastapi import Body, FastAPI, HTTPException
+    from fastapi import Body, FastAPI, HTTPException, Request
     from fastapi.responses import JSONResponse, StreamingResponse
 except ImportError as exc:  # pragma: no cover — helpful error path
     raise ImportError(
@@ -31,6 +31,7 @@ from .models import (
     _sync_response,
 )
 from .collector import TraceCollector
+from .metrics import NullMetricsCollector, create_metrics_collector
 from .sessions import SessionStore, create_session_store
 from .tracing import TraceStore, create_trace_store
 
@@ -78,6 +79,7 @@ class OpenAIChatServer:
         self._agent_lock = asyncio.Lock()
         self._session_store: SessionStore | None = None
         self._trace_store: TraceStore | None = None
+        self._metrics_collector: Any = None  # Set in lifespan
         self._housekeeping_task: asyncio.Task | None = None
         self._sqlite_mgr: Any = None
 
@@ -126,6 +128,14 @@ class OpenAIChatServer:
             sqlite_path=server_cfg.storage.sqlite_path,
             database_url=server_cfg.storage.database_url,
             sqlite_connection=sqlite_conn,
+            exporter=server_cfg.traces.exporter,
+            otel_endpoint=server_cfg.traces.otel_endpoint,
+            service_name=server_cfg.traces.service_name,
+        )
+
+        # Initialize metrics collector.
+        self._metrics_collector = create_metrics_collector(
+            enabled=server_cfg.metrics.enabled,
         )
 
         # Only run housekeeping if at least one feature has a persistent backend.
@@ -201,6 +211,7 @@ class OpenAIChatServer:
         self.app.get("/v1/traces")(self._list_traces)
         self.app.get("/v1/traces/{trace_id}")(self._get_trace)
         self.app.post("/v1/chat/completions")(self._chat_completions)
+        self.app.get("/metrics")(self._metrics_endpoint)
 
     # -- Endpoint handlers ---------------------------------------------------
 
@@ -301,7 +312,19 @@ class OpenAIChatServer:
             return False
         return random.random() < rate
 
-    async def _chat_completions(self, req: ChatCompletionRequest):
+    async def _metrics_endpoint(self):
+        if self._metrics_collector is None or isinstance(
+            self._metrics_collector, NullMetricsCollector
+        ):
+            raise HTTPException(status_code=404, detail="Metrics not enabled")
+        from fastapi.responses import Response
+
+        return Response(
+            content=self._metrics_collector.generate_metrics(),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
+    async def _chat_completions(self, request: Request, req: ChatCompletionRequest):
         if self._agent is None:
             raise HTTPException(status_code=503, detail="Agent not ready")
 
@@ -321,10 +344,15 @@ class OpenAIChatServer:
         # Tracing: create collector if sampling says yes.
         collector: TraceCollector | None = None
         if self._should_trace():
+            from .propagation import extract_trace_context
+            parent_ctx = extract_trace_context(request.headers)
+
             collector = TraceCollector(
                 self._trace_store,
                 session_id=req.session_id,
                 model=model_name,
+                parent_trace_id=parent_ctx.trace_id if parent_ctx else None,
+                parent_span_id=parent_ctx.parent_span_id if parent_ctx else None,
             )
             collector.begin_request({
                 "model": model_name,
@@ -332,15 +360,25 @@ class OpenAIChatServer:
                 "session_id": req.session_id,
             })
 
+        # Metrics: start timing.
+        metrics_start: float | None = None
+        if self._metrics_collector is not None:
+            metrics_start = self._metrics_collector.record_request_start()
+
         if not req.stream:
             content, metrics, finish_reason = await self._collect_sync(
-                agent, incoming, overrides=overrides, collector=collector,
+                agent, incoming, model_name=model_name,
+                overrides=overrides, collector=collector,
             )
             # Session: save after sync response.
             if req.session_id and self._session_store:
                 await self._session_store.save(req.session_id, agent.messages)
             if collector:
                 await collector.end_request()
+            if self._metrics_collector and metrics_start is not None:
+                self._metrics_collector.record_request_end(
+                    model_name, False, "ok", metrics_start,
+                )
             return JSONResponse(
                 _sync_response(
                     model_name,
@@ -354,6 +392,7 @@ class OpenAIChatServer:
             self._stream(
                 incoming, model_name, overrides=overrides,
                 session_id=req.session_id, collector=collector,
+                metrics_start=metrics_start,
             ),
             media_type="text/event-stream",
             headers={
@@ -370,6 +409,7 @@ class OpenAIChatServer:
         agent: BaseAgent,
         incoming: list[dict[str, Any]],
         *,
+        model_name: str = "",
         overrides: dict[str, Any] | None = None,
         collector: TraceCollector | None = None,
     ) -> tuple[str, StreamMetrics | None, str]:
@@ -389,6 +429,10 @@ class OpenAIChatServer:
         async with self._agent_lock:
             agent.messages = list(incoming)
             events = agent.astep_stream(max_iterations=10, **(overrides or {}))
+            if self._metrics_collector is not None:
+                events = self._metrics_collector.observe(
+                    events, model=model_name,
+                )
             if collector:
                 events = collector.observe(events)
             async for event in events:
@@ -431,6 +475,7 @@ class OpenAIChatServer:
         overrides: dict[str, Any] | None = None,
         session_id: str | None = None,
         collector: TraceCollector | None = None,
+        metrics_start: float | None = None,
     ) -> AsyncIterator[str]:
         """Drive the agent's event stream, serialising to OpenAI SSE chunks.
 
@@ -443,18 +488,30 @@ class OpenAIChatServer:
             assert self._agent is not None
             self._agent.messages = list(incoming)
 
+            stream_status = "ok"
             try:
                 events = self._agent.astep_stream(max_iterations=10, **(overrides or {}))
+                if self._metrics_collector is not None:
+                    events = self._metrics_collector.observe(
+                        events, model=model_name,
+                    )
                 if collector:
                     events = collector.observe(events)
                 async for chunk in stream_events_as_sse(events, model_name):
                     yield chunk
             except Exception:
                 logger.exception("Stream errored")
+                stream_status = "error"
 
             # Tracing: finalize after streaming completes.
             if collector:
                 await collector.end_request()
+
+            # Metrics: record request end.
+            if self._metrics_collector and metrics_start is not None:
+                self._metrics_collector.record_request_end(
+                    model_name, True, stream_status, metrics_start,
+                )
 
             # Session: save after streaming completes.
             if session_id and self._session_store:

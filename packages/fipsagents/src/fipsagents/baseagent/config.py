@@ -407,6 +407,15 @@ class TracesConfig(BaseModel):
     enabled: bool = False
     max_age_hours: int = Field(default=168, ge=0)
     sampling_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    exporter: Literal["store", "otel"] | None = None
+    otel_endpoint: str | None = None
+    service_name: str = "fipsagents"
+
+
+class MetricsConfig(BaseModel):
+    """Prometheus metrics settings."""
+
+    enabled: bool = False
 
 
 class ServerConfig(BaseModel):
@@ -417,6 +426,7 @@ class ServerConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     traces: TracesConfig = Field(default_factory=TracesConfig)
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
 
     @field_validator("port", mode="before")
     @classmethod

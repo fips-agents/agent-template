@@ -69,6 +69,12 @@ class _StubAgent(BaseAgent):
                     enabled=False,
                     max_age_hours=168,
                     sampling_rate=1.0,
+                    exporter=None,
+                    otel_endpoint=None,
+                    service_name="fipsagents",
+                ),
+                metrics=types.SimpleNamespace(
+                    enabled=False,
                 ),
             ),
         )

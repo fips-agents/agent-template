@@ -47,11 +47,16 @@ class TraceCollector:
         store: TraceStore,
         *,
         trace_id: str | None = None,
+        parent_trace_id: str | None = None,
+        parent_span_id: str | None = None,
         session_id: str | None = None,
         model: str | None = None,
     ) -> None:
         self.store = store
-        self.trace_id = trace_id or f"trace_{uuid.uuid4().hex[:16]}"
+        # If a parent trace context is provided, use its trace ID
+        # so this trace joins the distributed trace.
+        self.trace_id = parent_trace_id or trace_id or f"trace_{uuid.uuid4().hex[:16]}"
+        self._parent_span_id = parent_span_id
         self._session_id = session_id
         self._model = model
 
@@ -95,7 +100,7 @@ class TraceCollector:
         """Open the root request span and the first step."""
         self._started_at = _utc_now_iso()
         self._request_span = self._make_span(
-            "request", **(attributes or {})
+            "request", parent_id=self._parent_span_id, **(attributes or {})
         )
         self._begin_step()
 

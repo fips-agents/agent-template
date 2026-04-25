@@ -508,12 +508,32 @@ def create_trace_store(
     sqlite_path: str = "./agent.db",
     database_url: str = "",
     sqlite_connection: Any = None,
+    exporter: str | None = None,
+    otel_endpoint: str | None = None,
+    service_name: str = "fipsagents",
 ) -> TraceStore:
     """Create a trace store from config values."""
     if backend == "sqlite":
-        return SqliteTraceStore(sqlite_path, connection=sqlite_connection)
-    if backend == "postgres":
+        inner: TraceStore = SqliteTraceStore(sqlite_path, connection=sqlite_connection)
+    elif backend == "postgres":
         if not database_url:
             raise ValueError("PostgresTraceStore requires database_url")
-        return PostgresTraceStore(database_url)
-    return NullTraceStore()
+        inner = PostgresTraceStore(database_url)
+    else:
+        inner = NullTraceStore()
+
+    if exporter == "otel":
+        try:
+            from .otel import OTELTraceStore
+        except ImportError:
+            logger.warning(
+                "OTEL exporter requested but opentelemetry not installed. "
+                "Install with: pip install 'fipsagents[otel]'"
+            )
+            return inner
+        return OTELTraceStore(
+            endpoint=otel_endpoint,
+            inner=inner,
+            service_name=service_name,
+        )
+    return inner

@@ -57,6 +57,19 @@ class RemoteNode(BaseNode):
         self.timeout = timeout
         self.retries = retries
         self.backoff = backoff or BackoffConfig()
+        self._trace_headers: dict[str, str] = {}
+
+    def set_trace_context(self, trace_id: str, span_id: str) -> None:
+        """Set W3C Trace Context headers for outgoing requests.
+
+        When set, all HTTP calls include a ``traceparent`` header
+        linking downstream traces to the caller's trace.
+        """
+        try:
+            from fipsagents.server.propagation import inject_trace_context
+            self._trace_headers = inject_trace_context(trace_id, span_id)
+        except ImportError:
+            pass  # [otel] extra not installed
 
     async def process(self, state: T) -> T:
         url = f"{self.endpoint}{self.path}"
@@ -81,7 +94,9 @@ class RemoteNode(BaseNode):
 
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    resp = await client.post(url, json=payload)
+                    resp = await client.post(
+                        url, json=payload, headers=self._trace_headers,
+                    )
                     resp.raise_for_status()
                     try:
                         data = resp.json()
