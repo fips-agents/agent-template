@@ -1,0 +1,48 @@
+# =============================================================================
+# LLM Adapter — Immutable Container Image
+# =============================================================================
+# Translates OpenAI-compatible requests to provider-native APIs (Anthropic,
+# Bedrock, Azure).  Runs as a sidecar alongside the agent container.
+
+# ---------------------------------------------------------------------------
+# Stage 1: Builder
+# ---------------------------------------------------------------------------
+FROM registry.redhat.io/ubi9/python-311:latest AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /opt/app-root/src
+
+COPY pyproject.toml .
+COPY src/ src/
+
+USER 0
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir .
+
+# ---------------------------------------------------------------------------
+# Stage 2: Runtime
+# ---------------------------------------------------------------------------
+FROM registry.redhat.io/ubi9/python-311:latest AS runtime
+
+LABEL io.opencontainers.image.title="llm-adapter" \
+      io.opencontainers.image.version="0.1.0" \
+      io.opencontainers.image.description="Translates OpenAI-compatible requests to provider-native LLM APIs" \
+      io.opencontainers.image.vendor="Red Hat"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /opt/app-root/src
+
+COPY --from=builder /opt/app-root/lib /opt/app-root/lib
+COPY src/ src/
+
+USER 0
+RUN chmod -R g=u,o=r src/ \
+    && find src/ -type d -exec chmod g=u,o=rx {} +
+USER 1001
+
+EXPOSE 8081
+
+CMD ["python", "-m", "llm_adapter.app"]
