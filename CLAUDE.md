@@ -67,7 +67,7 @@ agent-template/
   packages/
     fipsagents/            # Shared BaseAgent package (pip-installable)
   sandbox/                 # EXTRACTED to fips-agents/code-sandbox (pointer README remains)
-  examples/                # Runnable demos (shared-memory, code-sandbox-agent, document-analysis)
+  # examples moved to fips-agents/examples repo (calculus-agent, calculus-helper)
   templates/
     agent-loop/            # Single-agent loop template
     workflow/              # Multi-node workflow template
