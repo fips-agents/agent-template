@@ -23,6 +23,13 @@ This project provides two template variants (agent loop and agentic workflow) bu
 - [Stakeholders](https://github.com/fips-agents/agent-template/blob/main/planning/stakeholders.md): Users and affected parties
 - [Next steps](https://github.com/fips-agents/agent-template/blob/main/planning/next-steps.md): Open questions and forward plan
 
+## Companion repos
+
+- [fips-agents-cli](https://github.com/fips-agents/fips-agents-cli): CLI that scaffolds new projects from these templates
+- [gateway-template](https://github.com/fips-agents/gateway-template): OpenAI-compatible Go gateway that fronts agent deployments
+- [ui-template](https://github.com/fips-agents/ui-template): Minimal chat UI that talks to the gateway
+- [fipsagents-platform](https://github.com/fips-agents/fipsagents-platform): Cross-agent platform service for centralized feedback / sessions / traces (multi-agent topologies). Decided in [#112](https://github.com/fips-agents/agent-template/issues/112), see "Cross-Agent Platform Service" in `docs/architecture.md`.
+
 ## Research
 
 - [Ecosystem research](https://github.com/fips-agents/agent-template/blob/main/research/ecosystem-research.md): GitHub and market research on similar projects

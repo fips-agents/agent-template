@@ -24,6 +24,9 @@ Agents built from this template run on OpenShift and consume services deployed b
 
 ## Related Projects
 
+- [fips-agents/gateway-template](https://github.com/fips-agents/gateway-template) -- OpenAI-compatible Go gateway that fronts agent deployments
+- [fips-agents/ui-template](https://github.com/fips-agents/ui-template) -- Minimal chat UI that talks to the gateway
+- [fips-agents/fipsagents-platform](https://github.com/fips-agents/fipsagents-platform) -- Cross-agent platform service for centralized feedback / sessions / traces (multi-agent topologies)
 - [fips-agents/code-sandbox](https://github.com/fips-agents/code-sandbox) -- Code execution sandbox sidecar
 - [fips-agents/mcp-server-template](https://github.com/fips-agents/mcp-server-template) -- Sister template for MCP servers
 - [redhat-ai-americas/memory-hub](https://github.com/redhat-ai-americas/memory-hub) -- Optional enterprise memory layer
