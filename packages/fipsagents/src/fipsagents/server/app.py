@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 import re
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -45,6 +46,11 @@ from .feedback import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _new_trace_id() -> str:
+    """Generate a trace identifier matching ``TraceCollector``'s format."""
+    return f"trace_{uuid.uuid4().hex[:16]}"
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +345,7 @@ class OpenAIChatServer:
         user_id = request.headers.get("X-Auth-Subject", "anonymous")
         record = FeedbackRecord(
             feedback_id=_generate_feedback_id(),
-            trace_id=body.trace_id,
+            trace_id=body.trace_id or _new_trace_id(),
             session_id=body.session_id,
             rating=body.rating,
             comment=body.comment,
@@ -460,17 +466,23 @@ class OpenAIChatServer:
             else:
                 logger.info("Session %s not found; will auto-create on save", req.session_id)
 
+        # Trace ID: always generated so clients can correlate this
+        # completion with feedback/observability data, even when tracing
+        # persistence is disabled or sampled out. If a parent trace
+        # context is propagated, use that trace_id so we join the
+        # distributed trace.
+        from .propagation import extract_trace_context
+        parent_ctx = extract_trace_context(request.headers)
+        trace_id = (parent_ctx.trace_id if parent_ctx else None) or _new_trace_id()
+
         # Tracing: create collector if sampling says yes.
         collector: TraceCollector | None = None
         if self._should_trace():
-            from .propagation import extract_trace_context
-            parent_ctx = extract_trace_context(request.headers)
-
             collector = TraceCollector(
                 self._trace_store,
+                trace_id=trace_id,
                 session_id=req.session_id,
                 model=model_name,
-                parent_trace_id=parent_ctx.trace_id if parent_ctx else None,
                 parent_span_id=parent_ctx.parent_span_id if parent_ctx else None,
             )
             collector.begin_request({
@@ -504,20 +516,22 @@ class OpenAIChatServer:
                     content,
                     metrics=metrics,
                     finish_reason=finish_reason,
-                )
+                ),
+                headers={"X-Trace-Id": trace_id},
             )
 
         return StreamingResponse(
             self._stream(
                 incoming, model_name, overrides=overrides,
                 session_id=req.session_id, collector=collector,
-                metrics_start=metrics_start,
+                metrics_start=metrics_start, trace_id=trace_id,
             ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
+                "X-Trace-Id": trace_id,
             },
         )
 
@@ -595,6 +609,7 @@ class OpenAIChatServer:
         session_id: str | None = None,
         collector: TraceCollector | None = None,
         metrics_start: float | None = None,
+        trace_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Drive the agent's event stream, serialising to OpenAI SSE chunks.
 
@@ -616,7 +631,9 @@ class OpenAIChatServer:
                     )
                 if collector:
                     events = collector.observe(events)
-                async for chunk in stream_events_as_sse(events, model_name):
+                async for chunk in stream_events_as_sse(
+                    events, model_name, trace_id=trace_id,
+                ):
                     yield chunk
             except Exception:
                 logger.exception("Stream errored")

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import types
 from typing import AsyncIterator
 
@@ -752,3 +753,96 @@ def test_agent_info_includes_llm_tools():
     assert body["tools"][0]["name"] == "search"
     assert body["tools"][0]["description"] == "Search the web"
     assert body["tools"][0]["parameters"]["properties"]["q"]["type"] == "string"
+
+
+# ---------------------------------------------------------------------------
+# X-Trace-Id surfacing
+# ---------------------------------------------------------------------------
+
+
+_TRACE_ID_RE = re.compile(r"^trace_[0-9a-f]{16}$")
+
+
+def test_sync_response_includes_x_trace_id_header():
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+    ]
+    server = _build_server(events)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+        )
+    assert resp.status_code == 200
+    trace_id = resp.headers.get("x-trace-id")
+    assert trace_id is not None
+    assert _TRACE_ID_RE.match(trace_id), f"Bad trace_id format: {trace_id!r}"
+
+
+def test_streaming_response_includes_x_trace_id_header_and_chunk_field():
+    events = [
+        ContentDelta(content="hi"),
+        StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+    ]
+    server = _build_server(events)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "ping"}],
+                "stream": True,
+            },
+        )
+    header_trace_id = resp.headers.get("x-trace-id")
+    assert header_trace_id is not None
+    assert _TRACE_ID_RE.match(header_trace_id)
+
+    frames = _parse_sse_body(resp.text)
+    usage_chunks = [
+        f for f in frames if isinstance(f, dict) and f.get("choices") == []
+    ]
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0]["trace_id"] == header_trace_id
+
+
+def test_x_trace_id_uses_propagated_parent_when_provided():
+    """If a W3C traceparent header is sent, the trace_id surfaces from it."""
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+    ]
+    server = _build_server(events)
+    parent_trace_hex = "0123456789abcdef0123456789abcdef"
+    traceparent = f"00-{parent_trace_hex}-0123456789abcdef-01"
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+            headers={"traceparent": traceparent},
+        )
+    assert resp.status_code == 200
+    assert resp.headers.get("x-trace-id") == parent_trace_hex
+
+
+def test_create_feedback_accepts_request_without_trace_id():
+    """trace_id is optional; server synthesises one when absent."""
+    from fipsagents.server.models import CreateFeedbackRequest
+
+    req = CreateFeedbackRequest(rating=1)
+    assert req.trace_id is None
+    assert req.rating == 1
+
+
+def test_create_feedback_rejects_invalid_rating():
+    from fipsagents.server.models import CreateFeedbackRequest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CreateFeedbackRequest(rating=0)
