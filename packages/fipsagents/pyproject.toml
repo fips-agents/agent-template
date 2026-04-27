@@ -55,6 +55,10 @@ otel = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.20",
     "opentelemetry-api>=1.20",
 ]
+feedback = [
+    "aiosqlite>=0.20.0",
+    "asyncpg>=0.29.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",

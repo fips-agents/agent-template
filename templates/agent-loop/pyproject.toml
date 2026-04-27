@@ -12,6 +12,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+feedback = [
+    "fipsagents[feedback]",
+]
 memory = [
     "fipsagents[memory]",
 ]

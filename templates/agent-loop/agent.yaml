@@ -204,6 +204,27 @@ server:
   metrics:
     enabled: ${METRICS_ENABLED:-false}
 
+  # -- User feedback collection (optional) --------------------------------------
+  #
+  # Persists thumbs-up / thumbs-down ratings, comments, and corrections
+  # submitted via the UI.  Records are joined to traces (when tracing is
+  # enabled) so feedback can be correlated with the conversation that
+  # produced it.
+  #
+  # Requires a storage backend (sqlite or postgres) for persistence —
+  # without one, feedback POSTs are accepted and discarded.
+  #
+  # REST endpoints:
+  #   POST /v1/feedback            -- submit a rating
+  #   GET  /v1/feedback            -- query records (filter by trace/session)
+  #   GET  /v1/feedback/stats      -- aggregated counts grouped by window
+  #
+  # Production env vars:
+  #   FEEDBACK_ENABLED  -- "true" to enable
+  feedback:
+    enabled: ${FEEDBACK_ENABLED:-false}
+    max_age_hours: 720           # feedback expires after 30 days
+
 # -- Memory backend (optional) -----------------------------------------------
 #
 # Controls which memory backend the agent uses.
