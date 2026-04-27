@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 
 from fipsagents.server.feedback import (
     FeedbackRecord,
-    FeedbackStats,
     NullFeedbackStore,
     SqliteFeedbackStore,
     create_feedback_store,
