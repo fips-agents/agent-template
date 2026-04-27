@@ -76,6 +76,10 @@ class _StubAgent(BaseAgent):
                 metrics=types.SimpleNamespace(
                     enabled=False,
                 ),
+                feedback=types.SimpleNamespace(
+                    enabled=False,
+                    max_age_hours=720,
+                ),
             ),
         )
 
@@ -635,6 +639,88 @@ def test_chat_request_accepts_valid_session_id():
 # ---------------------------------------------------------------------------
 # /v1/agent-info
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Feedback POST identity (X-Auth-Subject) tests
+# ---------------------------------------------------------------------------
+
+
+def _build_server_with_feedback(tmp_path) -> OpenAIChatServer:
+    """Build a server with a sqlite feedback store enabled."""
+    AgentClass = _make_agent_class([])
+    # Enable the feedback feature on the stub config so the server's
+    # lifespan creates a SqliteFeedbackStore against a temp path.
+    db_path = str(tmp_path / "feedback.db")
+
+    class _A(AgentClass):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.config.server.storage = types.SimpleNamespace(
+                backend="sqlite",
+                sqlite_path=db_path,
+                database_url="",
+            )
+            self.config.server.feedback = types.SimpleNamespace(
+                enabled=True,
+                max_age_hours=0,
+            )
+
+    return OpenAIChatServer(_A)
+
+
+def test_create_feedback_records_x_auth_subject(tmp_path):
+    server = _build_server_with_feedback(tmp_path)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/feedback",
+            json={"trace_id": "trace_1", "rating": 1, "comment": "great"},
+            headers={"X-Auth-Subject": "alice"},
+        )
+        assert resp.status_code == 201, resp.text
+        feedback_id = resp.json()["feedback_id"]
+
+        listed = client.get("/v1/feedback?trace_id=trace_1").json()
+        assert len(listed) == 1
+        assert listed[0]["feedback_id"] == feedback_id
+        assert listed[0]["user_id"] == "alice"
+
+
+def test_create_feedback_defaults_user_id_to_anonymous_without_header(tmp_path):
+    server = _build_server_with_feedback(tmp_path)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/feedback",
+            json={"trace_id": "trace_2", "rating": -1},
+        )
+        assert resp.status_code == 201
+
+        listed = client.get("/v1/feedback?trace_id=trace_2").json()
+        assert len(listed) == 1
+        assert listed[0]["user_id"] == "anonymous"
+
+
+def test_list_feedback_filters_by_user_id(tmp_path):
+    server = _build_server_with_feedback(tmp_path)
+    with TestClient(server.app) as client:
+        client.post(
+            "/v1/feedback",
+            json={"trace_id": "trace_3", "rating": 1},
+            headers={"X-Auth-Subject": "alice"},
+        )
+        client.post(
+            "/v1/feedback",
+            json={"trace_id": "trace_3", "rating": -1},
+            headers={"X-Auth-Subject": "bob"},
+        )
+
+        alice = client.get("/v1/feedback?user_id=alice").json()
+        assert len(alice) == 1
+        assert alice[0]["user_id"] == "alice"
+
+        bob = client.get("/v1/feedback?user_id=bob").json()
+        assert len(bob) == 1
+        assert bob[0]["user_id"] == "bob"
 
 
 def test_agent_info_includes_llm_tools():
