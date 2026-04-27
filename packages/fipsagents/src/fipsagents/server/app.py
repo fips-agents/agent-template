@@ -27,6 +27,7 @@ from .models import (
     ChatCompletionRequest,
     CreateFeedbackRequest,
     CreateSessionRequest,
+    UpdateFeedbackRequest,
     _extract_overrides,
     _messages_to_dicts,
     _sync_response,
@@ -235,6 +236,7 @@ class OpenAIChatServer:
         self.app.get("/v1/traces")(self._list_traces)
         self.app.get("/v1/traces/{trace_id}")(self._get_trace)
         self.app.post("/v1/feedback")(self._create_feedback)
+        self.app.patch("/v1/feedback/{feedback_id}")(self._update_feedback)
         self.app.get("/v1/feedback/stats")(self._feedback_stats)
         self.app.get("/v1/feedback")(self._list_feedback)
         self.app.post("/v1/chat/completions")(self._chat_completions)
@@ -346,6 +348,22 @@ class OpenAIChatServer:
         )
         feedback_id = await self._feedback_store.add(record)
         return JSONResponse({"feedback_id": feedback_id}, status_code=201)
+
+    async def _update_feedback(self, feedback_id: str, body: UpdateFeedbackRequest):
+        if self._feedback_store is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+        record = await self._feedback_store.update(
+            feedback_id,
+            rating=body.rating,
+            comment=body.comment,
+            correction=body.correction,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=404, detail=f"Feedback {feedback_id} not found",
+            )
+        from dataclasses import asdict
+        return JSONResponse(asdict(record))
 
     async def _list_feedback(
         self,

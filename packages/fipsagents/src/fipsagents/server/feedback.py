@@ -101,6 +101,20 @@ class FeedbackStore(ABC):
         """Aggregated thumbs-up/down grouped by time window and agent_type."""
 
     @abstractmethod
+    async def update(
+        self,
+        feedback_id: str,
+        *,
+        rating: int | None = None,
+        comment: str | None = None,
+        correction: str | None = None,
+    ) -> FeedbackRecord | None:
+        """Mutate fields on an existing record. Pass ``None`` to leave a
+        field unchanged. Returns the updated record, or ``None`` if no
+        record with ``feedback_id`` exists.
+        """
+
+    @abstractmethod
     async def delete_before(self, cutoff: datetime) -> int:
         """Remove old feedback records. Return count deleted."""
 
@@ -144,6 +158,16 @@ class NullFeedbackStore(FeedbackStore):
         until: datetime | None = None,
     ) -> list[FeedbackStats]:
         return []
+
+    async def update(
+        self,
+        feedback_id: str,
+        *,
+        rating: int | None = None,
+        comment: str | None = None,
+        correction: str | None = None,
+    ) -> FeedbackRecord | None:
+        return None
 
     async def delete_before(self, cutoff: datetime) -> int:
         return 0
@@ -361,6 +385,38 @@ CREATE TABLE IF NOT EXISTS feedback (
             )
             for r in rows
         ]
+
+    async def update(
+        self,
+        feedback_id: str,
+        *,
+        rating: int | None = None,
+        comment: str | None = None,
+        correction: str | None = None,
+    ) -> FeedbackRecord | None:
+        if rating is None and comment is None and correction is None:
+            return await self.get(feedback_id)
+        db = await self._get_db()
+        sets: list[str] = []
+        params: list[Any] = []
+        if rating is not None:
+            sets.append("rating = ?")
+            params.append(rating)
+        if comment is not None:
+            sets.append("comment = ?")
+            params.append(comment)
+        if correction is not None:
+            sets.append("correction = ?")
+            params.append(correction)
+        params.append(feedback_id)
+        cursor = await db.execute(
+            f"UPDATE feedback SET {', '.join(sets)} WHERE feedback_id = ?",
+            params,
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            return None
+        return await self.get(feedback_id)
 
     async def delete_before(self, cutoff: datetime) -> int:
         db = await self._get_db()
@@ -586,6 +642,43 @@ CREATE TABLE IF NOT EXISTS feedback (
             )
             for r in rows
         ]
+
+    async def update(
+        self,
+        feedback_id: str,
+        *,
+        rating: int | None = None,
+        comment: str | None = None,
+        correction: str | None = None,
+    ) -> FeedbackRecord | None:
+        if rating is None and comment is None and correction is None:
+            return await self.get(feedback_id)
+        pool = await self._get_pool()
+        sets: list[str] = []
+        params: list[Any] = []
+        idx = 1
+        if rating is not None:
+            sets.append(f"rating = ${idx}")
+            params.append(rating)
+            idx += 1
+        if comment is not None:
+            sets.append(f"comment = ${idx}")
+            params.append(comment)
+            idx += 1
+        if correction is not None:
+            sets.append(f"correction = ${idx}")
+            params.append(correction)
+            idx += 1
+        params.append(feedback_id)
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                f"UPDATE feedback SET {', '.join(sets)} WHERE feedback_id = ${idx}",
+                *params,
+            )
+        # asyncpg returns "UPDATE N"
+        if int(result.split()[-1]) == 0:
+            return None
+        return await self.get(feedback_id)
 
     async def delete_before(self, cutoff: datetime) -> int:
         pool = await self._get_pool()

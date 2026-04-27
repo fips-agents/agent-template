@@ -73,3 +73,6 @@ MEMORY_HUB_SETUP.md
 
 planning/tmp-answers-from-memory-hub.md
 NEXT_SESSION.md
+
+# Local dev stack (smoke + manual testing)
+.local/

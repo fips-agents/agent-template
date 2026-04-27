@@ -241,6 +241,41 @@ class TestSqliteFeedbackStore:
         assert results[0].agent_type == "chat"
 
     @pytest.mark.asyncio
+    async def test_update_changes_rating_and_comment(self, sqlite_store):
+        """update() mutates the existing row instead of inserting a new one."""
+        record = _make_record(rating=1, comment="initial")
+        await sqlite_store.add(record)
+
+        updated = await sqlite_store.update(
+            record.feedback_id, rating=-1, comment="changed my mind",
+        )
+        assert updated is not None
+        assert updated.feedback_id == record.feedback_id
+        assert updated.rating == -1
+        assert updated.comment == "changed my mind"
+
+        # Still exactly one row.
+        all_rows = await sqlite_store.query(trace_id=record.trace_id, limit=10)
+        assert len(all_rows) == 1
+        assert all_rows[0].rating == -1
+
+    @pytest.mark.asyncio
+    async def test_update_partial_leaves_other_fields_alone(self, sqlite_store):
+        record = _make_record(rating=1, comment="keep me", correction="orig")
+        await sqlite_store.add(record)
+
+        updated = await sqlite_store.update(record.feedback_id, rating=-1)
+        assert updated is not None
+        assert updated.rating == -1
+        assert updated.comment == "keep me"
+        assert updated.correction == "orig"
+
+    @pytest.mark.asyncio
+    async def test_update_unknown_id_returns_none(self, sqlite_store):
+        result = await sqlite_store.update("fb_does_not_exist", rating=1)
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_delete_before(self, sqlite_store):
         """delete_before removes old records but keeps recent ones."""
         old_record = _make_record()

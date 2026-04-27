@@ -98,6 +98,25 @@ class CreateFeedbackRequest(BaseModel):
         return v
 
 
+class UpdateFeedbackRequest(BaseModel):
+    """Request body for PATCH /v1/feedback/{feedback_id}.
+
+    All fields are optional — omit a field to leave it unchanged. When
+    ``rating`` is supplied it must be 1 or -1, same as create.
+    """
+
+    rating: int | None = None
+    comment: str | None = None
+    correction: str | None = None
+
+    @field_validator("rating")
+    @classmethod
+    def _validate_rating(cls, v: int | None) -> int | None:
+        if v is not None and v not in (1, -1):
+            raise ValueError("rating must be 1 (thumbs-up) or -1 (thumbs-down)")
+        return v
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
