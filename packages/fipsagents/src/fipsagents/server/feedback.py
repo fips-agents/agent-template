@@ -776,6 +776,8 @@ def create_feedback_store(
     sqlite_path: str = "./agent.db",
     database_url: str = "",
     sqlite_connection: Any = None,
+    platform_url: str = "",
+    platform_token: str = "",
 ) -> FeedbackStore:
     """Create a feedback store from config values."""
     if backend == "sqlite":
@@ -784,4 +786,10 @@ def create_feedback_store(
         if not database_url:
             raise ValueError("PostgresFeedbackStore requires database_url")
         return PostgresFeedbackStore(database_url)
+    elif backend == "http":
+        from .http import HttpFeedbackStore
+
+        if not platform_url:
+            raise ValueError("HttpFeedbackStore requires storage.platform_url")
+        return HttpFeedbackStore(platform_url, static_token=platform_token)
     return NullFeedbackStore()
