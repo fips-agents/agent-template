@@ -11,11 +11,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-
-def _new_trace_id() -> str:
-    """Generate a trace identifier matching ``TraceCollector``'s format."""
-    return f"trace_{uuid.uuid4().hex[:16]}"
-
 try:
     from fastapi import Body, FastAPI, HTTPException, Request
     from fastapi.responses import JSONResponse, StreamingResponse
@@ -28,6 +23,11 @@ except ImportError as exc:  # pragma: no cover — helpful error path
 from fipsagents.baseagent import BaseAgent
 from fipsagents.baseagent.events import ContentDelta, StreamComplete, StreamMetrics
 from fipsagents.serialization.openai_sse import stream_events_as_sse
+
+
+def _new_trace_id() -> str:
+    """Generate a trace identifier matching ``TraceCollector``'s format."""
+    return f"trace_{uuid.uuid4().hex[:16]}"
 
 from .models import (
     ChatCompletionRequest,
