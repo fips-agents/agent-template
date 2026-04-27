@@ -33,7 +33,13 @@ def _utc_now_iso() -> str:
 
 @dataclass
 class FeedbackRecord:
-    """A single piece of user feedback tied to a trace."""
+    """A single piece of user feedback tied to a trace.
+
+    ``user_id`` is the gateway-issued ``X-Auth-Subject`` header value:
+    a stable per-user identifier or the literal string ``"anonymous"``
+    when the gateway is configured in anonymous mode. It is gateway-issued
+    so a client cannot spoof it — see gateway-template#21 v1.
+    """
 
     feedback_id: str
     trace_id: str
@@ -46,6 +52,7 @@ class FeedbackRecord:
     turn_index: int | None
     agent_type: str | None
     created_at: str  # ISO 8601 UTC
+    user_id: str = "anonymous"
 
 
 @dataclass
@@ -82,6 +89,7 @@ class FeedbackStore(ABC):
         *,
         trace_id: str | None = None,
         session_id: str | None = None,
+        user_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -142,6 +150,7 @@ class NullFeedbackStore(FeedbackStore):
         *,
         trace_id: str | None = None,
         session_id: str | None = None,
+        user_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -192,6 +201,7 @@ def _row_to_record(row: tuple) -> FeedbackRecord:
         turn_index=row[8],
         agent_type=row[9],
         created_at=row[10],
+        user_id=row[11] if len(row) > 11 and row[11] is not None else "anonymous",
     )
 
 
@@ -222,13 +232,15 @@ CREATE TABLE IF NOT EXISTS feedback (
     latency_ms   REAL,
     turn_index   INTEGER,
     agent_type   TEXT,
-    created_at   TEXT NOT NULL
+    created_at   TEXT NOT NULL,
+    user_id      TEXT NOT NULL DEFAULT 'anonymous'
 )"""
 
     _CREATE_INDEXES = (
         "CREATE INDEX IF NOT EXISTS idx_feedback_trace_id ON feedback (trace_id)",
         "CREATE INDEX IF NOT EXISTS idx_feedback_session_id ON feedback (session_id)",
         "CREATE INDEX IF NOT EXISTS idx_feedback_created_at ON feedback (created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback (user_id)",
     )
 
     def __init__(self, db_path: str = "./agent.db", *, connection: Any = None) -> None:
@@ -249,18 +261,30 @@ CREATE TABLE IF NOT EXISTS feedback (
     async def _ensure_table(self) -> None:
         db = self._db
         await db.execute(self._CREATE_TABLE)
+        # Lightweight migration: pre-cutover databases lack the user_id
+        # column. ALTER TABLE ADD COLUMN is cheap and idempotent via the
+        # PRAGMA check.
+        await self._migrate_user_id_column(db)
         for idx_sql in self._CREATE_INDEXES:
             await db.execute(idx_sql)
         await db.commit()
         self._initialized = True
+
+    async def _migrate_user_id_column(self, db: Any) -> None:
+        cursor = await db.execute("PRAGMA table_info(feedback)")
+        cols = {row[1] for row in await cursor.fetchall()}
+        if "user_id" not in cols:
+            await db.execute(
+                "ALTER TABLE feedback ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'"
+            )
 
     async def add(self, record: FeedbackRecord) -> str:
         db = await self._get_db()
         await db.execute(
             "INSERT INTO feedback "
             "(feedback_id, trace_id, session_id, rating, comment, correction, "
-            "model_id, latency_ms, turn_index, agent_type, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "model_id, latency_ms, turn_index, agent_type, created_at, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record.feedback_id,
                 record.trace_id,
@@ -273,6 +297,7 @@ CREATE TABLE IF NOT EXISTS feedback (
                 record.turn_index,
                 record.agent_type,
                 record.created_at,
+                record.user_id,
             ),
         )
         await db.commit()
@@ -283,7 +308,8 @@ CREATE TABLE IF NOT EXISTS feedback (
         db = await self._get_db()
         cursor = await db.execute(
             "SELECT feedback_id, trace_id, session_id, rating, comment, "
-            "correction, model_id, latency_ms, turn_index, agent_type, created_at "
+            "correction, model_id, latency_ms, turn_index, agent_type, created_at, "
+            "user_id "
             "FROM feedback WHERE feedback_id = ?",
             (feedback_id,),
         )
@@ -297,6 +323,7 @@ CREATE TABLE IF NOT EXISTS feedback (
         *,
         trace_id: str | None = None,
         session_id: str | None = None,
+        user_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -312,6 +339,9 @@ CREATE TABLE IF NOT EXISTS feedback (
         if session_id is not None:
             clauses.append("session_id = ?")
             params.append(session_id)
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
         if since is not None:
             clauses.append("created_at >= ?")
             params.append(since.isoformat())
@@ -322,7 +352,8 @@ CREATE TABLE IF NOT EXISTS feedback (
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = (
             "SELECT feedback_id, trace_id, session_id, rating, comment, "
-            "correction, model_id, latency_ms, turn_index, agent_type, created_at "
+            "correction, model_id, latency_ms, turn_index, agent_type, created_at, "
+            "user_id "
             f"FROM feedback{where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         params.extend([limit, offset])
@@ -445,6 +476,11 @@ CREATE TABLE IF NOT EXISTS feedback (
 def _pg_row_to_record(row: Any) -> FeedbackRecord:
     """Construct a FeedbackRecord from an asyncpg Record."""
     created = row["created_at"]
+    # row.get() not available on asyncpg.Record — use try/except.
+    try:
+        user_id = row["user_id"] or "anonymous"
+    except (KeyError, IndexError):
+        user_id = "anonymous"
     return FeedbackRecord(
         feedback_id=row["feedback_id"],
         trace_id=row["trace_id"],
@@ -457,6 +493,7 @@ def _pg_row_to_record(row: Any) -> FeedbackRecord:
         turn_index=row["turn_index"],
         agent_type=row["agent_type"],
         created_at=created.isoformat() if hasattr(created, "isoformat") else created,
+        user_id=user_id,
     )
 
 
@@ -475,13 +512,21 @@ CREATE TABLE IF NOT EXISTS feedback (
     latency_ms   DOUBLE PRECISION,
     turn_index   INTEGER,
     agent_type   TEXT,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    user_id      TEXT NOT NULL DEFAULT 'anonymous'
 )"""
+
+    # ALTER ... ADD COLUMN IF NOT EXISTS handles pre-cutover databases.
+    _MIGRATE_USER_ID = (
+        "ALTER TABLE feedback ADD COLUMN IF NOT EXISTS "
+        "user_id TEXT NOT NULL DEFAULT 'anonymous'"
+    )
 
     _CREATE_INDEXES = (
         "CREATE INDEX IF NOT EXISTS idx_feedback_trace_id ON feedback (trace_id)",
         "CREATE INDEX IF NOT EXISTS idx_feedback_session_id ON feedback (session_id)",
         "CREATE INDEX IF NOT EXISTS idx_feedback_created_at ON feedback (created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback (user_id)",
     )
 
     def __init__(self, database_url: str) -> None:
@@ -501,6 +546,7 @@ CREATE TABLE IF NOT EXISTS feedback (
     async def _ensure_table(self) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(self._CREATE_TABLE)
+            await conn.execute(self._MIGRATE_USER_ID)
             for idx_sql in self._CREATE_INDEXES:
                 await conn.execute(idx_sql)
         self._initialized = True
@@ -512,8 +558,8 @@ CREATE TABLE IF NOT EXISTS feedback (
             await conn.execute(
                 "INSERT INTO feedback "
                 "(feedback_id, trace_id, session_id, rating, comment, correction, "
-                "model_id, latency_ms, turn_index, agent_type, created_at) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                "model_id, latency_ms, turn_index, agent_type, created_at, user_id) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
                 record.feedback_id,
                 record.trace_id,
                 record.session_id,
@@ -525,6 +571,7 @@ CREATE TABLE IF NOT EXISTS feedback (
                 record.turn_index,
                 record.agent_type,
                 created_dt,
+                record.user_id,
             )
         logger.debug("PostgresFeedbackStore: added %s", record.feedback_id)
         return record.feedback_id
@@ -534,7 +581,8 @@ CREATE TABLE IF NOT EXISTS feedback (
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT feedback_id, trace_id, session_id, rating, comment, "
-                "correction, model_id, latency_ms, turn_index, agent_type, created_at "
+                "correction, model_id, latency_ms, turn_index, agent_type, created_at, "
+                "user_id "
                 "FROM feedback WHERE feedback_id = $1",
                 feedback_id,
             )
@@ -547,6 +595,7 @@ CREATE TABLE IF NOT EXISTS feedback (
         *,
         trace_id: str | None = None,
         session_id: str | None = None,
+        user_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -565,6 +614,10 @@ CREATE TABLE IF NOT EXISTS feedback (
             clauses.append(f"session_id = ${idx}")
             params.append(session_id)
             idx += 1
+        if user_id is not None:
+            clauses.append(f"user_id = ${idx}")
+            params.append(user_id)
+            idx += 1
         if since is not None:
             clauses.append(f"created_at >= ${idx}")
             params.append(since)
@@ -577,7 +630,8 @@ CREATE TABLE IF NOT EXISTS feedback (
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = (
             "SELECT feedback_id, trace_id, session_id, rating, comment, "
-            "correction, model_id, latency_ms, turn_index, agent_type, created_at "
+            "correction, model_id, latency_ms, turn_index, agent_type, created_at, "
+            "user_id "
             f"FROM feedback{where} "
             f"ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
         )

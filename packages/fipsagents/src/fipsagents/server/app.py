@@ -330,9 +330,13 @@ class OpenAIChatServer:
             raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
         return JSONResponse(asdict(trace))
 
-    async def _create_feedback(self, body: CreateFeedbackRequest):
+    async def _create_feedback(self, body: CreateFeedbackRequest, request: Request):
         if self._feedback_store is None:
             raise HTTPException(status_code=503, detail="Server not ready")
+        # Identity is gateway-issued via X-Auth-Subject (gateway-template#21
+        # v1). Default to "anonymous" when running without a gateway in
+        # front (local dev, smoke tests).
+        user_id = request.headers.get("X-Auth-Subject", "anonymous")
         record = FeedbackRecord(
             feedback_id=_generate_feedback_id(),
             trace_id=body.trace_id,
@@ -345,6 +349,7 @@ class OpenAIChatServer:
             turn_index=body.turn_index,
             agent_type=body.agent_type,
             created_at=_utc_now_iso(),
+            user_id=user_id,
         )
         feedback_id = await self._feedback_store.add(record)
         return JSONResponse({"feedback_id": feedback_id}, status_code=201)
@@ -369,6 +374,7 @@ class OpenAIChatServer:
         self,
         trace_id: str | None = None,
         session_id: str | None = None,
+        user_id: str | None = None,
         since: str | None = None,
         until: str | None = None,
         limit: int = 50,
@@ -383,6 +389,7 @@ class OpenAIChatServer:
         records = await self._feedback_store.query(
             trace_id=trace_id,
             session_id=session_id,
+            user_id=user_id,
             since=since_dt,
             until=until_dt,
             limit=min(limit, 1000),

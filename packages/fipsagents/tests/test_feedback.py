@@ -146,6 +146,86 @@ class TestSqliteFeedbackStore:
         assert all(r.trace_id == "trace_A" for r in results)
 
     @pytest.mark.asyncio
+    async def test_add_persists_user_id(self, sqlite_store):
+        record = _make_record(user_id="alice")
+        await sqlite_store.add(record)
+        loaded = await sqlite_store.get(record.feedback_id)
+        assert loaded is not None
+        assert loaded.user_id == "alice"
+
+    @pytest.mark.asyncio
+    async def test_default_user_id_is_anonymous(self, sqlite_store):
+        # _make_record does not set user_id, so the default must be applied.
+        record = _make_record()
+        await sqlite_store.add(record)
+        loaded = await sqlite_store.get(record.feedback_id)
+        assert loaded is not None
+        assert loaded.user_id == "anonymous"
+
+    @pytest.mark.asyncio
+    async def test_query_by_user_id(self, sqlite_store):
+        r1 = _make_record(user_id="alice")
+        r2 = _make_record(user_id="bob")
+        r3 = _make_record(user_id="alice")
+        await sqlite_store.add(r1)
+        await sqlite_store.add(r2)
+        await sqlite_store.add(r3)
+
+        results = await sqlite_store.query(user_id="alice")
+        assert len(results) == 2
+        assert all(r.user_id == "alice" for r in results)
+
+    @pytest.mark.asyncio
+    async def test_migrates_pre_cutover_database(self, tmp_path):
+        # Simulate a database created before the user_id cutover and verify
+        # the store transparently migrates it.
+        import aiosqlite
+
+        db_path = str(tmp_path / "legacy.db")
+        legacy = await aiosqlite.connect(db_path)
+        await legacy.execute(
+            "CREATE TABLE feedback ("
+            " feedback_id TEXT PRIMARY KEY,"
+            " trace_id TEXT NOT NULL,"
+            " session_id TEXT,"
+            " rating INTEGER NOT NULL,"
+            " comment TEXT,"
+            " correction TEXT,"
+            " model_id TEXT,"
+            " latency_ms REAL,"
+            " turn_index INTEGER,"
+            " agent_type TEXT,"
+            " created_at TEXT NOT NULL"
+            ")"
+        )
+        await legacy.execute(
+            "INSERT INTO feedback (feedback_id, trace_id, session_id, rating, "
+            "comment, correction, model_id, latency_ms, turn_index, agent_type, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("fb_legacy", "trace_legacy", None, 1, None, None, None, None, None,
+             None, _utc_now_iso()),
+        )
+        await legacy.commit()
+        await legacy.close()
+
+        # Open via the store — _ensure_table runs the ALTER TABLE migration.
+        store = SqliteFeedbackStore(db_path)
+        try:
+            loaded = await store.get("fb_legacy")
+            assert loaded is not None
+            # Migrated row defaults to "anonymous" since the column is new.
+            assert loaded.user_id == "anonymous"
+
+            # New inserts honour user_id.
+            new_record = _make_record(user_id="alice")
+            await store.add(new_record)
+            roundtrip = await store.get(new_record.feedback_id)
+            assert roundtrip is not None
+            assert roundtrip.user_id == "alice"
+        finally:
+            await store.close()
+
+    @pytest.mark.asyncio
     async def test_query_by_session_id(self, sqlite_store):
         r1 = _make_record(session_id="sess_X")
         r2 = _make_record(session_id="sess_Y")
