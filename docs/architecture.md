@@ -710,3 +710,40 @@ The sidecar container runs with `readOnlyRootFilesystem: true` and an emptyDir m
 ### Limitations (v1)
 
 AST guardrails are a defense-in-depth layer, not a hard security boundary. Python's dynamic nature means a sufficiently creative attacker can find bypass vectors. The real security comes from layering: AST validation teaches the LLM what is allowed, while container-level constraints (non-root, read-only filesystem, dropped capabilities, resource limits) provide the actual enforcement. Issue #26 tracks v2 hardening, including running the sandbox in a separate pod with a deny-all-egress NetworkPolicy.
+
+## Cross-Agent Platform Service
+
+The v0.12.0 enterprise feature track added four stateful surfaces to BaseAgent's server layer — sessions (`/v1/sessions`), traces (`/v1/traces`), feedback (`/v1/feedback`), and metrics (`/metrics`). All four follow the same pattern: BaseAgent owns a pluggable store (Null / SQLite / Postgres) and the server exposes REST endpoints. This was the right call when most deployments had one or two agents.
+
+In multi-agent deployments — say ten agents fronted by a single gateway and UI — per-agent ownership chafes: ten Postgres pools, ten schema-migration loops, fan-out for cross-agent queries ("show me all thumbs-down feedback this week"), schema-as-de-facto-API once N agents write the same table, and no auth boundary between agents that share storage. Sessions are conceptually cross-agent in the first place: a user talks to "the system," not to agent #4.
+
+### Decision: remote-store adapter, with a sibling platform service
+
+We extend the existing pluggable-store pattern with HTTP implementations rather than changing where state ownership lives. Concretely:
+
+- **`HttpFeedbackStore`, `HttpSessionStore`, `HttpTraceStore`** are added to `fipsagents.server` alongside the Null/SQLite/Postgres implementations. They satisfy the same ABCs and speak HTTP to a central service.
+- **`fips-agents/fipsagents-platform`** is a new sibling repo: a FastAPI service that owns one Postgres pool, one schema, one migration loop, and re-exposes the same store semantics as REST. It is itself implemented on top of the SQLite/Postgres ABCs — not a parallel implementation.
+- **`gateway-template` gets a routing mode.** When the platform service is deployed, the gateway routes `/v1/sessions/*`, `/v1/feedback/*`, and `/v1/traces/*` directly to it rather than fanning out to per-agent endpoints. Per-agent endpoints become a fallback for single-agent deployments.
+- **BaseAgent's HTTP endpoints stay** for backward compatibility. When an agent is configured with an `HttpXStore`, those endpoints become pass-throughs (or are turned off via config). Existing v0.12.0 deployments do not break.
+
+### Why this shape
+
+This is the least disruptive path that addresses the multi-agent rough edges without forcing a topology on small deployments:
+
+- **Backward compatible.** Single-agent deployments keep their current SQLite/Postgres setup.
+- **Multi-agent path is clean.** One new service, deployment-time config flag, switch one agent at a time by editing its `agent.yaml`.
+- **Cost Tracking (#104) fits naturally.** Per-session token usage attaches to session records via `SessionStore.update()`. Whether the session store is `SqliteSessionStore` or `HttpSessionStore`, the BaseAgent-side code is identical — the data lands wherever sessions land.
+- **Auth boundary becomes possible.** The platform service has its own auth surface (JWT against the same Keycloak as the gateway), so per-agent service-account tokens can gate writes.
+- **OTEL is not forced.** A future iteration can have the platform's `TraceStore` ship to OTEL internally, but adopters do not have to deploy a collector in step one.
+
+### Tradeoffs
+
+- **"Schema as contract" does not disappear** — it moves from raw Postgres to the platform's HTTP API. This is better (versioned, HTTP semantics for migration) but not free; we need an API stability policy.
+- **New ops surface** — Helm chart, readiness probe, Postgres dependency. Worth it iff the deployment actually runs ≥2 agents.
+- **Test infrastructure doubles** — every store ABC needs both in-process and HTTP-roundtrip tests.
+
+### Out of scope for the initial extraction
+
+- **Auth boundary between agents writing shared storage.** Needed if multi-tenant is in scope; otherwise punt and revisit when the second tenant arrives.
+- **Cross-agent session continuity** (a user's conversation following them across agents). Protocol question, not a storage question.
+- **Migrating traces to OTEL.** Already partially solved by `OTELTraceStore`; the platform's `TraceStore` can adopt it later without a topology change.
