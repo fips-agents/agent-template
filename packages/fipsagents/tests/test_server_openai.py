@@ -61,10 +61,13 @@ class _StubAgent(BaseAgent):
                     backend=None,
                     sqlite_path="./agent.db",
                     database_url="",
+                    platform_url="",
+                    platform_token="",
                 ),
                 sessions=types.SimpleNamespace(
                     enabled=False,
                     max_age_hours=168,
+                    backend=None,
                 ),
                 traces=types.SimpleNamespace(
                     enabled=False,
@@ -73,6 +76,7 @@ class _StubAgent(BaseAgent):
                     exporter=None,
                     otel_endpoint=None,
                     service_name="fipsagents",
+                    backend=None,
                 ),
                 metrics=types.SimpleNamespace(
                     enabled=False,
@@ -80,6 +84,7 @@ class _StubAgent(BaseAgent):
                 feedback=types.SimpleNamespace(
                     enabled=False,
                     max_age_hours=720,
+                    backend=None,
                 ),
             ),
         )
@@ -661,10 +666,13 @@ def _build_server_with_feedback(tmp_path) -> OpenAIChatServer:
                 backend="sqlite",
                 sqlite_path=db_path,
                 database_url="",
+                platform_url="",
+                platform_token="",
             )
             self.config.server.feedback = types.SimpleNamespace(
                 enabled=True,
                 max_age_hours=0,
+                backend=None,
             )
 
     return OpenAIChatServer(_A)
