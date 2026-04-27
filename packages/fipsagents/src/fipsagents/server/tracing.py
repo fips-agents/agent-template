@@ -511,6 +511,8 @@ def create_trace_store(
     exporter: str | None = None,
     otel_endpoint: str | None = None,
     service_name: str = "fipsagents",
+    platform_url: str = "",
+    platform_token: str = "",
 ) -> TraceStore:
     """Create a trace store from config values."""
     if backend == "sqlite":
@@ -519,6 +521,12 @@ def create_trace_store(
         if not database_url:
             raise ValueError("PostgresTraceStore requires database_url")
         inner = PostgresTraceStore(database_url)
+    elif backend == "http":
+        from .http import HttpTraceStore
+
+        if not platform_url:
+            raise ValueError("HttpTraceStore requires storage.platform_url")
+        inner = HttpTraceStore(platform_url, static_token=platform_token)
     else:
         inner = NullTraceStore()
 

@@ -372,11 +372,18 @@ class StorageConfig(BaseModel):
     When ``backend`` is ``null`` (default), no persistence — features
     degrade gracefully to no-ops. ``sqlite`` uses a single file for
     both sessions and traces. ``postgres`` uses a shared connection pool.
+    ``http`` delegates to a sibling ``fipsagents-platform`` service over
+    REST; ``platform_url`` is required and ``platform_token`` is an
+    optional static bearer token for service-to-service flows
+    (per-request tokens forwarded from the inbound ``Authorization``
+    header take precedence when present).
     """
 
-    backend: Literal["sqlite", "postgres"] | None = None
+    backend: Literal["sqlite", "postgres", "http"] | None = None
     sqlite_path: str = "./agent.db"
     database_url: str = ""
+    platform_url: str = ""
+    platform_token: str = ""
 
     @field_validator("backend", mode="before")
     @classmethod
@@ -394,14 +401,32 @@ class StorageConfig(BaseModel):
         return v
 
 
-class SessionsConfig(BaseModel):
+class _PerStoreBackendMixin(BaseModel):
+    """Per-store override for ``StorageConfig.backend``.
+
+    When ``None`` the store inherits ``storage.backend``.  Allows mixing
+    backends — eg ``feedback.backend: http`` while sessions/traces stay
+    on local SQLite.
+    """
+
+    backend: Literal["sqlite", "postgres", "http"] | None = None
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _coerce_empty_backend(cls, v: Any) -> Any:
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+
+class SessionsConfig(_PerStoreBackendMixin):
     """Session persistence settings."""
 
     enabled: bool = False
     max_age_hours: int = Field(default=168, ge=0)
 
 
-class TracesConfig(BaseModel):
+class TracesConfig(_PerStoreBackendMixin):
     """Trace collection settings."""
 
     enabled: bool = False
@@ -418,7 +443,7 @@ class MetricsConfig(BaseModel):
     enabled: bool = False
 
 
-class FeedbackConfig(BaseModel):
+class FeedbackConfig(_PerStoreBackendMixin):
     """Feedback collection settings."""
 
     enabled: bool = False

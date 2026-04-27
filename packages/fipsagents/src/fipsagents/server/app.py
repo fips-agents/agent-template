@@ -14,6 +14,7 @@ from typing import Any, AsyncIterator
 try:
     from fastapi import Body, FastAPI, HTTPException, Request
     from fastapi.responses import JSONResponse, StreamingResponse
+    from starlette.middleware.base import BaseHTTPMiddleware
 except ImportError as exc:  # pragma: no cover — helpful error path
     raise ImportError(
         "fipsagents.server requires the [server] extra. "
@@ -51,6 +52,32 @@ logger = logging.getLogger(__name__)
 def _new_trace_id() -> str:
     """Generate a trace identifier matching ``TraceCollector``'s format."""
     return f"trace_{uuid.uuid4().hex[:16]}"
+
+
+class _HttpStoreContextMiddleware(BaseHTTPMiddleware):
+    """Forward inbound Authorization + traceparent to outgoing Http*Store calls.
+
+    Stores are stateless objects that don't see request scope.  This
+    middleware captures the headers into contextvars consumed by
+    :class:`fipsagents.server.http.\\_PlatformClient` so per-request
+    JWTs and distributed-trace context flow through to the platform
+    service without changing the SessionStore/TraceStore/FeedbackStore
+    ABCs.
+    """
+
+    async def dispatch(self, request, call_next):
+        # Lazy import: only matters when the http backend is configured.
+        from .http import set_request_context, reset_request_context
+
+        tokens = set_request_context(
+            authorization=request.headers.get("authorization")
+            or request.headers.get("Authorization"),
+            traceparent=request.headers.get("traceparent"),
+        )
+        try:
+            return await call_next(request)
+        finally:
+            reset_request_context(tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +132,7 @@ class OpenAIChatServer:
             version=version,
             lifespan=self._lifespan,
         )
+        self.app.add_middleware(_HttpStoreContextMiddleware)
         self._register_routes()
 
     # -- Lifespan ------------------------------------------------------------
@@ -121,10 +149,27 @@ class OpenAIChatServer:
         server_cfg = self._agent.config.server
         sqlite_conn = None
 
-        has_sqlite_feature = (
-            server_cfg.storage.backend == "sqlite"
-            and (server_cfg.sessions.enabled or server_cfg.traces.enabled or server_cfg.feedback.enabled)
+        # Per-store backend = explicit override or fall through to
+        # storage.backend.  An ``http`` backend is allowed at the per-store
+        # level even when storage.backend is None or ``sqlite`` — that's
+        # the whole point of the per-store override (eg feedback->http,
+        # sessions->sqlite).
+        sessions_backend = (
+            server_cfg.sessions.backend or server_cfg.storage.backend
+            if server_cfg.sessions.enabled else None
         )
+        traces_backend = (
+            server_cfg.traces.backend or server_cfg.storage.backend
+            if server_cfg.traces.enabled else None
+        )
+        feedback_backend = (
+            server_cfg.feedback.backend or server_cfg.storage.backend
+            if server_cfg.feedback.enabled else None
+        )
+
+        has_sqlite_feature = "sqlite" in {
+            sessions_backend, traces_backend, feedback_backend,
+        }
         if has_sqlite_feature:
             from .sqlite import SqliteConnectionManager
 
@@ -134,25 +179,31 @@ class OpenAIChatServer:
             )
 
         self._session_store = create_session_store(
-            server_cfg.storage.backend if server_cfg.sessions.enabled else None,
+            sessions_backend,
             sqlite_path=server_cfg.storage.sqlite_path,
             database_url=server_cfg.storage.database_url,
             sqlite_connection=sqlite_conn,
+            platform_url=server_cfg.storage.platform_url,
+            platform_token=server_cfg.storage.platform_token,
         )
         self._trace_store = create_trace_store(
-            server_cfg.storage.backend if server_cfg.traces.enabled else None,
+            traces_backend,
             sqlite_path=server_cfg.storage.sqlite_path,
             database_url=server_cfg.storage.database_url,
             sqlite_connection=sqlite_conn,
             exporter=server_cfg.traces.exporter,
             otel_endpoint=server_cfg.traces.otel_endpoint,
             service_name=server_cfg.traces.service_name,
+            platform_url=server_cfg.storage.platform_url,
+            platform_token=server_cfg.storage.platform_token,
         )
         self._feedback_store = create_feedback_store(
-            server_cfg.storage.backend if server_cfg.feedback.enabled else None,
+            feedback_backend,
             sqlite_path=server_cfg.storage.sqlite_path,
             database_url=server_cfg.storage.database_url,
             sqlite_connection=sqlite_conn,
+            platform_url=server_cfg.storage.platform_url,
+            platform_token=server_cfg.storage.platform_token,
         )
 
         # Initialize metrics collector.
@@ -160,10 +211,13 @@ class OpenAIChatServer:
             enabled=server_cfg.metrics.enabled,
         )
 
-        # Only run housekeeping if at least one feature has a persistent backend.
-        if server_cfg.storage.backend is not None and (
-            server_cfg.sessions.enabled or server_cfg.traces.enabled or server_cfg.feedback.enabled
-        ):
+        # Run housekeeping only if at least one *locally persistent*
+        # backend is in play.  HTTP-backed stores delegate housekeeping
+        # to the platform service.
+        local_backends = {sessions_backend, traces_backend, feedback_backend} & {
+            "sqlite", "postgres",
+        }
+        if local_backends:
             self._housekeeping_task = asyncio.create_task(self._run_housekeeping())
 
         logger.info("OpenAIChatServer: %s ready", self._agent_class.__name__)

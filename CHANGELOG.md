@@ -4,6 +4,24 @@ All notable changes to the `fipsagents` package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.13.0] - 2026-04-27
+
+### Added
+
+- **HTTP-backed store implementations** — `HttpSessionStore`, `HttpTraceStore`, `HttpFeedbackStore` in `fipsagents.server.http`. Drop-in replacements for the existing SQLite/Postgres backends that delegate persistence to a sibling [`fipsagents-platform`](https://github.com/fips-agents/fipsagents-platform) service over its REST surface. Closes the agent-side half of the Cross-Agent Platform Service work tracked in [#114](https://github.com/fips-agents/agent-template/issues/114) (architecture decision in [#112](https://github.com/fips-agents/agent-template/issues/112)).
+- **Per-store backend override** — `SessionsConfig`, `TracesConfig` and `FeedbackConfig` each gain an optional `backend: sqlite | postgres | http` field. When unset, the store inherits `storage.backend`. Lets an operator route, eg, `feedback.backend: http` while keeping sessions/traces on local SQLite.
+- **Platform routing config** — `StorageConfig` gains `platform_url` and `platform_token`. The static token is used for service-to-service flows; per-request `Authorization` headers from inbound chat requests take precedence and are forwarded to the platform via a contextvar populated by a new `_HttpStoreContextMiddleware`. W3C `traceparent` is forwarded the same way so platform writes participate in the same distributed trace as the chat completion that generated them.
+- **`platform-client` extra** — explicit opt-in marker for HTTP-backed deployments (httpx itself is already a core dependency).
+
+### Changed
+
+- `OpenAIChatServer._lifespan` now resolves each store's backend independently and only acquires a SQLite connection when at least one enabled store needs it. The housekeeping task is skipped entirely when every active store is HTTP-backed (the platform owns its own housekeeping cycle).
+
+### Notes
+
+- `delete_before()` on every `Http*Store` is a logged no-op — the platform service is responsible for housekeeping cross-tenant data.
+- `HttpFeedbackStore.add()` returns the platform-generated `feedback_id`; the agent's pre-generated id and `created_at` on the inbound `FeedbackRecord` are intentionally discarded (matches the platform's `POST /v1/feedback` contract).
+
 ## [0.12.0] - 2026-04-27
 
 ### Added

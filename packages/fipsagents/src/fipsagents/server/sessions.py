@@ -313,6 +313,8 @@ def create_session_store(
     sqlite_path: str = "./agent.db",
     database_url: str = "",
     sqlite_connection: Any = None,
+    platform_url: str = "",
+    platform_token: str = "",
 ) -> SessionStore:
     """Create a session store from config values."""
     if backend == "sqlite":
@@ -321,4 +323,10 @@ def create_session_store(
         if not database_url:
             raise ValueError("PostgresSessionStore requires database_url")
         return PostgresSessionStore(database_url)
+    elif backend == "http":
+        from .http import HttpSessionStore
+
+        if not platform_url:
+            raise ValueError("HttpSessionStore requires storage.platform_url")
+        return HttpSessionStore(platform_url, static_token=platform_token)
     return NullSessionStore()
