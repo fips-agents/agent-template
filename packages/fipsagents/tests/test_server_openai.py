@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import types
 from typing import AsyncIterator
 
@@ -759,10 +760,7 @@ def test_agent_info_includes_llm_tools():
 # ---------------------------------------------------------------------------
 
 
-import re as _re
-
-
-_TRACE_ID_RE = _re.compile(r"^trace_[0-9a-f]{16}$")
+_TRACE_ID_RE = re.compile(r"^trace_[0-9a-f]{16}$")
 
 
 def test_sync_response_includes_x_trace_id_header():
