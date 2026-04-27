@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from fipsagents.baseagent.events import (
     ContentDelta,
@@ -78,6 +78,7 @@ def _usage_chunk(
     completion_id: str,
     model_name: str,
     metrics: StreamMetrics,
+    trace_id: str | None = None,
 ) -> str:
     """Serialize a final usage chunk (OpenAI ``include_usage`` convention).
 
@@ -86,8 +87,12 @@ def _usage_chunk(
     object. We also attach a ``stream_metrics`` extension carrying
     TTFT / ITL / counters that OpenAI's spec does not cover; unknown
     fields are ignored by conforming clients.
+
+    When ``trace_id`` is provided it is included as a top-level field so
+    clients can correlate this completion with a stored trace (e.g. to
+    attach feedback via ``POST /v1/feedback``).
     """
-    chunk = {
+    chunk: dict[str, Any] = {
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": _now(),
@@ -107,6 +112,8 @@ def _usage_chunk(
             "tool_calls": metrics.tool_calls,
         },
     }
+    if trace_id is not None:
+        chunk["trace_id"] = trace_id
     return f"data: {json.dumps(chunk)}\n\n"
 
 
@@ -119,6 +126,7 @@ async def stream_events_as_sse(
     events: AsyncIterator[StreamEvent],
     model_name: str,
     completion_id: str | None = None,
+    trace_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Translate a ``StreamEvent`` sequence into OpenAI SSE chunks.
 
@@ -128,6 +136,9 @@ async def stream_events_as_sse(
         model_name: Model identifier echoed in every chunk's ``model`` field.
         completion_id: Optional completion ID. When ``None`` an ID of the form
             ``chatcmpl-<24 hex chars>`` is generated automatically.
+        trace_id: Optional trace identifier. When provided it is attached to
+            the final usage chunk so clients can correlate the completion
+            with a stored trace (e.g. for feedback submission).
 
     Yields:
         SSE-encoded strings (``data: {...}\\n\\n`` or ``data: [DONE]\\n\\n``).
@@ -224,7 +235,9 @@ async def stream_events_as_sse(
                 )
                 # OpenAI's stream_options.include_usage appends a
                 # separate chunk with empty choices carrying usage.
-                yield _usage_chunk(completion_id, model_name, event.metrics)
+                yield _usage_chunk(
+                    completion_id, model_name, event.metrics, trace_id=trace_id,
+                )
 
     except Exception as exc:
         err = {"error": {"message": str(exc), "type": type(exc).__name__}}
