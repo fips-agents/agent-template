@@ -78,10 +78,19 @@ class ChatCompletionRequest(BaseModel):
 
 
 class CreateFeedbackRequest(BaseModel):
-    """Request body for POST /v1/feedback."""
+    """Request body for POST /v1/feedback.
 
-    trace_id: str
+    ``trace_id`` is optional: clients normally send the value they
+    received from the chat completion (in the ``X-Trace-Id`` response
+    header or the final ``trace_id`` field of the SSE usage chunk), but
+    when tracing is sampled out or the caller does not have one the
+    server synthesises a stand-alone identifier. Records keyed to a
+    real trace can be joined to the trace store; orphan records
+    cannot but are still useful as raw rating data.
+    """
+
     rating: int
+    trace_id: str | None = None
     session_id: str | None = None
     comment: str | None = None
     correction: str | None = None

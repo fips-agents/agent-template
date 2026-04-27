@@ -238,3 +238,45 @@ async def test_model_name_included_in_every_chunk():
     )
     chunks = [f for f in frames if f != "[DONE]"]
     assert all(f["model"] == "granite-8b" for f in chunks)
+
+
+async def test_trace_id_included_on_usage_chunk_when_provided():
+    events = [
+        ContentDelta(content="x"),
+        StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+    ]
+    frames = await _collect(
+        stream_events_as_sse(_iter(events), model_name="m", trace_id="trace_abc123")
+    )
+    usage_chunks = [
+        f for f in frames if isinstance(f, dict) and f.get("choices") == []
+    ]
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0]["trace_id"] == "trace_abc123"
+
+
+async def test_trace_id_omitted_when_not_provided():
+    events = [StreamComplete(finish_reason="stop", metrics=StreamMetrics())]
+    frames = await _collect(stream_events_as_sse(_iter(events), model_name="m"))
+    usage_chunks = [
+        f for f in frames if isinstance(f, dict) and f.get("choices") == []
+    ]
+    assert len(usage_chunks) == 1
+    assert "trace_id" not in usage_chunks[0]
+
+
+async def test_trace_id_not_on_per_token_chunks():
+    """Only the final usage chunk carries trace_id; deltas stay clean."""
+    events = [
+        ContentDelta(content="x"),
+        ContentDelta(content="y"),
+        StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+    ]
+    frames = await _collect(
+        stream_events_as_sse(_iter(events), model_name="m", trace_id="trace_xyz")
+    )
+    delta_chunks = [
+        f for f in frames if isinstance(f, dict) and f.get("choices")
+    ]
+    for chunk in delta_chunks:
+        assert "trace_id" not in chunk
