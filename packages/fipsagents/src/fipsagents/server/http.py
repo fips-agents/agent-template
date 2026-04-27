@@ -104,6 +104,7 @@ class _PlatformClient:
         *,
         static_token: str = "",
         timeout: float = 30.0,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not base_url:
             raise ValueError("_PlatformClient requires a base_url")
@@ -111,9 +112,15 @@ class _PlatformClient:
         # trailing slash to keep concatenation predictable.
         self._base_url = base_url.rstrip("/")
         self._static_token = static_token
-        self._client = httpx.AsyncClient(
-            base_url=self._base_url, timeout=timeout,
-        )
+        # ``transport`` is a test seam: production code never sets it,
+        # but tests inject ASGITransport (in-process platform app) or
+        # MockTransport (canned wire-shape responses).
+        kwargs: dict[str, Any] = {
+            "base_url": self._base_url, "timeout": timeout,
+        }
+        if transport is not None:
+            kwargs["transport"] = transport
+        self._client = httpx.AsyncClient(**kwargs)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -193,8 +200,16 @@ class HttpSessionStore(SessionStore):
       platform owns its own housekeeping cycle).
     """
 
-    def __init__(self, base_url: str, *, static_token: str = "") -> None:
-        self._client = _PlatformClient(base_url, static_token=static_token)
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        static_token: str = "",
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._client = _PlatformClient(
+            base_url, static_token=static_token, transport=transport,
+        )
 
     async def create(self, session_id: str | None = None) -> str:
         body: dict[str, Any] = {}
@@ -262,8 +277,16 @@ class HttpTraceStore(TraceStore):
     - ``delete_before`` → no platform endpoint; logged no-op.
     """
 
-    def __init__(self, base_url: str, *, static_token: str = "") -> None:
-        self._client = _PlatformClient(base_url, static_token=static_token)
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        static_token: str = "",
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._client = _PlatformClient(
+            base_url, static_token=static_token, transport=transport,
+        )
 
     async def save_trace(self, trace: Trace) -> None:
         # Use asdict so Span objects flatten correctly.  The platform's
@@ -365,8 +388,16 @@ class HttpFeedbackStore(FeedbackStore):
     platform — the agent's value is informational only.
     """
 
-    def __init__(self, base_url: str, *, static_token: str = "") -> None:
-        self._client = _PlatformClient(base_url, static_token=static_token)
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        static_token: str = "",
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._client = _PlatformClient(
+            base_url, static_token=static_token, transport=transport,
+        )
 
     async def add(self, record: FeedbackRecord) -> str:
         body = {
