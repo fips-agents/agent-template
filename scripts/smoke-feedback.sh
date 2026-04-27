@@ -11,7 +11,8 @@
 #   5. POST /v1/feedback without trace_id (server synthesises one)
 #   6. GET /v1/feedback?trace_id=... returns the record we wrote
 #   7. GET /v1/feedback/stats?window=hour returns aggregated counts
-#   8. (gateway) auth headers (Authorization, X-User-ID) reach the backend
+#   8. (gateway) anonymous-mode auth: gateway strips spoofed X-Auth-* and
+#      projects X-Auth-Subject=anonymous (gateway-template#21 v1)
 #
 # No real LLM is required — the stub agent returns a fixed canned reply
 # so the script can run offline.
@@ -375,17 +376,27 @@ else
   fail "stats unexpected" "got total=$TOT up=$UP down=$DOWN" "raw: $STATS"
 fi
 
-section "Gateway pass-through with auth headers"
+section "Gateway anonymous-mode auth strips spoofed X-Auth-*"
+# Try to forge identity. Gateway in anonymous mode (default) must strip
+# inbound X-Auth-* and project X-Auth-Subject=anonymous.
 gw_fb_resp=$(curl -s -o "$WORKDIR/gw_fb.body" -w '%{http_code}' \
   -X POST "http://127.0.0.1:$GATEWAY_PORT/v1/feedback" \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer smoke-token' \
-  -H 'X-User-ID: smoke-tester' \
+  -H 'X-Auth-Subject: spoofed-admin' \
   -d "{\"trace_id\":\"$TRACE_FOR_FB\",\"rating\":1,\"comment\":\"via gateway\"}")
 if [ "$gw_fb_resp" = "201" ]; then
   pass "POST /v1/feedback via gateway returned 201"
 else
   fail "POST /v1/feedback via gateway returned $gw_fb_resp" "$(cat "$WORKDIR/gw_fb.body")"
+fi
+# Verify the spoofed subject was overwritten with "anonymous".
+GW_FB_ID=$(jq -r '.feedback_id' < "$WORKDIR/gw_fb.body")
+GW_FB_RECORD=$(curl -sf "http://127.0.0.1:$AGENT_PORT/v1/feedback?trace_id=$TRACE_FOR_FB" \
+  | jq -r --arg id "$GW_FB_ID" '.[] | select(.feedback_id == $id) | .user_id')
+if [ "$GW_FB_RECORD" = "anonymous" ]; then
+  pass "spoofed X-Auth-Subject stripped; recorded as anonymous"
+else
+  fail "X-Auth-Subject spoofing not stripped" "got user_id=$GW_FB_RECORD"
 fi
 
 section "GET /v1/feedback via gateway returns 3 records"
@@ -469,8 +480,6 @@ section "POST /v1/feedback through UI proxy → agent"
 ui_fb_resp=$(curl -s -o "$WORKDIR/ui_fb.body" -w '%{http_code}' \
   -X POST "http://127.0.0.1:$UI_PORT/v1/feedback" \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer ui-token' \
-  -H 'X-User-ID: ui-tester' \
   -d "{\"trace_id\":\"$TRACE_FOR_FB\",\"rating\":-1,\"comment\":\"[Inaccurate] from UI proxy\"}")
 if [ "$ui_fb_resp" = "201" ]; then
   pass "POST /v1/feedback via UI → 201"
