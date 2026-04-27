@@ -29,16 +29,20 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GATEWAY_REPO="${GATEWAY_REPO:-$HOME/Developer/AGENTS/gateway-template}"
+UI_REPO="${UI_REPO:-$HOME/Developer/AGENTS/ui-template}"
 AGENT_PORT="${AGENT_PORT:-18080}"
 GATEWAY_PORT="${GATEWAY_PORT:-18090}"
+UI_PORT="${UI_PORT:-13000}"
 WORKDIR="$(mktemp -d -t fipsagents-smoke-XXXXXX)"
 KEEP_RUNNING=0
 [ "${1:-}" = "--keep-running" ] && KEEP_RUNNING=1
 
 AGENT_LOG="$WORKDIR/agent.log"
 GATEWAY_LOG="$WORKDIR/gateway.log"
+UI_LOG="$WORKDIR/ui.log"
 AGENT_PID=""
 GATEWAY_PID=""
+UI_PID=""
 PASS=0
 FAIL=0
 
@@ -65,12 +69,15 @@ cleanup() {
     echo "Services left running:"
     [ -n "$AGENT_PID" ]   && echo "  agent   pid=$AGENT_PID  port=$AGENT_PORT  log=$AGENT_LOG"
     [ -n "$GATEWAY_PID" ] && echo "  gateway pid=$GATEWAY_PID port=$GATEWAY_PORT log=$GATEWAY_LOG"
+    [ -n "$UI_PID" ]      && echo "  ui      pid=$UI_PID      port=$UI_PORT      log=$UI_LOG"
     echo "  workdir=$WORKDIR"
-    echo "Stop with: kill $AGENT_PID $GATEWAY_PID"
+    [ -n "$UI_PID" ] && echo "  open in browser: http://127.0.0.1:$UI_PORT"
+    echo "Stop with: kill $AGENT_PID $GATEWAY_PID $UI_PID"
     return
   fi
   [ -n "$AGENT_PID" ]   && kill "$AGENT_PID"   2>/dev/null || true
   [ -n "$GATEWAY_PID" ] && kill "$GATEWAY_PID" 2>/dev/null || true
+  [ -n "$UI_PID" ]      && kill "$UI_PID"      2>/dev/null || true
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
@@ -93,6 +100,10 @@ need jq
 if [ ! -d "$GATEWAY_REPO" ]; then
   fail "gateway-template not found at $GATEWAY_REPO" \
        "set GATEWAY_REPO=/path/to/gateway-template if it lives elsewhere"
+fi
+if [ ! -d "$UI_REPO" ]; then
+  fail "ui-template not found at $UI_REPO" \
+       "set UI_REPO=/path/to/ui-template if it lives elsewhere"
 fi
 
 if [ "$FAIL" -gt 0 ]; then
@@ -223,7 +234,9 @@ pass "stub agent and config written to $WORKDIR/agent"
 # ---- start agent -----------------------------------------------------------
 
 section "Starting agent on :$AGENT_PORT"
-( cd "$WORKDIR/agent" && python run_stub.py agent.yaml "$AGENT_PORT" >"$AGENT_LOG" 2>&1 ) &
+# `exec` inside the subshell so $! is python's PID, not the subshell's.
+# Without exec, killing $! kills the wrapper bash and orphans python.
+( cd "$WORKDIR/agent" && exec python run_stub.py agent.yaml "$AGENT_PORT" ) >"$AGENT_LOG" 2>&1 &
 AGENT_PID=$!
 
 # Wait for /healthz.
@@ -248,8 +261,8 @@ GATEWAY_BIN="$WORKDIR/gateway-server"
   && pass "gateway binary built" \
   || { fail "gateway build failed"; exit "$FAIL"; }
 
-BACKEND_URL="http://127.0.0.1:$AGENT_PORT" PORT="$GATEWAY_PORT" \
-  "$GATEWAY_BIN" >"$GATEWAY_LOG" 2>&1 &
+( exec env BACKEND_URL="http://127.0.0.1:$AGENT_PORT" PORT="$GATEWAY_PORT" \
+    "$GATEWAY_BIN" ) >"$GATEWAY_LOG" 2>&1 &
 GATEWAY_PID=$!
 
 for _ in $(seq 1 40); do
@@ -402,6 +415,91 @@ else
   fail "DELETE /v1/feedback returned $M_CODE (expected 405)"
 fi
 
+# ---- UI tier ---------------------------------------------------------------
+
+section "Starting UI on :$UI_PORT"
+UI_BIN="$WORKDIR/ui-server"
+( cd "$UI_REPO" && go build -o "$UI_BIN" ./cmd/server ) \
+  && pass "UI binary built" \
+  || { fail "UI build failed"; exit "$FAIL"; }
+
+( exec env API_URL="http://127.0.0.1:$GATEWAY_PORT" PORT="$UI_PORT" \
+    "$UI_BIN" ) >"$UI_LOG" 2>&1 &
+UI_PID=$!
+
+for _ in $(seq 1 40); do
+  if curl -fs "http://127.0.0.1:$UI_PORT/healthz" >/dev/null 2>&1; then
+    pass "UI ready (pid $UI_PID)"
+    break
+  fi
+  sleep 0.25
+done
+if ! curl -fs "http://127.0.0.1:$UI_PORT/healthz" >/dev/null 2>&1; then
+  fail "UI did not come up; tail of $UI_LOG:" \
+       "$(tail -n 20 "$UI_LOG" 2>/dev/null | sed 's/^/        /')"
+  exit "$FAIL"
+fi
+
+section "UI serves the chat HTML"
+HTML=$(curl -sf "http://127.0.0.1:$UI_PORT/")
+if echo "$HTML" | grep -q '<script src="app.js">'; then
+  pass "GET / returns the chat HTML (app.js linked)"
+else
+  fail "GET / did not return expected HTML" "$(echo "$HTML" | head -5)"
+fi
+
+section "UI ships the new feedback JS + CSS"
+APPJS=$(curl -sf "http://127.0.0.1:$UI_PORT/app.js")
+if echo "$APPJS" | grep -q "createFeedbackControls" \
+   && echo "$APPJS" | grep -q "/v1/feedback" \
+   && echo "$APPJS" | grep -q "X-Trace-Id"; then
+  pass "app.js exposes feedback hooks (createFeedbackControls, /v1/feedback, X-Trace-Id)"
+else
+  fail "app.js missing expected feedback symbols"
+fi
+CSS=$(curl -sf "http://127.0.0.1:$UI_PORT/style.css")
+if echo "$CSS" | grep -q "feedback-controls" \
+   && echo "$CSS" | grep -q "feedback-modal"; then
+  pass "style.css ships the feedback selectors"
+else
+  fail "style.css missing .feedback-controls / .feedback-modal"
+fi
+
+section "POST /v1/feedback through UI proxy → agent"
+ui_fb_resp=$(curl -s -o "$WORKDIR/ui_fb.body" -w '%{http_code}' \
+  -X POST "http://127.0.0.1:$UI_PORT/v1/feedback" \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer ui-token' \
+  -H 'X-User-ID: ui-tester' \
+  -d "{\"trace_id\":\"$TRACE_FOR_FB\",\"rating\":-1,\"comment\":\"[Inaccurate] from UI proxy\"}")
+if [ "$ui_fb_resp" = "201" ]; then
+  pass "POST /v1/feedback via UI → 201"
+else
+  fail "POST /v1/feedback via UI returned $ui_fb_resp" "$(cat "$WORKDIR/ui_fb.body")"
+fi
+
+section "GET /v1/feedback through UI proxy returns 4 records"
+UI_LIST=$(curl -sf "http://127.0.0.1:$UI_PORT/v1/feedback?limit=10")
+UI_CT=$(echo "$UI_LIST" | jq 'length')
+if [ "$UI_CT" = "4" ]; then
+  pass "UI list returned 4 records"
+else
+  fail "UI list returned $UI_CT records (expected 4)" "$UI_LIST"
+fi
+
+section "Sync chat completion through full UI → agent path"
+ui_sync_hdr="$WORKDIR/ui_sync.headers"
+curl -sf -D "$ui_sync_hdr" -o /dev/null \
+  -X POST "http://127.0.0.1:$UI_PORT/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"hi"}],"stream":false}'
+UI_SYNC_TRACE=$(awk -F': ' 'tolower($1)=="x-trace-id"{gsub(/\r/,"");print $2}' "$ui_sync_hdr" | tr -d ' ')
+if [[ "$UI_SYNC_TRACE" =~ $TRACE_RE ]]; then
+  pass "UI propagates X-Trace-Id end-to-end: $UI_SYNC_TRACE"
+else
+  fail "X-Trace-Id missing from UI sync response" "got: '$UI_SYNC_TRACE'"
+fi
+
 # ---- summary ---------------------------------------------------------------
 
 echo
@@ -414,6 +512,7 @@ else
   echo "Logs:"
   echo "  agent:   $AGENT_LOG"
   echo "  gateway: $GATEWAY_LOG"
+  [ -n "$UI_PID" ] && echo "  ui:      $UI_LOG"
 fi
 
 exit "$FAIL"
