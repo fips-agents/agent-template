@@ -418,6 +418,13 @@ class MetricsConfig(BaseModel):
     enabled: bool = False
 
 
+class FeedbackConfig(BaseModel):
+    """Feedback collection settings."""
+
+    enabled: bool = False
+    max_age_hours: int = Field(default=720, ge=0)
+
+
 class ServerConfig(BaseModel):
     """HTTP server binding and feature configuration."""
 
@@ -426,6 +433,7 @@ class ServerConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     traces: TracesConfig = Field(default_factory=TracesConfig)
+    feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
 
     @field_validator("port", mode="before")

@@ -25,6 +25,7 @@ from fipsagents.serialization.openai_sse import stream_events_as_sse
 
 from .models import (
     ChatCompletionRequest,
+    CreateFeedbackRequest,
     CreateSessionRequest,
     _extract_overrides,
     _messages_to_dicts,
@@ -34,6 +35,13 @@ from .collector import TraceCollector
 from .metrics import NullMetricsCollector, create_metrics_collector
 from .sessions import SessionStore, create_session_store
 from .tracing import TraceStore, create_trace_store
+from .feedback import (
+    FeedbackRecord,
+    FeedbackStore,
+    _generate_feedback_id,
+    _utc_now_iso,
+    create_feedback_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +87,7 @@ class OpenAIChatServer:
         self._agent_lock = asyncio.Lock()
         self._session_store: SessionStore | None = None
         self._trace_store: TraceStore | None = None
+        self._feedback_store: FeedbackStore | None = None
         self._metrics_collector: Any = None  # Set in lifespan
         self._housekeeping_task: asyncio.Task | None = None
         self._sqlite_mgr: Any = None
@@ -107,7 +116,7 @@ class OpenAIChatServer:
 
         has_sqlite_feature = (
             server_cfg.storage.backend == "sqlite"
-            and (server_cfg.sessions.enabled or server_cfg.traces.enabled)
+            and (server_cfg.sessions.enabled or server_cfg.traces.enabled or server_cfg.feedback.enabled)
         )
         if has_sqlite_feature:
             from .sqlite import SqliteConnectionManager
@@ -132,6 +141,12 @@ class OpenAIChatServer:
             otel_endpoint=server_cfg.traces.otel_endpoint,
             service_name=server_cfg.traces.service_name,
         )
+        self._feedback_store = create_feedback_store(
+            server_cfg.storage.backend if server_cfg.feedback.enabled else None,
+            sqlite_path=server_cfg.storage.sqlite_path,
+            database_url=server_cfg.storage.database_url,
+            sqlite_connection=sqlite_conn,
+        )
 
         # Initialize metrics collector.
         self._metrics_collector = create_metrics_collector(
@@ -140,7 +155,7 @@ class OpenAIChatServer:
 
         # Only run housekeeping if at least one feature has a persistent backend.
         if server_cfg.storage.backend is not None and (
-            server_cfg.sessions.enabled or server_cfg.traces.enabled
+            server_cfg.sessions.enabled or server_cfg.traces.enabled or server_cfg.feedback.enabled
         ):
             self._housekeeping_task = asyncio.create_task(self._run_housekeeping())
 
@@ -157,6 +172,7 @@ class OpenAIChatServer:
             await self._agent.shutdown()
             await self._session_store.close()
             await self._trace_store.close()
+            await self._feedback_store.close()
             if self._sqlite_mgr:
                 await self._sqlite_mgr.close_all()
             self._agent = None
@@ -199,6 +215,14 @@ class OpenAIChatServer:
             if deleted:
                 logger.info("Housekeeping: removed %d expired traces", deleted)
 
+        if server_cfg.feedback.max_age_hours > 0 and self._feedback_store:
+            cutoff = datetime.now(timezone.utc) - timedelta(
+                hours=server_cfg.feedback.max_age_hours,
+            )
+            deleted = await self._feedback_store.delete_before(cutoff)
+            if deleted:
+                logger.info("Housekeeping: removed %d expired feedback records", deleted)
+
     # -- Route registration --------------------------------------------------
 
     def _register_routes(self) -> None:
@@ -210,6 +234,9 @@ class OpenAIChatServer:
         self.app.delete("/v1/sessions/{session_id}")(self._delete_session)
         self.app.get("/v1/traces")(self._list_traces)
         self.app.get("/v1/traces/{trace_id}")(self._get_trace)
+        self.app.post("/v1/feedback")(self._create_feedback)
+        self.app.get("/v1/feedback/stats")(self._feedback_stats)
+        self.app.get("/v1/feedback")(self._list_feedback)
         self.app.post("/v1/chat/completions")(self._chat_completions)
         self.app.get("/metrics")(self._metrics_endpoint)
 
@@ -300,6 +327,73 @@ class OpenAIChatServer:
         if trace is None:
             raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
         return JSONResponse(asdict(trace))
+
+    async def _create_feedback(self, body: CreateFeedbackRequest):
+        if self._feedback_store is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+        record = FeedbackRecord(
+            feedback_id=_generate_feedback_id(),
+            trace_id=body.trace_id,
+            session_id=body.session_id,
+            rating=body.rating,
+            comment=body.comment,
+            correction=body.correction,
+            model_id=body.model_id,
+            latency_ms=body.latency_ms,
+            turn_index=body.turn_index,
+            agent_type=body.agent_type,
+            created_at=_utc_now_iso(),
+        )
+        feedback_id = await self._feedback_store.add(record)
+        return JSONResponse({"feedback_id": feedback_id}, status_code=201)
+
+    async def _list_feedback(
+        self,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ):
+        if self._feedback_store is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+        from dataclasses import asdict
+        from datetime import datetime
+        since_dt = datetime.fromisoformat(since) if since else None
+        until_dt = datetime.fromisoformat(until) if until else None
+        records = await self._feedback_store.query(
+            trace_id=trace_id,
+            session_id=session_id,
+            since=since_dt,
+            until=until_dt,
+            limit=min(limit, 1000),
+            offset=max(offset, 0),
+        )
+        return JSONResponse([asdict(r) for r in records])
+
+    async def _feedback_stats(
+        self,
+        window: str = "day",
+        agent_type: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ):
+        if self._feedback_store is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+        from dataclasses import asdict
+        from datetime import datetime
+        if window not in ("hour", "day", "week"):
+            raise HTTPException(status_code=400, detail="window must be 'hour', 'day', or 'week'")
+        since_dt = datetime.fromisoformat(since) if since else None
+        until_dt = datetime.fromisoformat(until) if until else None
+        results = await self._feedback_store.stats(
+            window=window,
+            agent_type=agent_type,
+            since=since_dt,
+            until=until_dt,
+        )
+        return JSONResponse([asdict(r) for r in results])
 
     def _should_trace(self) -> bool:
         """Decide whether to trace this request based on sampling rate."""

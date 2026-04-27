@@ -76,6 +76,10 @@ class _StubAgent(BaseAgent):
                 metrics=types.SimpleNamespace(
                     enabled=False,
                 ),
+                feedback=types.SimpleNamespace(
+                    enabled=False,
+                    max_age_hours=720,
+                ),
             ),
         )
 

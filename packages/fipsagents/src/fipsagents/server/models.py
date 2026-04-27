@@ -77,6 +77,27 @@ class ChatCompletionRequest(BaseModel):
         return v
 
 
+class CreateFeedbackRequest(BaseModel):
+    """Request body for POST /v1/feedback."""
+
+    trace_id: str
+    rating: int
+    session_id: str | None = None
+    comment: str | None = None
+    correction: str | None = None
+    model_id: str | None = None
+    latency_ms: float | None = Field(default=None, ge=0)
+    turn_index: int | None = Field(default=None, ge=0)
+    agent_type: str | None = None
+
+    @field_validator("rating")
+    @classmethod
+    def _validate_rating(cls, v: int) -> int:
+        if v not in (1, -1):
+            raise ValueError("rating must be 1 (thumbs-up) or -1 (thumbs-down)")
+        return v
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
