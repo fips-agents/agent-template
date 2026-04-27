@@ -76,3 +76,6 @@ NEXT_SESSION.md
 
 # Local dev stack (smoke + manual testing)
 .local/
+
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock
