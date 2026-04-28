@@ -243,6 +243,8 @@ Token cost tracking has two layers:
 
 When a hard limit is hit, `BudgetEnforcer` raises `BudgetExceededError`, which the server maps to **HTTP 402 Payment Required** with a structured body (`error`, `scope`, `identifier`, `current_usd`, `limit_usd`). Soft warnings emit a single `WARNING` log line per crossing per scope and then go quiet. `budget.mode: observe` downgrades hard-limit raising to log-only — useful for measuring impact before turning enforcement on.
 
+`TraceCollector` stamps OTEL GenAI semantic-convention attributes on its spans alongside the legacy attribute names: `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.system` on the request span, and `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` / `gen_ai.response.model` on the model_call span. Existing trace consumers that read `prompt_tokens` / `completion_tokens` keep working; OTEL backends (Tempo, Honeycomb, Grafana Cloud) get the standard keys they expect for free.
+
 `CreateSessionRequest` is a Pydantic model that validates session IDs: alphanumeric characters, hyphens, and underscores only, 1-128 characters. The same validation applies to the optional `session_id` field on `ChatCompletionRequest`. Sessions support two creation modes: explicit creation via `POST /v1/sessions`, and auto-create-on-first-use -- when a `session_id` is passed on a chat completion request, the `save()` method uses upsert semantics and creates the session if it doesn't exist. The explicit endpoint is optional but recommended when you need to control the ID or check for duplicates.
 
 ### Traces

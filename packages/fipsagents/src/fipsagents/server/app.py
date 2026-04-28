@@ -631,6 +631,7 @@ class OpenAIChatServer:
                 trace_id=trace_id,
                 session_id=req.session_id,
                 model=model_name,
+                provider=getattr(agent.config.model, "provider", None),
                 parent_span_id=parent_ctx.parent_span_id if parent_ctx else None,
             )
             collector.begin_request({
