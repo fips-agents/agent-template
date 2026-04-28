@@ -4,6 +4,12 @@ All notable changes to the `fipsagents` package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.1] - 2026-04-27
+
+### Fixed
+
+- **Cost tracking now records token usage in production** — `LLMClient.call_model_stream_raw` now sets `stream_options={"include_usage": True}` by default when streaming, so vLLM and other OpenAI-compat servers emit the terminal usage chunk that `OpenAIChatServer._persist_cost_data` relies on. Without this, `StreamMetrics.prompt_tokens` / `completion_tokens` stayed `None` and `cost_data` accumulators on the session never advanced past `{}`. Surfaced during the cluster smoke for [#116](https://github.com/fips-agents/agent-template/issues/116); fixes [#118](https://github.com/fips-agents/agent-template/issues/118). Callers can opt out by passing `stream_options={"include_usage": False}` (or supplying a different value) — the default uses `setdefault` semantics.
+
 ## [0.14.0] - 2026-04-27
 
 ### Added
