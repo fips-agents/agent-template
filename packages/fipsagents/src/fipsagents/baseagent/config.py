@@ -438,9 +438,26 @@ class TracesConfig(_PerStoreBackendMixin):
 
 
 class MetricsConfig(BaseModel):
-    """Prometheus metrics settings."""
+    """Prometheus metrics settings.
+
+    ``token_label_mode`` controls the label cardinality of
+    ``agent_tokens_total``.  Each step up adds one dimension at the cost
+    of more time-series stored by Prometheus.
+
+    - ``model`` (default) — current behaviour, only ``model`` and
+      ``direction`` labels.  Bounded by the model catalog.
+    - ``tenant`` — also adds ``tenant_id`` (typically gateway-stamped via
+      the ``X-Tenant`` header). Bounded by the tenant count, suitable for
+      most enterprise deployments.
+    - ``session`` — also adds ``session_id``.  **High cardinality**: one
+      time-series per session per direction per model.  Only enable when
+      you have an external aggregation step (eg Prometheus federation,
+      Mimir) that can absorb the volume; otherwise prefer
+      ``GET /v1/sessions/{id}/usage`` for per-session totals.
+    """
 
     enabled: bool = False
+    token_label_mode: Literal["model", "tenant", "session"] = "model"
 
 
 class FeedbackConfig(_PerStoreBackendMixin):
