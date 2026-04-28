@@ -120,3 +120,102 @@ class TestCreateMetricsCollector:
     def test_enabled_returns_real(self):
         c = create_metrics_collector(enabled=True)
         assert isinstance(c, MetricsCollector)
+
+    def test_token_label_mode_threaded_through(self):
+        c = create_metrics_collector(enabled=True, token_label_mode="tenant")
+        assert isinstance(c, MetricsCollector)
+        assert c._token_labelnames == ["model", "direction", "tenant_id"]
+
+
+class TestTokenLabelModes:
+    """Verify ``token_label_mode`` controls which labels land on tokens_total."""
+
+    @pytest.mark.asyncio
+    async def test_default_mode_only_model_and_direction(self):
+        c = MetricsCollector()
+        m = StreamMetrics(prompt_tokens=10, completion_tokens=5)
+        async for _ in c.observe(
+            _emit_events(StreamComplete(finish_reason="stop", metrics=m)),
+            model="m1",
+            tenant_id="acme",
+            session_id="sess1",
+        ):
+            pass
+        # tenant_id / session_id were passed but not recorded as labels.
+        val = c.tokens_total.labels(model="m1", direction="prompt")._value.get()
+        assert val == 10
+
+    @pytest.mark.asyncio
+    async def test_tenant_mode_records_tenant_id(self):
+        c = MetricsCollector(token_label_mode="tenant")
+        m = StreamMetrics(prompt_tokens=10, completion_tokens=5)
+        async for _ in c.observe(
+            _emit_events(StreamComplete(finish_reason="stop", metrics=m)),
+            model="m1",
+            tenant_id="acme",
+            session_id="sess1",
+        ):
+            pass
+        val = c.tokens_total.labels(
+            model="m1", direction="prompt", tenant_id="acme",
+        )._value.get()
+        assert val == 10
+
+    @pytest.mark.asyncio
+    async def test_tenant_mode_missing_tenant_uses_default(self):
+        c = MetricsCollector(token_label_mode="tenant")
+        m = StreamMetrics(prompt_tokens=7)
+        async for _ in c.observe(
+            _emit_events(StreamComplete(finish_reason="stop", metrics=m)),
+            model="m1",
+            tenant_id=None,
+            session_id=None,
+        ):
+            pass
+        val = c.tokens_total.labels(
+            model="m1", direction="prompt", tenant_id="default",
+        )._value.get()
+        assert val == 7
+
+    @pytest.mark.asyncio
+    async def test_session_mode_records_both(self):
+        c = MetricsCollector(token_label_mode="session")
+        m = StreamMetrics(prompt_tokens=3, completion_tokens=2)
+        async for _ in c.observe(
+            _emit_events(StreamComplete(finish_reason="stop", metrics=m)),
+            model="m1",
+            tenant_id="acme",
+            session_id="sess1",
+        ):
+            pass
+        prompt_val = c.tokens_total.labels(
+            model="m1", direction="prompt",
+            tenant_id="acme", session_id="sess1",
+        )._value.get()
+        completion_val = c.tokens_total.labels(
+            model="m1", direction="completion",
+            tenant_id="acme", session_id="sess1",
+        )._value.get()
+        assert prompt_val == 3
+        assert completion_val == 2
+
+    @pytest.mark.asyncio
+    async def test_session_mode_missing_session_uses_none(self):
+        c = MetricsCollector(token_label_mode="session")
+        m = StreamMetrics(prompt_tokens=5)
+        async for _ in c.observe(
+            _emit_events(StreamComplete(finish_reason="stop", metrics=m)),
+            model="m1",
+            tenant_id="acme",
+            session_id=None,
+        ):
+            pass
+        val = c.tokens_total.labels(
+            model="m1", direction="prompt",
+            tenant_id="acme", session_id="none",
+        )._value.get()
+        assert val == 5
+
+    def test_unknown_mode_rejected(self):
+        with pytest.raises(ValueError):
+            MetricsCollector(token_label_mode="bogus")

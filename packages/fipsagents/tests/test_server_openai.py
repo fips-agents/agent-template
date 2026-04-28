@@ -82,6 +82,7 @@ class _StubAgent(BaseAgent):
                 ),
                 metrics=types.SimpleNamespace(
                     enabled=False,
+                    token_label_mode="model",
                 ),
                 feedback=types.SimpleNamespace(
                     enabled=False,
@@ -1283,6 +1284,76 @@ def test_session_usage_computes_cumulative_dollars(tmp_path):
     # 2000/1000 * 0.01 + 1000/1000 * 0.02 = 0.02 + 0.02
     assert body["cost_usd"] == pytest.approx(0.04)
     assert body["pricing"]["input_per_1k"] == 0.01
+
+
+def test_tenant_label_flows_from_x_tenant_header(tmp_path):
+    """X-Tenant header lands on agent_tokens_total when mode is 'tenant'."""
+    pytest.importorskip("prometheus_client")
+
+    metrics = StreamMetrics(prompt_tokens=42, completion_tokens=8)
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    AgentClass = _make_agent_class(events, model_name="m1")
+
+    class _A(AgentClass):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.config.server.metrics = types.SimpleNamespace(
+                enabled=True, token_label_mode="tenant",
+            )
+
+    server = OpenAIChatServer(_A)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+            headers={"X-Tenant": "acme-corp"},
+        )
+        assert resp.status_code == 200
+
+        metrics_resp = client.get("/metrics")
+
+    body = metrics_resp.text
+    assert 'tenant_id="acme-corp"' in body
+    assert 'agent_tokens_total{' in body
+
+
+def test_tenant_label_defaults_when_header_absent(tmp_path):
+    """Without X-Tenant, tenant_id falls back to 'default'."""
+    pytest.importorskip("prometheus_client")
+
+    metrics = StreamMetrics(prompt_tokens=1)
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    AgentClass = _make_agent_class(events, model_name="m1")
+
+    class _A(AgentClass):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.config.server.metrics = types.SimpleNamespace(
+                enabled=True, token_label_mode="tenant",
+            )
+
+    server = OpenAIChatServer(_A)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+        )
+        assert resp.status_code == 200
+        metrics_resp = client.get("/metrics")
+
+    assert 'tenant_id="default"' in metrics_resp.text
 
 
 def test_session_usage_uses_cost_data_model_over_default(tmp_path):

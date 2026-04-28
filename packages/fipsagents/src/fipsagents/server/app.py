@@ -209,6 +209,7 @@ class OpenAIChatServer:
         # Initialize metrics collector.
         self._metrics_collector = create_metrics_collector(
             enabled=server_cfg.metrics.enabled,
+            token_label_mode=server_cfg.metrics.token_label_mode,
         )
 
         # Run housekeeping only if at least one *locally persistent*
@@ -571,6 +572,10 @@ class OpenAIChatServer:
         model_name = req.model or agent.config.model.name
         incoming = _messages_to_dicts(req.messages)
         overrides = _extract_overrides(req)
+        # Tenant identity is gateway-stamped; default to "default" so
+        # the metrics label space stays bounded when running without a
+        # gateway in front (local dev, smoke tests).
+        tenant_id = request.headers.get("X-Tenant") or "default"
 
         # Session: load prior messages if session_id provided.
         if req.session_id and self._session_store:
@@ -614,6 +619,7 @@ class OpenAIChatServer:
             content, metrics, finish_reason = await self._collect_sync(
                 agent, incoming, model_name=model_name,
                 overrides=overrides, collector=collector,
+                tenant_id=tenant_id, session_id=req.session_id,
             )
             # Session: save after sync response.
             if req.session_id and self._session_store:
@@ -642,6 +648,7 @@ class OpenAIChatServer:
                 incoming, model_name, overrides=overrides,
                 session_id=req.session_id, collector=collector,
                 metrics_start=metrics_start, trace_id=trace_id,
+                tenant_id=tenant_id,
             ),
             media_type="text/event-stream",
             headers={
@@ -662,6 +669,8 @@ class OpenAIChatServer:
         model_name: str = "",
         overrides: dict[str, Any] | None = None,
         collector: TraceCollector | None = None,
+        tenant_id: str | None = None,
+        session_id: str | None = None,
     ) -> tuple[str, StreamMetrics | None, str]:
         """Drive ``astep_stream`` for a non-streaming response.
 
@@ -681,7 +690,10 @@ class OpenAIChatServer:
             events = agent.astep_stream(max_iterations=10, **(overrides or {}))
             if self._metrics_collector is not None:
                 events = self._metrics_collector.observe(
-                    events, model=model_name,
+                    events,
+                    model=model_name,
+                    tenant_id=tenant_id,
+                    session_id=session_id,
                 )
             if collector:
                 events = collector.observe(events)
@@ -727,6 +739,7 @@ class OpenAIChatServer:
         collector: TraceCollector | None = None,
         metrics_start: float | None = None,
         trace_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Drive the agent's event stream, serialising to OpenAI SSE chunks.
 
@@ -745,7 +758,10 @@ class OpenAIChatServer:
                 events = self._agent.astep_stream(max_iterations=10, **(overrides or {}))
                 if self._metrics_collector is not None:
                     events = self._metrics_collector.observe(
-                        events, model=model_name,
+                        events,
+                        model=model_name,
+                        tenant_id=tenant_id,
+                        session_id=session_id,
                     )
                 if collector:
                     events = collector.observe(events)

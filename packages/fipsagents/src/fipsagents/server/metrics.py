@@ -35,14 +35,37 @@ class MetricsCollector:
     """Records Prometheus metrics from StreamEvents.
 
     Requires ``prometheus_client`` (install via ``pip install 'fipsagents[metrics]'``).
+
+    ``token_label_mode`` selects which label dimensions are attached to
+    ``agent_tokens_total`` (see :class:`fipsagents.baseagent.config.MetricsConfig`).
     """
 
-    def __init__(self, *, registry: Any = None) -> None:
+    _TOKEN_LABEL_DIMENSIONS = {
+        "model": ("model", "direction"),
+        "tenant": ("model", "direction", "tenant_id"),
+        "session": ("model", "direction", "tenant_id", "session_id"),
+    }
+
+    def __init__(
+        self,
+        *,
+        registry: Any = None,
+        token_label_mode: str = "model",
+    ) -> None:
         if not _HAS_PROMETHEUS:
             raise ImportError(
                 "prometheus_client is required for MetricsCollector. "
                 "Install with: pip install 'fipsagents[metrics]'"
             )
+        if token_label_mode not in self._TOKEN_LABEL_DIMENSIONS:
+            raise ValueError(
+                f"Unknown token_label_mode {token_label_mode!r}; "
+                f"expected one of {list(self._TOKEN_LABEL_DIMENSIONS)}"
+            )
+        self._token_label_mode = token_label_mode
+        self._token_labelnames = list(
+            self._TOKEN_LABEL_DIMENSIONS[token_label_mode]
+        )
         self._registry = registry or CollectorRegistry()
 
         self.requests_total = Counter(
@@ -72,17 +95,42 @@ class MetricsCollector:
         self.tokens_total = Counter(
             "agent_tokens_total",
             "Total tokens processed",
-            labelnames=["model", "direction"],
+            labelnames=self._token_labelnames,
             registry=self._registry,
         )
+
+    def _token_labels(
+        self,
+        *,
+        model: str,
+        direction: str,
+        tenant_id: str | None,
+        session_id: str | None,
+    ) -> dict[str, str]:
+        """Build the label kwargs for ``tokens_total`` for the active mode."""
+        labels: dict[str, str] = {"model": model, "direction": direction}
+        if "tenant_id" in self._token_labelnames:
+            labels["tenant_id"] = tenant_id or "default"
+        if "session_id" in self._token_labelnames:
+            labels["session_id"] = session_id or "none"
+        return labels
 
     async def observe(
         self,
         events: AsyncIterator[StreamEvent],
         *,
         model: str,
+        tenant_id: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        """Wrap an event stream, recording metrics as events flow through."""
+        """Wrap an event stream, recording metrics as events flow through.
+
+        ``tenant_id`` and ``session_id`` are recorded as labels on
+        ``agent_tokens_total`` only when ``token_label_mode`` includes them.
+        ``None`` falls back to ``"default"`` / ``"none"`` so the label
+        cardinality stays bounded even when the gateway omits the
+        ``X-Tenant`` header or the request has no ``session_id``.
+        """
         async for event in events:
             if isinstance(event, ToolResultEvent):
                 status = "error" if event.is_error else "ok"
@@ -94,13 +142,21 @@ class MetricsCollector:
                 m = event.metrics
                 if m.prompt_tokens is not None:
                     self.tokens_total.labels(
-                        model=model,
-                        direction="prompt",
+                        **self._token_labels(
+                            model=model,
+                            direction="prompt",
+                            tenant_id=tenant_id,
+                            session_id=session_id,
+                        ),
                     ).inc(m.prompt_tokens)
                 if m.completion_tokens is not None:
                     self.tokens_total.labels(
-                        model=model,
-                        direction="completion",
+                        **self._token_labels(
+                            model=model,
+                            direction="completion",
+                            tenant_id=tenant_id,
+                            session_id=session_id,
+                        ),
                     ).inc(m.completion_tokens)
                 if m.total_time > 0:
                     self.model_call_duration.labels(model=model).observe(
@@ -141,6 +197,8 @@ class NullMetricsCollector:
         events: AsyncIterator[StreamEvent],
         *,
         model: str,
+        tenant_id: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         async for event in events:
             yield event
@@ -163,6 +221,8 @@ class NullMetricsCollector:
 
 def create_metrics_collector(
     enabled: bool = False,
+    *,
+    token_label_mode: str = "model",
 ) -> MetricsCollector | NullMetricsCollector:
     """Create a metrics collector based on config."""
     if not enabled:
@@ -173,4 +233,4 @@ def create_metrics_collector(
             "Install with: pip install 'fipsagents[metrics]'"
         )
         return NullMetricsCollector()
-    return MetricsCollector()
+    return MetricsCollector(token_label_mode=token_label_mode)

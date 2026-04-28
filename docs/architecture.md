@@ -259,14 +259,21 @@ Query endpoints: `GET /v1/traces`, `GET /v1/traces/{id}`. Sampling rate is confi
 - `agent_request_duration_seconds` -- end-to-end request latency histogram
 - `agent_model_call_duration_seconds` -- per-model-call latency histogram
 - `agent_tool_call_total` -- tool invocation count by tool name
-- `agent_tokens_total` -- token consumption by direction (prompt/completion)
+- `agent_tokens_total` -- token consumption by direction (prompt/completion); optional `tenant_id` and `session_id` label dimensions controlled by `metrics.token_label_mode`
 
 Exposed at `GET /metrics` in Prometheus text format. Requires the `[metrics]` optional extra (`prometheus_client`). When metrics are disabled, `NullMetricsCollector` is a silent no-op.
+
+`token_label_mode` selects which dimensions are attached to `agent_tokens_total`. Each step up adds one label at the cost of more time-series stored by Prometheus:
+
+- `model` (default) — only `model` and `direction`. Bounded by the model catalog.
+- `tenant` — also adds `tenant_id` (gateway-stamped via the `X-Tenant` header; missing-header default is `"default"`). Suitable for most enterprise deployments.
+- `session` — also adds `session_id`. **High cardinality**: one time-series per session per direction per model. Only enable when an external aggregation step (Prometheus federation, Mimir) can absorb the volume; otherwise prefer `GET /v1/sessions/{id}/usage` for per-session totals.
 
 ```yaml
 server:
   metrics:
     enabled: true
+    token_label_mode: tenant  # or "model" (default), or "session"
 ```
 
 ```toml
