@@ -63,6 +63,17 @@ class TestNullSessionStore:
         store = NullSessionStore()
         assert await store.exists("anything") is False
 
+    @pytest.mark.asyncio
+    async def test_update_returns_false(self):
+        store = NullSessionStore()
+        assert await store.update("anything", cost_data={"x": 1}) is False
+        assert await store.update("anything") is False
+
+    @pytest.mark.asyncio
+    async def test_get_cost_data_returns_empty_dict(self):
+        store = NullSessionStore()
+        assert await store.get_cost_data("anything") == {}
+
 
 # ---------------------------------------------------------------------------
 # SqliteSessionStore
@@ -188,6 +199,120 @@ class TestSqliteSessionStore:
         await store2.close()
 
         assert loaded == msgs
+
+    # -- update() / cost_data ------------------------------------------------
+
+    @staticmethod
+    async def _read_cost_data(store, session_id):
+        """Read raw cost_data JSON via direct DB query."""
+        import json as _json
+
+        db = await store._get_db()
+        cursor = await db.execute(
+            "SELECT cost_data FROM sessions WHERE session_id = ?",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        return _json.loads(row[0]) if row else None
+
+    @pytest.mark.asyncio
+    async def test_update_merges_cost_data(self, sqlite_store):
+        """Successive update() calls shallow-merge with write-wins."""
+        sid = await sqlite_store.create()
+
+        assert await sqlite_store.update(sid, cost_data={"a": 1}) is True
+        assert await sqlite_store.update(sid, cost_data={"b": 2, "a": 5}) is True
+
+        merged = await self._read_cost_data(sqlite_store, sid)
+        assert merged == {"a": 5, "b": 2}
+
+    @pytest.mark.asyncio
+    async def test_update_missing_session(self, sqlite_store):
+        """update() on a nonexistent session returns False."""
+        assert await sqlite_store.update("doesnotexist", cost_data={"x": 1}) is False
+
+    @pytest.mark.asyncio
+    async def test_update_none_returns_existence(self, sqlite_store):
+        """cost_data=None means: just confirm whether the session exists."""
+        sid = await sqlite_store.create()
+        assert await sqlite_store.update(sid) is True
+        assert await sqlite_store.update("missing-session") is False
+
+    @pytest.mark.asyncio
+    async def test_save_preserves_cost_data(self, sqlite_store):
+        """save() must not clobber cost_data accumulated via update()."""
+        sid = await sqlite_store.create()
+        await sqlite_store.update(sid, cost_data={"tokens": 100, "usd": 0.01})
+
+        await sqlite_store.save(sid, [{"role": "user", "content": "first"}])
+        await sqlite_store.save(sid, [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "second"},
+        ])
+
+        cost = await self._read_cost_data(sqlite_store, sid)
+        assert cost == {"tokens": 100, "usd": 0.01}
+
+    @pytest.mark.asyncio
+    async def test_get_cost_data_empty_by_default(self, sqlite_store):
+        """A freshly created session has no cost_data."""
+        sid = await sqlite_store.create()
+        assert await sqlite_store.get_cost_data(sid) == {}
+
+    @pytest.mark.asyncio
+    async def test_get_cost_data_returns_merged_state(self, sqlite_store):
+        """get_cost_data round-trips the accumulator state."""
+        sid = await sqlite_store.create()
+        await sqlite_store.update(
+            sid, cost_data={"input_tokens": 11, "model": "stub"},
+        )
+        await sqlite_store.update(
+            sid, cost_data={"output_tokens": 5, "model": "stub-2"},
+        )
+        cost = await sqlite_store.get_cost_data(sid)
+        assert cost == {
+            "input_tokens": 11,
+            "output_tokens": 5,
+            "model": "stub-2",
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_cost_data_missing_returns_empty(self, sqlite_store):
+        """An unknown session returns an empty dict, not None."""
+        assert await sqlite_store.get_cost_data("nope") == {}
+
+    @pytest.mark.asyncio
+    async def test_migration_adds_cost_data_column(self, tmp_path):
+        """A pre-existing DB without cost_data is migrated transparently."""
+        import aiosqlite
+
+        db_path = str(tmp_path / "legacy.db")
+
+        # Create the old schema by hand (no cost_data column).
+        async with aiosqlite.connect(db_path) as legacy:
+            await legacy.execute(
+                "CREATE TABLE sessions ("
+                "  session_id TEXT PRIMARY KEY, "
+                "  messages TEXT NOT NULL, "
+                "  created_at TEXT NOT NULL, "
+                "  updated_at TEXT NOT NULL"
+                ")"
+            )
+            await legacy.execute(
+                "INSERT INTO sessions (session_id, messages, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("legacy-1", "[]", "2025-01-01T00:00:00+00:00", "2025-01-01T00:00:00+00:00"),
+            )
+            await legacy.commit()
+
+        # Open via SqliteSessionStore -- _ensure_table() should add cost_data.
+        store = SqliteSessionStore(db_path)
+        try:
+            assert await store.update("legacy-1", cost_data={"a": 1}) is True
+            cost = await self._read_cost_data(store, "legacy-1")
+            assert cost == {"a": 1}
+        finally:
+            await store.close()
 
 
 # ---------------------------------------------------------------------------

@@ -194,6 +194,7 @@ class HttpSessionStore(SessionStore):
     - ``create``       → ``POST /v1/sessions``
     - ``load``         → ``GET /v1/sessions/{id}``
     - ``save``         → ``PUT /v1/sessions/{id}`` (upsert)
+    - ``update``       → ``PATCH /v1/sessions/{id}``
     - ``exists``       → ``HEAD /v1/sessions/{id}``
     - ``delete``       → ``DELETE /v1/sessions/{id}``
     - ``delete_before`` → no platform endpoint; logged no-op (the
@@ -231,6 +232,36 @@ class HttpSessionStore(SessionStore):
             "PUT",
             f"/v1/sessions/{session_id}",
             json={"messages": messages},
+        )
+
+    async def update(
+        self,
+        session_id: str,
+        *,
+        cost_data: dict | None = None,
+    ) -> bool:
+        if cost_data is None:
+            return await self.exists(session_id)
+        body: dict[str, Any] = {"cost_data": cost_data}
+        status, _ = await self._client.request(
+            "PATCH",
+            f"/v1/sessions/{session_id}",
+            json=body,
+            not_found_returns_none=True,
+        )
+        return status != 404
+
+    async def get_cost_data(self, session_id: str) -> dict:
+        # The platform service has no GET /v1/sessions/{id}/cost_data
+        # endpoint yet. Until it does, callers must treat the HTTP
+        # backend as write-only for cost accumulator state. The server's
+        # per-turn accumulator catches NotImplementedError and treats
+        # the existing total as empty (so the next write is the turn's
+        # delta rather than a true cumulative). A follow-up issue tracks
+        # exposing the read endpoint on the platform.
+        raise NotImplementedError(
+            "HttpSessionStore.get_cost_data: the platform service does "
+            "not expose a GET endpoint for cost_data yet."
         )
 
     async def delete(self, session_id: str) -> bool:

@@ -42,6 +42,33 @@ class SessionStore(ABC):
         """Persist the full message history for a session."""
 
     @abstractmethod
+    async def update(
+        self,
+        session_id: str,
+        *,
+        cost_data: dict | None = None,
+    ) -> bool:
+        """Partial update of a session.
+
+        Currently supports merging ``cost_data`` (shallow merge per top-level key,
+        write-wins). Returns True if the session existed, False otherwise.
+        Designed to be additive -- future fields can be added as keyword-only args.
+        """
+
+    @abstractmethod
+    async def get_cost_data(self, session_id: str) -> dict:
+        """Return the current accumulated ``cost_data`` for a session.
+
+        Symmetric companion to :meth:`update` so callers (notably the
+        server's per-turn cost accumulator) can read the existing totals
+        before computing the next write.
+
+        Returns an empty dict if the session is missing or has no
+        cost_data yet. Backends without a read endpoint (notably the
+        HTTP-backed store) raise :class:`NotImplementedError`.
+        """
+
+    @abstractmethod
     async def delete(self, session_id: str) -> bool:
         """Remove a session. Return True if it existed."""
 
@@ -71,6 +98,17 @@ class NullSessionStore(SessionStore):
     async def save(self, session_id: str, messages: list[dict]) -> None:
         pass
 
+    async def update(
+        self,
+        session_id: str,
+        *,
+        cost_data: dict | None = None,
+    ) -> bool:
+        return False
+
+    async def get_cost_data(self, session_id: str) -> dict:
+        return {}
+
     async def delete(self, session_id: str) -> bool:
         return False
 
@@ -89,7 +127,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id  TEXT PRIMARY KEY,
     messages    TEXT NOT NULL,
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    cost_data   TEXT NOT NULL DEFAULT '{}'
 )"""
 
     def __init__(self, db_path: str = "./agent.db", *, connection: Any = None) -> None:
@@ -110,6 +149,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     async def _ensure_table(self) -> None:
         db = self._db
         await db.execute(self._CREATE_TABLE)
+        # Migrate older databases that predate cost_data.
+        cursor = await db.execute("PRAGMA table_info(sessions)")
+        cols = {row[1] for row in await cursor.fetchall()}
+        if "cost_data" not in cols:
+            await db.execute(
+                "ALTER TABLE sessions ADD COLUMN cost_data TEXT NOT NULL DEFAULT '{}'"
+            )
+            logger.debug("SqliteSessionStore: migrated schema (added cost_data)")
         await db.commit()
         self._initialized = True
 
@@ -141,16 +188,61 @@ CREATE TABLE IF NOT EXISTS sessions (
     async def save(self, session_id: str, messages: list[dict]) -> None:
         now = _utc_now_iso()
         db = await self._get_db()
+        # Upsert that preserves cost_data on conflict (it's accumulator state
+        # owned by ``update()`` and must not be reset by every save).
         await db.execute(
-            "INSERT OR REPLACE INTO sessions "
+            "INSERT INTO sessions "
             "(session_id, messages, created_at, updated_at) "
-            "VALUES (?, ?, COALESCE("
-            "  (SELECT created_at FROM sessions WHERE session_id = ?), ?"
-            "), ?)",
-            (session_id, json.dumps(messages), session_id, now, now),
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET "
+            "  messages = excluded.messages, "
+            "  updated_at = excluded.updated_at",
+            (session_id, json.dumps(messages), now, now),
         )
         await db.commit()
         logger.debug("SqliteSessionStore: saved %s (%d messages)", session_id, len(messages))
+
+    async def update(
+        self,
+        session_id: str,
+        *,
+        cost_data: dict | None = None,
+    ) -> bool:
+        db = await self._get_db()
+        if cost_data is None:
+            return await self.exists(session_id)
+        cursor = await db.execute(
+            "SELECT cost_data FROM sessions WHERE session_id = ?",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        existing = json.loads(row[0]) if row[0] else {}
+        existing.update(cost_data)
+        now = _utc_now_iso()
+        await db.execute(
+            "UPDATE sessions SET cost_data = ?, updated_at = ? "
+            "WHERE session_id = ?",
+            (json.dumps(existing), now, session_id),
+        )
+        await db.commit()
+        logger.debug("SqliteSessionStore: updated %s cost_data", session_id)
+        return True
+
+    async def get_cost_data(self, session_id: str) -> dict:
+        db = await self._get_db()
+        cursor = await db.execute(
+            "SELECT cost_data FROM sessions WHERE session_id = ?",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return {}
+        try:
+            return json.loads(row[0])
+        except (TypeError, ValueError):
+            return {}
 
     async def delete(self, session_id: str) -> bool:
         db = await self._get_db()
@@ -196,11 +288,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id  TEXT PRIMARY KEY,
     messages    JSONB NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    cost_data   JSONB NOT NULL DEFAULT '{}'::jsonb
 )"""
     _CREATE_INDEX = (
         "CREATE INDEX IF NOT EXISTS idx_sessions_updated "
         "ON sessions (updated_at)"
+    )
+    _ADD_COST_DATA = (
+        "ALTER TABLE sessions "
+        "ADD COLUMN IF NOT EXISTS cost_data JSONB NOT NULL DEFAULT '{}'::jsonb"
     )
 
     def __init__(self, database_url: str) -> None:
@@ -221,6 +318,7 @@ CREATE TABLE IF NOT EXISTS sessions (
         pool = self._pool
         async with pool.acquire() as conn:
             await conn.execute(self._CREATE_TABLE)
+            await conn.execute(self._ADD_COST_DATA)
             await conn.execute(self._CREATE_INDEX)
         self._initialized = True
 
@@ -267,6 +365,50 @@ CREATE TABLE IF NOT EXISTS sessions (
         logger.debug(
             "PostgresSessionStore: saved %s (%d messages)", session_id, len(messages),
         )
+
+    async def update(
+        self,
+        session_id: str,
+        *,
+        cost_data: dict | None = None,
+    ) -> bool:
+        pool = await self._get_pool()
+        if cost_data is None:
+            return await self.exists(session_id)
+        now = datetime.now(timezone.utc)
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE sessions "
+                "SET cost_data = cost_data || $2::jsonb, "
+                "    updated_at = $3 "
+                "WHERE session_id = $1",
+                session_id, json.dumps(cost_data), now,
+            )
+        # asyncpg returns "UPDATE N"
+        updated = not result.endswith("0")
+        if updated:
+            logger.debug("PostgresSessionStore: updated %s cost_data", session_id)
+        return updated
+
+    async def get_cost_data(self, session_id: str) -> dict:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT cost_data FROM sessions WHERE session_id = $1",
+                session_id,
+            )
+        if row is None:
+            return {}
+        cost = row["cost_data"]
+        # asyncpg auto-decodes JSONB to Python objects, but be defensive.
+        if cost is None:
+            return {}
+        if isinstance(cost, str):
+            try:
+                return json.loads(cost)
+            except (TypeError, ValueError):
+                return {}
+        return cost
 
     async def delete(self, session_id: str) -> bool:
         pool = await self._get_pool()

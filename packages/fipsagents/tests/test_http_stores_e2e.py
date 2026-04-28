@@ -116,6 +116,64 @@ async def test_session_save_creates_when_missing(platform_transport) -> None:
     await store.close()
 
 
+@pytest.mark.asyncio
+async def test_session_update_round_trip(platform_transport) -> None:
+    """PATCH /v1/sessions/{id} merges cost_data; later writes win per top-level key."""
+    store = HttpSessionStore(
+        "http://platform.test", transport=platform_transport,
+    )
+    sid = await store.create("sess_e2e_update")
+    assert await store.update(sid, cost_data={"a": 1}) is True
+    assert await store.update(sid, cost_data={"b": 2, "a": 5}) is True
+
+    # Round-trip through the platform's underlying SqliteSessionStore — we
+    # use it directly here since GET /v1/sessions/{id} only returns messages.
+    from fipsagents_platform.config import get_settings
+
+    settings = get_settings()
+    from fipsagents.server.sessions import SqliteSessionStore
+
+    direct = SqliteSessionStore(settings.sqlite_path)
+    try:
+        # Re-use the same DB the platform writes to and read cost_data
+        # straight out of the table.
+        db = await direct._get_db()
+        cursor = await db.execute(
+            "SELECT cost_data FROM sessions WHERE session_id = ?", (sid,),
+        )
+        row = await cursor.fetchone()
+        import json as _json
+        assert row is not None
+        assert _json.loads(row[0]) == {"a": 5, "b": 2}
+    finally:
+        await direct.close()
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_update_missing_returns_false(platform_transport) -> None:
+    store = HttpSessionStore(
+        "http://platform.test", transport=platform_transport,
+    )
+    assert await store.update(
+        "sess_does_not_exist", cost_data={"input_tokens": 1},
+    ) is False
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_update_none_cost_data_returns_existence(
+    platform_transport,
+) -> None:
+    store = HttpSessionStore(
+        "http://platform.test", transport=platform_transport,
+    )
+    sid = await store.create("sess_e2e_update_none")
+    assert await store.update(sid, cost_data=None) is True
+    assert await store.update("sess_does_not_exist", cost_data=None) is False
+    await store.close()
+
+
 # ---------------------------------------------------------------------------
 # Traces
 # ---------------------------------------------------------------------------
