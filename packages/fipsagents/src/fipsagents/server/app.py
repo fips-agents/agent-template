@@ -54,6 +54,7 @@ from .files import (
     _sha256,
     create_file_store,
 )
+from .parser import FileParser, create_parser
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,7 @@ class OpenAIChatServer:
         self._trace_store: TraceStore | None = None
         self._feedback_store: FeedbackStore | None = None
         self._file_store: FileStore | None = None
+        self._file_parser: FileParser | None = None
         self._metrics_collector: Any = None  # Set in lifespan
         self._budget_enforcer: Any = None  # Set in lifespan
         self._housekeeping_task: asyncio.Task | None = None
@@ -225,6 +227,9 @@ class OpenAIChatServer:
             sqlite_path=server_cfg.storage.sqlite_path,
             bytes_dir=server_cfg.files.bytes_dir,
             sqlite_connection=sqlite_conn,
+        )
+        self._file_parser = create_parser(
+            enabled=server_cfg.files.enabled,
         )
 
         # Initialize metrics collector.
@@ -655,6 +660,19 @@ class OpenAIChatServer:
             user_id=user_id,
             session_id=session_id,
         )
+
+        # Inline parsing — populate extracted_text + parse_status on the
+        # record before save so the file is immediately usable as a
+        # reference in chat completions. Background-queue parsing for
+        # large/slow inputs is a future PR.
+        if self._file_parser is not None:
+            outcome = await self._file_parser.parse(
+                data, mime_type=mime_type, filename=record.filename,
+            )
+            record.parse_status = outcome.status  # type: ignore[assignment]
+            record.extracted_text = outcome.text
+            record.parse_error = outcome.error
+
         await self._file_store.save(record, data)
 
         return JSONResponse(
@@ -665,6 +683,7 @@ class OpenAIChatServer:
                 "size_bytes": record.size_bytes,
                 "sha256": record.sha256,
                 "parse_status": record.parse_status,
+                "parse_error": record.parse_error,
                 "session_id": record.session_id,
                 "created_at": record.created_at,
             },

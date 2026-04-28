@@ -78,7 +78,9 @@ class TestUploadEndpoint:
             # SHA-256 of b"hello world"
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         )
-        assert body["parse_status"] == "pending"
+        # Plaintext is parsed inline at upload time.
+        assert body["parse_status"] == "completed"
+        assert body["parse_error"] is None
         assert body["file_id"].startswith("file_")
         assert body["session_id"] is None
 
@@ -185,8 +187,9 @@ class TestGetFile:
         body = resp.json()
         assert body["file_id"] == file_id
         assert body["filename"] == "doc.txt"
-        assert body["parse_status"] == "pending"
-        assert body["extracted_text"] is None
+        # Plaintext is parsed inline; extracted_text is populated.
+        assert body["parse_status"] == "completed"
+        assert body["extracted_text"] == "hello world"
 
     def test_unknown_file_returns_404(self, tmp_path):
         server = _build_server_with_files(tmp_path)
@@ -252,6 +255,10 @@ def _build_recording_server(tmp_path):
 
 class TestFileIdsInjection:
     def test_inject_unparsed_file_emits_stub(self, tmp_path):
+        # Without docling installed, binary uploads end up in
+        # parse_status="skipped" — the PlaintextParser fall-through
+        # cannot decode them. The injection path treats every
+        # non-completed parse_status as a stub.
         server = _build_recording_server(tmp_path)
         with TestClient(server.app) as client:
             up = client.post(
@@ -276,9 +283,34 @@ class TestFileIdsInjection:
         assert captured[0]["role"] == "system"
         assert "notes.pdf" in captured[0]["content"]
         assert "application/pdf" in captured[0]["content"]
-        assert "parse_status: pending" in captured[0]["content"]
+        assert "parse_status: skipped" in captured[0]["content"]
         assert captured[1]["role"] == "user"
         assert captured[1]["content"] == "Summarise the file."
+
+    def test_inject_plaintext_uses_inline_parsed_text(self, tmp_path):
+        """End-to-end: upload txt → injection sees decoded UTF-8 text."""
+        server = _build_recording_server(tmp_path)
+        with TestClient(server.app) as client:
+            up = client.post(
+                "/v1/files",
+                files={"file": ("memo.txt", b"call mom\nbuy milk", "text/plain")},
+            )
+            assert up.status_code == 201
+            assert up.json()["parse_status"] == "completed"
+            file_id = up.json()["file_id"]
+
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "what's on the list?"}],
+                    "file_ids": [file_id],
+                    "stream": False,
+                },
+            )
+        assert resp.status_code == 200
+        captured = _RecordingMixin.captured_messages[-1]
+        assert "call mom" in captured[0]["content"]
+        assert "buy milk" in captured[0]["content"]
 
     def test_inject_parsed_file_emits_full_text(self, tmp_path):
         server = _build_recording_server(tmp_path)
