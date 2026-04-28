@@ -44,6 +44,7 @@ class _StubAgent(BaseAgent):
 
     def __init__(self, events=None, *, model_name: str = "stub-model", **kwargs):
         # Bypass BaseAgent.__init__ — we own everything the server touches.
+        from fipsagents.baseagent.config import PricingConfig
         self._events = events or []
         self._system_prompt: str = ""
         self.messages: list[dict] = []
@@ -56,6 +57,7 @@ class _StubAgent(BaseAgent):
                 injection_mode="prefix",
                 injection_tag="user_memories",
             ),
+            pricing=PricingConfig(),
             server=types.SimpleNamespace(
                 storage=types.SimpleNamespace(
                     backend=None,
@@ -1159,3 +1161,167 @@ def test_cost_data_http_get_not_implemented_falls_back_to_delta(tmp_path):
     assert cost["input_tokens"] == 10
     assert cost["output_tokens"] == 4
     assert cost["turn_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# /v1/sessions/{id}/usage — computed dollar view of cost_data
+# ---------------------------------------------------------------------------
+
+
+def _build_server_with_pricing(tmp_path, events, *, model_name, pricing):
+    """Build a server with sessions enabled and a custom PricingConfig."""
+    AgentClass = _make_agent_class(events, model_name=model_name)
+    db_path = str(tmp_path / "sessions.db")
+
+    class _A(AgentClass):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.config.server.storage = types.SimpleNamespace(
+                backend="sqlite",
+                sqlite_path=db_path,
+                database_url="",
+                platform_url="",
+                platform_token="",
+            )
+            self.config.server.sessions = types.SimpleNamespace(
+                enabled=True,
+                max_age_hours=0,
+                backend=None,
+            )
+            self.config.pricing = pricing
+
+    return OpenAIChatServer(_A)
+
+
+def test_session_usage_404_when_session_missing(tmp_path):
+    """GET /usage returns 404 if the session was never created."""
+    from fipsagents.baseagent.config import PricingConfig
+
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+    ]
+    server = _build_server_with_pricing(
+        tmp_path, events, model_name="stub", pricing=PricingConfig(),
+    )
+    with TestClient(server.app) as client:
+        resp = client.get("/v1/sessions/sess_nope/usage")
+    assert resp.status_code == 404
+
+
+def test_session_usage_zero_for_new_session(tmp_path):
+    """A freshly-created session with no turns reports zeros and 0.0 cost."""
+    from fipsagents.baseagent.config import PricingConfig, PricingRate
+
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+    ]
+    pricing = PricingConfig(default=PricingRate(input_per_1k=0.01))
+    server = _build_server_with_pricing(
+        tmp_path, events, model_name="stub", pricing=pricing,
+    )
+    with TestClient(server.app) as client:
+        client.post("/v1/sessions", json={"session_id": "sess_empty"})
+        resp = client.get("/v1/sessions/sess_empty/usage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_id"] == "sess_empty"
+    assert body["input_tokens"] == 0
+    assert body["output_tokens"] == 0
+    assert body["cached_tokens"] == 0
+    assert body["turn_count"] == 0
+    assert body["cost_usd"] == 0.0
+    assert body["pricing"]["input_per_1k"] == 0.01
+
+
+def test_session_usage_computes_cumulative_dollars(tmp_path):
+    """After two completions, /usage reflects cumulative tokens × rate."""
+    from fipsagents.baseagent.config import PricingConfig, PricingRate
+
+    metrics = StreamMetrics(
+        prompt_tokens=1000, completion_tokens=500, total_tokens=1500,
+    )
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    pricing = PricingConfig(
+        default=PricingRate(input_per_1k=0.001, output_per_1k=0.002),
+        models={
+            "billed-model": PricingRate(
+                input_per_1k=0.01, output_per_1k=0.02,
+            ),
+        },
+    )
+    server = _build_server_with_pricing(
+        tmp_path, events, model_name="billed-model", pricing=pricing,
+    )
+    with TestClient(server.app) as client:
+        client.post("/v1/sessions", json={"session_id": "sess_paid"})
+        for _ in range(2):
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": False,
+                    "session_id": "sess_paid",
+                },
+            )
+            assert resp.status_code == 200
+
+        resp = client.get("/v1/sessions/sess_paid/usage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_id"] == "sess_paid"
+    assert body["model"] == "billed-model"
+    assert body["input_tokens"] == 2000
+    assert body["output_tokens"] == 1000
+    assert body["turn_count"] == 2
+    # 2000/1000 * 0.01 + 1000/1000 * 0.02 = 0.02 + 0.02
+    assert body["cost_usd"] == pytest.approx(0.04)
+    assert body["pricing"]["input_per_1k"] == 0.01
+
+
+def test_session_usage_uses_cost_data_model_over_default(tmp_path):
+    """The model field on cost_data wins over the agent's current default.
+
+    Different turns can target different models (e.g. routing). The model
+    that *billed* the tokens is the one recorded on cost_data, so it wins
+    pricing lookup over the agent's current ``model.name`` configuration.
+    """
+    from fipsagents.baseagent.config import PricingConfig, PricingRate
+
+    metrics = StreamMetrics(prompt_tokens=1000, completion_tokens=0)
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    pricing = PricingConfig(
+        default=PricingRate(input_per_1k=99.0),  # would dominate if used
+        models={
+            "billed-model": PricingRate(input_per_1k=0.01),
+        },
+    )
+    server = _build_server_with_pricing(
+        tmp_path, events, model_name="billed-model", pricing=pricing,
+    )
+    with TestClient(server.app) as client:
+        client.post("/v1/sessions", json={"session_id": "sess_route"})
+        client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "session_id": "sess_route",
+            },
+        )
+        resp = client.get("/v1/sessions/sess_route/usage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["model"] == "billed-model"
+    # 1000/1000 * 0.01, NOT 99.0
+    assert body["cost_usd"] == pytest.approx(0.01)

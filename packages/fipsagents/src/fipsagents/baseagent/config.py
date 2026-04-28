@@ -450,6 +450,41 @@ class FeedbackConfig(_PerStoreBackendMixin):
     max_age_hours: int = Field(default=720, ge=0)
 
 
+class PricingRate(BaseModel):
+    """Per-token / per-request pricing for a single model.
+
+    All rates are USD. Token rates are quoted per 1,000 tokens to match
+    public model-pricing tables (OpenAI, Anthropic, Bedrock). For
+    self-hosted vLLM deployments without dollar billing, leave the
+    defaults at zero -- :func:`fipsagents.server.pricing.compute_cost`
+    will return ``0.0`` and the new ``/usage`` endpoint will surface a
+    no-op cost line.
+
+    ``cached_input_per_1k`` covers prompt-cache hits when the provider
+    returns a ``prompt_tokens_details.cached_tokens`` count; OpenAI's
+    semantics treat cached tokens as a subset of ``prompt_tokens`` billed
+    at a reduced rate. ``None`` means "no cached-tier discount" and the
+    full ``input_per_1k`` rate applies.
+    """
+
+    input_per_1k: float = Field(default=0.0, ge=0.0)
+    output_per_1k: float = Field(default=0.0, ge=0.0)
+    cached_input_per_1k: float | None = Field(default=None, ge=0.0)
+    per_request: float = Field(default=0.0, ge=0.0)
+
+
+class PricingConfig(BaseModel):
+    """Token cost lookup table.
+
+    ``default`` applies to any model not listed in ``models``. ``models``
+    keys must match the model identifier exactly as it appears on
+    completion requests (typically ``model.name`` from ``agent.yaml``).
+    """
+
+    default: PricingRate = Field(default_factory=PricingRate)
+    models: dict[str, PricingRate] = Field(default_factory=dict)
+
+
 class ServerConfig(BaseModel):
     """HTTP server binding and feature configuration."""
 
@@ -488,6 +523,7 @@ class AgentConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    pricing: PricingConfig = Field(default_factory=PricingConfig)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)
 
 
