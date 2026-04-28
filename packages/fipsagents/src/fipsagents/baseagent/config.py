@@ -467,6 +467,23 @@ class FeedbackConfig(_PerStoreBackendMixin):
     max_age_hours: int = Field(default=720, ge=0)
 
 
+class FilesConfig(_PerStoreBackendMixin):
+    """File upload settings.
+
+    ``bytes_dir`` is only used by ``SqliteFileStore`` for local-FS bytes
+    storage in dev mode; production deployments using S3-compatible bytes
+    storage will ignore it. ``allowed_mime_types`` is enforced by the
+    ``POST /v1/files`` endpoint when present (an empty list disables the
+    allowlist).
+    """
+
+    enabled: bool = False
+    max_file_size_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
+    bytes_dir: str = "./files"
+    allowed_mime_types: list[str] = Field(default_factory=list)
+    max_age_hours: int = Field(default=720, ge=0)
+
+
 class PricingRate(BaseModel):
     """Per-token / per-request pricing for a single model.
 
@@ -556,6 +573,7 @@ class ServerConfig(BaseModel):
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     traces: TracesConfig = Field(default_factory=TracesConfig)
     feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
+    files: FilesConfig = Field(default_factory=FilesConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
 
     @field_validator("port", mode="before")
