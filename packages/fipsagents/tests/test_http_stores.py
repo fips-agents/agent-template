@@ -221,17 +221,41 @@ async def test_session_update_none_cost_data_delegates_to_exists() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_get_cost_data_raises_not_implemented() -> None:
-    """The HTTP backend has no GET cost_data endpoint yet -- raise so the
-    server-side accumulator can fall back to a delta-only write."""
-    rec = _Recorder([])
+async def test_session_get_cost_data_returns_dict() -> None:
+    """GET /v1/sessions/{id}/cost_data parses the cumulative dict."""
+    rec = _Recorder([_ok(200, {
+        "session_id": "sess_abc",
+        "cost_data": {"input_tokens": 100, "output_tokens": 50},
+    })])
     store = HttpSessionStore(
         "http://platform.test", transport=httpx.MockTransport(rec),
     )
-    with pytest.raises(NotImplementedError):
-        await store.get_cost_data("sess_anything")
-    # No HTTP request should have been issued.
-    assert rec.requests == []
+    result = await store.get_cost_data("sess_abc")
+    assert result == {"input_tokens": 100, "output_tokens": 50}
+    assert rec.requests[0].method == "GET"
+    assert rec.requests[0].url.path == "/v1/sessions/sess_abc/cost_data"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_get_cost_data_404_returns_empty() -> None:
+    """Missing sessions degrade to {} per the ABC contract."""
+    rec = _Recorder([_ok(404, {"detail": "not found"})])
+    store = HttpSessionStore(
+        "http://platform.test", transport=httpx.MockTransport(rec),
+    )
+    assert await store.get_cost_data("missing") == {}
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_get_cost_data_empty_dict_round_trips() -> None:
+    """Existing session with no writes returns the platform's empty dict."""
+    rec = _Recorder([_ok(200, {"session_id": "sess_empty", "cost_data": {}})])
+    store = HttpSessionStore(
+        "http://platform.test", transport=httpx.MockTransport(rec),
+    )
+    assert await store.get_cost_data("sess_empty") == {}
     await store.close()
 
 

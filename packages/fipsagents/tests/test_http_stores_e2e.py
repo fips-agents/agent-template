@@ -174,6 +174,31 @@ async def test_session_update_none_cost_data_returns_existence(
     await store.close()
 
 
+@pytest.mark.asyncio
+async def test_session_get_cost_data_round_trip(platform_transport) -> None:
+    """Two PATCHes then GET — the returned dict is the cumulative merge."""
+    store = HttpSessionStore(
+        "http://platform.test", transport=platform_transport,
+    )
+    sid = await store.create("sess_e2e_get_cost")
+    await store.update(sid, cost_data={"input_tokens": 10, "output_tokens": 5})
+    await store.update(sid, cost_data={"input_tokens": 30, "requests": 2})
+
+    result = await store.get_cost_data(sid)
+    assert result == {"input_tokens": 30, "output_tokens": 5, "requests": 2}
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_get_cost_data_missing_returns_empty(platform_transport) -> None:
+    """Platform 404 → ABC-compliant empty dict on the agent side."""
+    store = HttpSessionStore(
+        "http://platform.test", transport=platform_transport,
+    )
+    assert await store.get_cost_data("sess_e2e_never_existed") == {}
+    await store.close()
+
+
 # ---------------------------------------------------------------------------
 # Traces
 # ---------------------------------------------------------------------------

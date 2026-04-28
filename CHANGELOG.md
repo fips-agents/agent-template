@@ -4,6 +4,16 @@ All notable changes to the `fipsagents` package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.2] - 2026-04-28
+
+### Added
+
+- **`HttpSessionStore.get_cost_data` reads from the platform.** Replaces the `NotImplementedError` placeholder with a real `GET /v1/sessions/{id}/cost_data`, closing the cumulative-cost gap noted in 0.14.0's release notes. HTTP-backed deployments now get the same cumulative shallow-merge semantics that SQLite/Postgres provide natively — the per-turn accumulator on `OpenAIChatServer` reads existing totals before computing the merge, so multi-turn sessions converge on cumulative numbers instead of last-write-wins. 5 new tests across the unit and e2e suites; total `fipsagents` suite 765 → 770.
+
+### Notes
+
+- Requires `fipsagents-platform>=0.2.1`. Older platforms 404 cleanly on the read path and the agent degrades to the previous last-write-wins behavior — same operational shape as 0.14.0/0.14.1, no breakage.
+
 ## [0.14.1] - 2026-04-27
 
 ### Fixed

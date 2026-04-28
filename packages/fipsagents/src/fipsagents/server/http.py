@@ -252,17 +252,19 @@ class HttpSessionStore(SessionStore):
         return status != 404
 
     async def get_cost_data(self, session_id: str) -> dict:
-        # The platform service has no GET /v1/sessions/{id}/cost_data
-        # endpoint yet. Until it does, callers must treat the HTTP
-        # backend as write-only for cost accumulator state. The server's
-        # per-turn accumulator catches NotImplementedError and treats
-        # the existing total as empty (so the next write is the turn's
-        # delta rather than a true cumulative). A follow-up issue tracks
-        # exposing the read endpoint on the platform.
-        raise NotImplementedError(
-            "HttpSessionStore.get_cost_data: the platform service does "
-            "not expose a GET endpoint for cost_data yet."
+        # Mirrors the SQLite/Postgres contract: empty dict when the
+        # session is missing or has no cost_data yet. Requires
+        # fipsagents-platform >= 0.2.1 (which exposes the GET endpoint);
+        # against older platforms the route 404s on every call and we
+        # degrade gracefully to last-write-wins semantics.
+        status, data = await self._client.request(
+            "GET",
+            f"/v1/sessions/{session_id}/cost_data",
+            not_found_returns_none=True,
         )
+        if status == 404 or data is None:
+            return {}
+        return data.get("cost_data") or {}
 
     async def delete(self, session_id: str) -> bool:
         status, _ = await self._client.request(
