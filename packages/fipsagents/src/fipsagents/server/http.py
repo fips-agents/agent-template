@@ -194,6 +194,7 @@ class HttpSessionStore(SessionStore):
     - ``create``       → ``POST /v1/sessions``
     - ``load``         → ``GET /v1/sessions/{id}``
     - ``save``         → ``PUT /v1/sessions/{id}`` (upsert)
+    - ``update``       → ``PATCH /v1/sessions/{id}``
     - ``exists``       → ``HEAD /v1/sessions/{id}``
     - ``delete``       → ``DELETE /v1/sessions/{id}``
     - ``delete_before`` → no platform endpoint; logged no-op (the
@@ -239,10 +240,16 @@ class HttpSessionStore(SessionStore):
         *,
         cost_data: dict | None = None,
     ) -> bool:
-        # Wired in a separate slice; concrete platform endpoint is TBD.
-        raise NotImplementedError(
-            "HttpSessionStore.update is not implemented in this slice"
+        if cost_data is None:
+            return await self.exists(session_id)
+        body: dict[str, Any] = {"cost_data": cost_data}
+        status, _ = await self._client.request(
+            "PATCH",
+            f"/v1/sessions/{session_id}",
+            json=body,
+            not_found_returns_none=True,
         )
+        return status != 404
 
     async def delete(self, session_id: str) -> bool:
         status, _ = await self._client.request(

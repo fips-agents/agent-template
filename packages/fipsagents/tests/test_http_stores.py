@@ -159,6 +159,80 @@ async def test_session_delete_before_is_noop() -> None:
     await store.close()
 
 
+@pytest.mark.asyncio
+async def test_session_update_sends_patch() -> None:
+    rec = _Recorder([_ok(200, {
+        "session_id": "sess_abc",
+        "messages": [],
+        "created_at": "2026-04-27T12:00:00+00:00",
+        "updated_at": "2026-04-27T12:00:01+00:00",
+        "cost_data": {"input_tokens": 100, "output_tokens": 50},
+    })])
+    store = HttpSessionStore(
+        "http://platform.test", transport=httpx.MockTransport(rec),
+    )
+    tokens = set_request_context(
+        authorization="Bearer per-request-jwt", traceparent=None,
+    )
+    try:
+        result = await store.update(
+            "sess_abc",
+            cost_data={"input_tokens": 100, "output_tokens": 50},
+        )
+    finally:
+        reset_request_context(tokens)
+    assert result is True
+    assert rec.requests[0].method == "PATCH"
+    assert rec.requests[0].url.path == "/v1/sessions/sess_abc"
+    assert json.loads(rec.requests[0].content) == {
+        "cost_data": {"input_tokens": 100, "output_tokens": 50},
+    }
+    assert rec.requests[0].headers["authorization"] == "Bearer per-request-jwt"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_update_404_returns_false() -> None:
+    rec = _Recorder([_ok(404, {"detail": "not found"})])
+    store = HttpSessionStore(
+        "http://platform.test", transport=httpx.MockTransport(rec),
+    )
+    result = await store.update(
+        "missing", cost_data={"input_tokens": 1},
+    )
+    assert result is False
+    assert rec.requests[0].method == "PATCH"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_update_none_cost_data_delegates_to_exists() -> None:
+    """When cost_data is None, update() delegates to exists() (HEAD probe)."""
+    rec = _Recorder([_ok(200), _ok(404)])
+    store = HttpSessionStore(
+        "http://platform.test", transport=httpx.MockTransport(rec),
+    )
+    assert await store.update("sess_1", cost_data=None) is True
+    assert await store.update("missing", cost_data=None) is False
+    # Both calls should have been HEAD, not PATCH.
+    assert rec.requests[0].method == "HEAD"
+    assert rec.requests[1].method == "HEAD"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_update_5xx_raises() -> None:
+    rec = _Recorder([httpx.Response(500, json={"detail": "boom"})])
+    store = HttpSessionStore(
+        "http://platform.test", transport=httpx.MockTransport(rec),
+    )
+    with pytest.raises(PlatformError) as exc_info:
+        await store.update("sess_1", cost_data={"input_tokens": 1})
+    assert exc_info.value.status_code == 500
+    assert "500" in str(exc_info.value)
+    await store.close()
+
+
 # ---------------------------------------------------------------------------
 # HttpTraceStore
 # ---------------------------------------------------------------------------
