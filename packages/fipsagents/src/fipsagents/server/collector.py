@@ -51,6 +51,7 @@ class TraceCollector:
         parent_span_id: str | None = None,
         session_id: str | None = None,
         model: str | None = None,
+        provider: str | None = None,
     ) -> None:
         self.store = store
         # If a parent trace context is provided, use its trace ID
@@ -59,6 +60,10 @@ class TraceCollector:
         self._parent_span_id = parent_span_id
         self._session_id = session_id
         self._model = model
+        # OTEL GenAI semantic convention: gen_ai.system identifies the
+        # provider (eg "openai", "anthropic", "vllm") so trace consumers
+        # can group spans across providers without parsing model names.
+        self._provider = provider
 
         self._spans: list[Span] = []
         self._request_span: Span | None = None
@@ -97,10 +102,22 @@ class TraceCollector:
     # ------------------------------------------------------------------
 
     def begin_request(self, attributes: dict[str, Any] | None = None) -> None:
-        """Open the root request span and the first step."""
+        """Open the root request span and the first step.
+
+        Stamps OTEL GenAI semantic-convention attributes on the request
+        span (`gen_ai.operation.name`, `gen_ai.request.model`,
+        `gen_ai.system`) so trace consumers can recognise this as a
+        chat-completion regardless of how the underlying spans are named.
+        """
         self._started_at = _utc_now_iso()
+        attrs = dict(attributes or {})
+        attrs.setdefault("gen_ai.operation.name", "chat")
+        if self._model:
+            attrs.setdefault("gen_ai.request.model", self._model)
+        if self._provider:
+            attrs.setdefault("gen_ai.system", self._provider)
         self._request_span = self._make_span(
-            "request", parent_id=self._parent_span_id, **(attributes or {})
+            "request", parent_id=self._parent_span_id, **attrs,
         )
         self._begin_step()
 
@@ -132,16 +149,32 @@ class TraceCollector:
         )
 
     def _end_model_call(self, metrics: StreamMetrics | None = None) -> None:
+        """Close the model_call span, stamping token counts as attributes.
+
+        Both the legacy attribute names (``prompt_tokens`` /
+        ``completion_tokens`` / ``total_tokens``) and the OTEL GenAI
+        semantic-convention names (``gen_ai.usage.input_tokens`` /
+        ``gen_ai.usage.output_tokens``) are emitted, so existing trace
+        consumers keep working while OTEL backends (Tempo, Honeycomb,
+        Grafana Cloud) get the standard attribute keys they expect.
+        """
         if self._current_model_span is None:
             return
         if metrics is not None:
             attrs = self._current_model_span.attributes
             if metrics.prompt_tokens is not None:
                 attrs["prompt_tokens"] = metrics.prompt_tokens
+                attrs["gen_ai.usage.input_tokens"] = metrics.prompt_tokens
             if metrics.completion_tokens is not None:
                 attrs["completion_tokens"] = metrics.completion_tokens
+                attrs["gen_ai.usage.output_tokens"] = metrics.completion_tokens
             if metrics.total_tokens is not None:
                 attrs["total_tokens"] = metrics.total_tokens
+            if self._model:
+                attrs.setdefault("gen_ai.request.model", self._model)
+                attrs.setdefault("gen_ai.response.model", self._model)
+            if self._provider:
+                attrs.setdefault("gen_ai.system", self._provider)
             attrs["total_time"] = metrics.total_time
         self._end_span(self._current_model_span)
         self._current_model_span = None

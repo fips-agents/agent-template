@@ -217,6 +217,64 @@ class TestTraceCollector:
         assert attrs["total_time"] == 1.2
 
     @pytest.mark.asyncio
+    async def test_otel_genai_convention_attributes(self, null_store):
+        """Token counts also surface under gen_ai.usage.* semantic-convention keys."""
+        metrics = _default_metrics(
+            prompt_tokens=150, completion_tokens=42, total_time=1.2
+        )
+        collector = TraceCollector(
+            null_store,
+            trace_id="t-genai",
+            model="gpt-oss-20b",
+            provider="vllm",
+        )
+        collector.begin_request()
+
+        events = _emit_events(
+            ContentDelta("answer"),
+            StreamComplete(finish_reason="stop", metrics=metrics),
+        )
+        [e async for e in collector.observe(events)]
+        await collector.end_request()
+
+        # Request-level: operation.name + system + request.model.
+        request_spans = [s for s in collector._spans if s.name == "request"]
+        assert len(request_spans) == 1
+        req_attrs = request_spans[0].attributes
+        assert req_attrs["gen_ai.operation.name"] == "chat"
+        assert req_attrs["gen_ai.request.model"] == "gpt-oss-20b"
+        assert req_attrs["gen_ai.system"] == "vllm"
+
+        # Model-call: usage.input_tokens + usage.output_tokens + response.model.
+        model_spans = [s for s in collector._spans if s.name == "model_call"]
+        attrs = model_spans[0].attributes
+        assert attrs["gen_ai.usage.input_tokens"] == 150
+        assert attrs["gen_ai.usage.output_tokens"] == 42
+        assert attrs["gen_ai.request.model"] == "gpt-oss-20b"
+        assert attrs["gen_ai.response.model"] == "gpt-oss-20b"
+        assert attrs["gen_ai.system"] == "vllm"
+        # Legacy attribute names preserved for backwards compatibility.
+        assert attrs["prompt_tokens"] == 150
+        assert attrs["completion_tokens"] == 42
+
+    @pytest.mark.asyncio
+    async def test_genai_attributes_omit_provider_when_none(self, null_store):
+        """Without a provider, gen_ai.system is simply not stamped (no empty string)."""
+        metrics = _default_metrics(prompt_tokens=10)
+        collector = TraceCollector(null_store, trace_id="t-noprov")
+        collector.begin_request()
+        events = _emit_events(
+            ContentDelta("ok"),
+            StreamComplete(finish_reason="stop", metrics=metrics),
+        )
+        [e async for e in collector.observe(events)]
+        await collector.end_request()
+
+        request_spans = [s for s in collector._spans if s.name == "request"]
+        assert "gen_ai.system" not in request_spans[0].attributes
+        assert request_spans[0].attributes["gen_ai.operation.name"] == "chat"
+
+    @pytest.mark.asyncio
     async def test_events_pass_through(self, null_store):
         """All original events are yielded unchanged."""
         original = [
