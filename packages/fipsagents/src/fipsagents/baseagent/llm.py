@@ -312,6 +312,10 @@ class LLMClient:
         call_kwargs = self._base_kwargs(**kwargs)
         call_kwargs["messages"] = messages
         call_kwargs["stream"] = True
+        # Opt into vLLM/OpenAI usage chunk on the terminal stream event so
+        # the server's cost-tracking accumulator sees prompt/completion
+        # tokens. setdefault keeps caller-supplied stream_options intact.
+        call_kwargs.setdefault("stream_options", {"include_usage": True})
         if tools is not None:
             call_kwargs["tools"] = tools
         try:

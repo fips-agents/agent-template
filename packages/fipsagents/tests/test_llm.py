@@ -359,3 +359,59 @@ class TestLLMClientCallModelValidated:
                         validator_fn=always_fails,
                         max_retries=2,
                     )
+
+
+# ---------------------------------------------------------------------------
+# LLMClient.call_model_stream_raw — stream_options.include_usage default
+# ---------------------------------------------------------------------------
+
+
+class TestLLMClientCallModelStreamRaw:
+    @pytest.mark.asyncio
+    async def test_sets_include_usage_by_default(self):
+        """Streaming calls must request the terminal usage chunk so the
+        server-layer cost-tracking accumulator sees prompt/completion tokens.
+        Regression for #118.
+        """
+        config = LLMConfig(name="test-model")
+
+        async def empty_stream():
+            if False:
+                yield  # type: ignore[unreachable]
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_create = AsyncMock(return_value=empty_stream())
+            mock_client.chat.completions.create = mock_create
+            client = LLMClient(config)
+            async for _ in client.call_model_stream_raw(
+                [{"role": "user", "content": "hi"}],
+            ):
+                pass
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["stream"] is True
+        assert kwargs["stream_options"] == {"include_usage": True}
+
+    @pytest.mark.asyncio
+    async def test_caller_can_override_stream_options(self):
+        """Callers passing stream_options explicitly win over the default."""
+        config = LLMConfig(name="test-model")
+
+        async def empty_stream():
+            if False:
+                yield  # type: ignore[unreachable]
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_create = AsyncMock(return_value=empty_stream())
+            mock_client.chat.completions.create = mock_create
+            client = LLMClient(config)
+            async for _ in client.call_model_stream_raw(
+                [{"role": "user", "content": "hi"}],
+                stream_options={"include_usage": False},
+            ):
+                pass
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["stream_options"] == {"include_usage": False}
