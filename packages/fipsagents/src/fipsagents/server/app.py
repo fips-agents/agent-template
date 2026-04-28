@@ -292,6 +292,7 @@ class OpenAIChatServer:
         self.app.get("/v1/agent-info")(self._agent_info)
         self.app.post("/v1/sessions")(self._create_session)
         self.app.get("/v1/sessions/{session_id}")(self._get_session)
+        self.app.get("/v1/sessions/{session_id}/usage")(self._get_session_usage)
         self.app.delete("/v1/sessions/{session_id}")(self._delete_session)
         self.app.get("/v1/traces")(self._list_traces)
         self.app.get("/v1/traces/{trace_id}")(self._get_trace)
@@ -373,6 +374,65 @@ class OpenAIChatServer:
         if not existed:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         return JSONResponse({"deleted": True})
+
+    async def _get_session_usage(self, session_id: str):
+        """Return computed token + dollar usage for a session.
+
+        Companion to ``GET /v1/sessions/{id}`` (raw messages) and the
+        platform's ``/cost_data`` endpoint (raw counters). This route
+        layers the configured :class:`~fipsagents.baseagent.config.PricingConfig`
+        on top of the cumulative counters so callers (gateway, UI,
+        BudgetEnforcer) get a single dollar figure without knowing the
+        per-model rate table.
+
+        404 when the session does not exist.  When the session exists
+        but no turns have been recorded yet, all counters are zero and
+        ``cost_usd`` is ``0.0``.
+        """
+        from .pricing import compute_cost, rate_for_model
+
+        if self._session_store is None or self._agent is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+        if not await self._session_store.exists(session_id):
+            raise HTTPException(
+                status_code=404, detail=f"Session {session_id} not found",
+            )
+
+        cost_data = await self._session_store.get_cost_data(session_id)
+        input_tokens = int(cost_data.get("input_tokens", 0) or 0)
+        output_tokens = int(cost_data.get("output_tokens", 0) or 0)
+        cached_tokens = int(cost_data.get("cached_tokens", 0) or 0)
+        turn_count = int(cost_data.get("turn_count", 0) or 0)
+        # Prefer the model recorded on cost_data (the model that
+        # actually billed the tokens) over the agent's currently
+        # configured default, which can drift between turns.
+        model_name = cost_data.get("model") or self._agent.config.model.name
+
+        pricing = self._agent.config.pricing
+        rate = rate_for_model(model_name, pricing)
+        cost_usd = compute_cost(
+            model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
+            pricing=pricing,
+        )
+
+        return JSONResponse({
+            "session_id": session_id,
+            "model": model_name,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_tokens": cached_tokens,
+            "turn_count": turn_count,
+            "cost_usd": cost_usd,
+            "pricing": {
+                "input_per_1k": rate.input_per_1k,
+                "output_per_1k": rate.output_per_1k,
+                "cached_input_per_1k": rate.cached_input_per_1k,
+                "per_request": rate.per_request,
+            },
+        })
 
     async def _list_traces(self, limit: int = 50, offset: int = 0):
         if self._trace_store is None:
