@@ -69,6 +69,7 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
     "pytest-cov",
+    "ruff",
 ]
 
 [project.urls]

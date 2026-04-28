@@ -24,6 +24,7 @@ Override endpoints with env vars:
 
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import AsyncIterator
 
@@ -147,6 +148,45 @@ pytestmark = [
 ]
 
 
+@contextlib.contextmanager
+def _skip_on_upstream_5xx():
+    """Convert transient LlamaStack/upstream 5xx into pytest.skip.
+
+    The module-level ``skipif`` only checks ``/v1/models`` reachability at
+    collection time. Inference can still 500 mid-test when the upstream
+    is degraded — that's an infra flake, not a code regression, so skip
+    rather than fail.
+
+    BaseAgent's LLM client wraps all OpenAI SDK errors in ``LLMError``
+    (chained via ``__cause__``), so we walk the cause chain looking for
+    an HTTP status_code in the 500 range, and also fall back to message
+    matching for streaming errors that arrive as plain ``APIError``
+    without a ``status_code`` attribute.
+    """
+    try:
+        yield
+    except Exception as exc:
+        cur: BaseException | None = exc
+        seen: set[int] = set()
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            status = getattr(cur, "status_code", None)
+            if isinstance(status, int) and 500 <= status < 600:
+                pytest.skip(
+                    f"LlamaStack returned {status} (upstream flake): {cur}"
+                )
+            msg = str(cur)
+            if any(f"{code}" in msg for code in (500, 502, 503, 504)) and (
+                "Internal server error" in msg
+                or "Bad Gateway" in msg
+                or "Service Unavailable" in msg
+                or "Gateway Timeout" in msg
+            ):
+                pytest.skip(f"LlamaStack upstream 5xx flake: {cur}")
+            cur = cur.__cause__ or cur.__context__
+        raise
+
+
 # ---------------------------------------------------------------------------
 # TestLlamaStackToolCallGeneration
 # ---------------------------------------------------------------------------
@@ -164,7 +204,8 @@ class TestLlamaStackToolCallGeneration:
             "user", "Compute sqrt(pi) * erf(1) / 2 to 15 digits."
         )
 
-        response = await agent.call_model()
+        with _skip_on_upstream_5xx():
+            response = await agent.call_model()
 
         assert response.tool_calls, (
             f"Expected tool calls, got content: {response.content!r}"
@@ -196,7 +237,8 @@ class TestLlamaStackSyncDispatch:
             "user", "Compute sqrt(pi) * erf(1) / 2 to 15 digits."
         )
 
-        result = await agent.step()
+        with _skip_on_upstream_5xx():
+            result = await agent.step()
 
         assert result.outcome == StepOutcome.DONE, (
             f"Expected DONE, got {result.outcome}"
@@ -231,7 +273,8 @@ class TestLlamaStackStreamingDispatch:
             "user", "Compute sqrt(pi) * erf(1) / 2 to 15 digits."
         )
 
-        events = [event async for event in agent.astep_stream()]
+        with _skip_on_upstream_5xx():
+            events = [event async for event in agent.astep_stream()]
 
         assert_tool_call_result_ordering(events)
         assert_stream_completes(events)
@@ -260,7 +303,8 @@ class TestLlamaStackStreamingDispatch:
             "user", "Compute sqrt(2) to 10 digits."
         )
 
-        events = [event async for event in agent.astep_stream()]
+        with _skip_on_upstream_5xx():
+            events = [event async for event in agent.astep_stream()]
 
         assert_stream_completes(events)
         complete = events[-1]

@@ -377,8 +377,6 @@ def test_chat_completion_allowed_when_no_budget_configured(tmp_path):
     """Without any budget config, requests are never blocked."""
     pytest.importorskip("fastapi")
 
-    import types
-
     from fastapi.testclient import TestClient
 
     from fipsagents.baseagent.events import (
