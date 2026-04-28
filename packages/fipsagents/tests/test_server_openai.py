@@ -90,6 +90,14 @@ class _StubAgent(BaseAgent):
                     max_age_hours=720,
                     backend=None,
                 ),
+                files=types.SimpleNamespace(
+                    enabled=False,
+                    max_file_size_bytes=50 * 1024 * 1024,
+                    bytes_dir="./files",
+                    allowed_mime_types=[],
+                    max_age_hours=720,
+                    backend=None,
+                ),
             ),
         )
 

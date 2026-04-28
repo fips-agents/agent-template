@@ -65,6 +65,15 @@ class ChatCompletionRequest(BaseModel):
         description="Session ID for conversation persistence. "
         "If provided but no session exists, one is created automatically.",
     )
+    # File attachments (extension field, not part of OpenAI API).
+    file_ids: list[str] | None = Field(
+        default=None,
+        description="IDs of files previously uploaded via POST /v1/files. "
+        "The server fetches each file's extracted text from the FileStore "
+        "and injects it as additional context before processing the user "
+        "message. Files referenced but unparsed are injected as a stub "
+        "noting filename + parse_status.",
+    )
 
     @field_validator("session_id")
     @classmethod

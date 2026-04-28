@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 try:
-    from fastapi import Body, FastAPI, HTTPException, Request
+    from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
     from fastapi.responses import JSONResponse, StreamingResponse
     from starlette.middleware.base import BaseHTTPMiddleware
 except ImportError as exc:  # pragma: no cover — helpful error path
@@ -30,6 +30,7 @@ from .models import (
     CreateFeedbackRequest,
     CreateSessionRequest,
     UpdateFeedbackRequest,
+    _SESSION_ID_RE,
     _extract_overrides,
     _messages_to_dicts,
     _sync_response,
@@ -45,6 +46,13 @@ from .feedback import (
     _generate_feedback_id,
     _utc_now_iso,
     create_feedback_store,
+)
+from .files import (
+    FileRecord,
+    FileStore,
+    _generate_file_id,
+    _sha256,
+    create_file_store,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,6 +131,7 @@ class OpenAIChatServer:
         self._session_store: SessionStore | None = None
         self._trace_store: TraceStore | None = None
         self._feedback_store: FeedbackStore | None = None
+        self._file_store: FileStore | None = None
         self._metrics_collector: Any = None  # Set in lifespan
         self._budget_enforcer: Any = None  # Set in lifespan
         self._housekeeping_task: asyncio.Task | None = None
@@ -168,9 +177,13 @@ class OpenAIChatServer:
             server_cfg.feedback.backend or server_cfg.storage.backend
             if server_cfg.feedback.enabled else None
         )
+        files_backend = (
+            server_cfg.files.backend or server_cfg.storage.backend
+            if server_cfg.files.enabled else None
+        )
 
         has_sqlite_feature = "sqlite" in {
-            sessions_backend, traces_backend, feedback_backend,
+            sessions_backend, traces_backend, feedback_backend, files_backend,
         }
         if has_sqlite_feature:
             from .sqlite import SqliteConnectionManager
@@ -207,6 +220,12 @@ class OpenAIChatServer:
             platform_url=server_cfg.storage.platform_url,
             platform_token=server_cfg.storage.platform_token,
         )
+        self._file_store = create_file_store(
+            files_backend,
+            sqlite_path=server_cfg.storage.sqlite_path,
+            bytes_dir=server_cfg.files.bytes_dir,
+            sqlite_connection=sqlite_conn,
+        )
 
         # Initialize metrics collector.
         self._metrics_collector = create_metrics_collector(
@@ -224,9 +243,9 @@ class OpenAIChatServer:
         # Run housekeeping only if at least one *locally persistent*
         # backend is in play.  HTTP-backed stores delegate housekeeping
         # to the platform service.
-        local_backends = {sessions_backend, traces_backend, feedback_backend} & {
-            "sqlite", "postgres",
-        }
+        local_backends = {
+            sessions_backend, traces_backend, feedback_backend, files_backend,
+        } & {"sqlite", "postgres"}
         if local_backends:
             self._housekeeping_task = asyncio.create_task(self._run_housekeeping())
 
@@ -244,6 +263,7 @@ class OpenAIChatServer:
             await self._session_store.close()
             await self._trace_store.close()
             await self._feedback_store.close()
+            await self._file_store.close()
             if self._sqlite_mgr:
                 await self._sqlite_mgr.close_all()
             self._agent = None
@@ -294,6 +314,14 @@ class OpenAIChatServer:
             if deleted:
                 logger.info("Housekeeping: removed %d expired feedback records", deleted)
 
+        if server_cfg.files.max_age_hours > 0 and self._file_store:
+            cutoff = datetime.now(timezone.utc) - timedelta(
+                hours=server_cfg.files.max_age_hours,
+            )
+            deleted = await self._file_store.delete_before(cutoff)
+            if deleted:
+                logger.info("Housekeeping: removed %d expired files", deleted)
+
     # -- Route registration --------------------------------------------------
 
     def _register_routes(self) -> None:
@@ -310,6 +338,8 @@ class OpenAIChatServer:
         self.app.patch("/v1/feedback/{feedback_id}")(self._update_feedback)
         self.app.get("/v1/feedback/stats")(self._feedback_stats)
         self.app.get("/v1/feedback")(self._list_feedback)
+        self.app.post("/v1/files")(self._upload_file)
+        self.app.get("/v1/files/{file_id}")(self._get_file)
         self.app.post("/v1/chat/completions")(self._chat_completions)
         self.app.get("/metrics")(self._metrics_endpoint)
 
@@ -550,6 +580,159 @@ class OpenAIChatServer:
         )
         return JSONResponse([asdict(r) for r in results])
 
+    async def _upload_file(
+        self,
+        request: Request,
+        file: UploadFile = File(...),
+        session_id: str | None = Form(default=None),
+    ):
+        """Persist an uploaded file via the configured FileStore.
+
+        Returns the metadata record (file_id, filename, mime_type,
+        size_bytes, sha256, parse_status). The parser does not run yet
+        in this endpoint — clients should poll
+        ``GET /v1/files/{file_id}`` to observe parse_status transitions
+        once the parser is wired in a later release.
+        """
+        if self._file_store is None or self._agent is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+
+        files_cfg = self._agent.config.server.files
+        if not files_cfg.enabled:
+            raise HTTPException(
+                status_code=404, detail="File uploads are not enabled",
+            )
+
+        if session_id is not None and not _SESSION_ID_RE.match(session_id):
+            raise HTTPException(
+                status_code=400,
+                detail="session_id must be 1-128 chars: letters, digits, "
+                "hyphens, or underscores",
+            )
+
+        # Stream-read with a hard cap so a malicious client can't OOM
+        # the server with a single oversized upload. Buffering the
+        # whole file is acceptable here because the configured limit
+        # is bounded; production deployments with large-file needs
+        # should run a streaming proxy (eg gateway-template) in front.
+        max_size = files_cfg.max_file_size_bytes
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = await file.read(64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_size:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"File exceeds max_file_size_bytes "
+                        f"({max_size} bytes)"
+                    ),
+                )
+            chunks.append(chunk)
+        data = b"".join(chunks)
+
+        mime_type = file.content_type or "application/octet-stream"
+        if files_cfg.allowed_mime_types and mime_type not in files_cfg.allowed_mime_types:
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    f"MIME type '{mime_type}' is not in the allowlist"
+                ),
+            )
+
+        user_id = request.headers.get("X-Auth-Subject", "anonymous")
+        record = FileRecord(
+            file_id=_generate_file_id(),
+            filename=file.filename or "unnamed",
+            mime_type=mime_type,
+            size_bytes=total,
+            sha256=_sha256(data),
+            user_id=user_id,
+            session_id=session_id,
+        )
+        await self._file_store.save(record, data)
+
+        return JSONResponse(
+            {
+                "file_id": record.file_id,
+                "filename": record.filename,
+                "mime_type": record.mime_type,
+                "size_bytes": record.size_bytes,
+                "sha256": record.sha256,
+                "parse_status": record.parse_status,
+                "session_id": record.session_id,
+                "created_at": record.created_at,
+            },
+            status_code=201,
+        )
+
+    async def _get_file(self, file_id: str):
+        """Return file metadata. 404 if not found or store disabled."""
+        if self._file_store is None or self._agent is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+        if not self._agent.config.server.files.enabled:
+            raise HTTPException(
+                status_code=404, detail="File uploads are not enabled",
+            )
+        record = await self._file_store.get_metadata(file_id)
+        if record is None:
+            raise HTTPException(
+                status_code=404, detail=f"File {file_id} not found",
+            )
+        from dataclasses import asdict
+        return JSONResponse(asdict(record))
+
+    async def _resolve_file_attachments(
+        self, file_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """Fetch each file's extracted text and produce system messages.
+
+        Files with completed extraction are injected as full content;
+        files in pending / processing / failed / skipped states are
+        injected as a stub noting filename, MIME type, and parse status
+        so the model can acknowledge the attachment without
+        hallucinating content. Unknown ``file_id`` values raise HTTP 400
+        — the caller controls the list and a missing reference is
+        always a client bug.
+        """
+        if self._file_store is None or self._agent is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+        if not self._agent.config.server.files.enabled:
+            raise HTTPException(
+                status_code=400,
+                detail="file_ids supplied but file uploads are not enabled",
+            )
+
+        messages: list[dict[str, Any]] = []
+        for fid in file_ids:
+            record = await self._file_store.get_metadata(fid)
+            if record is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"file_id {fid} not found",
+                )
+            header = (
+                f"[Attached file: {record.filename} "
+                f"({record.mime_type}, {record.size_bytes} bytes)]"
+            )
+            if record.extracted_text:
+                messages.append({
+                    "role": "system",
+                    "content": f"{header}\n{record.extracted_text}",
+                })
+            else:
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"{header} — content not available "
+                        f"(parse_status: {record.parse_status})"
+                    ),
+                })
+        return messages
+
     def _should_trace(self) -> bool:
         """Decide whether to trace this request based on sampling rate."""
         if self._trace_store is None or self._agent is None:
@@ -613,6 +796,21 @@ class OpenAIChatServer:
                 incoming = stored + incoming
             else:
                 logger.info("Session %s not found; will auto-create on save", req.session_id)
+
+        # File attachments: resolve file_ids to extracted text and inject
+        # as system messages just before the current user turn so the
+        # model treats them as context for this request.
+        if req.file_ids:
+            file_msgs = await self._resolve_file_attachments(req.file_ids)
+            if file_msgs:
+                # Insert before the last incoming message (the user's
+                # current turn) so prior session history retains its
+                # ordering and the file context is closest to the
+                # question being asked.
+                if len(incoming) >= 1:
+                    incoming = incoming[:-1] + file_msgs + incoming[-1:]
+                else:
+                    incoming = file_msgs + incoming
 
         # Trace ID: always generated so clients can correlate this
         # completion with feedback/observability data, even when tracing
