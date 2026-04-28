@@ -233,6 +233,17 @@ class HttpSessionStore(SessionStore):
             json={"messages": messages},
         )
 
+    async def update(
+        self,
+        session_id: str,
+        *,
+        cost_data: dict | None = None,
+    ) -> bool:
+        # Wired in a separate slice; concrete platform endpoint is TBD.
+        raise NotImplementedError(
+            "HttpSessionStore.update is not implemented in this slice"
+        )
+
     async def delete(self, session_id: str) -> bool:
         status, _ = await self._client.request(
             "DELETE",
