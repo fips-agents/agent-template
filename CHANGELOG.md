@@ -4,6 +4,22 @@ All notable changes to the `fipsagents` package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.15.0] - 2026-04-28
+
+Cost Tracking v2 — pricing, budget enforcement, observability. Layers dollar amounts and configurable USD limits on top of the raw token accumulator that shipped in 0.14.x. Closes the bulk of [#104](https://github.com/fips-agents/agent-template/issues/104).
+
+### Added
+
+- **`PricingConfig` + `GET /v1/sessions/{id}/usage`** ([#121](https://github.com/fips-agents/agent-template/pull/121)). New top-level `pricing` field on `AgentConfig` with a per-model `PricingRate` table (USD per 1k tokens for input / output / cached, plus an optional `per_request` flat fee). `compute_cost()` pure helper in `fipsagents.server.pricing` follows OpenAI cached-token semantics. `GET /v1/sessions/{id}/usage` layers the configured rates over the cumulative `cost_data` accumulator and returns a single computed-cost view that BudgetEnforcer, the gateway, and the UI can consume without each re-implementing rate lookup.
+- **`tenant_id` + `session_id` labels on `agent_tokens_total`** ([#122](https://github.com/fips-agents/agent-template/pull/122)). Opt-in via the new `metrics.token_label_mode: "model" | "tenant" | "session"` setting; default (`"model"`) preserves the existing label space exactly. The server extracts `X-Tenant` from the request headers (gateway-stamped, falls back to `"default"`) and `session_id` from the `ChatCompletionRequest`. The `"session"` mode is documented as high-cardinality and opt-in for deployments with external aggregation (federation, Mimir); `GET /v1/sessions/{id}/usage` remains the preferred per-session view.
+- **`BudgetEnforcer` with per-session + per-tenant USD limits** ([#123](https://github.com/fips-agents/agent-template/pull/123)). Configurable via the new `BudgetConfig` (per-session / per-tenant `warn_usd` + `limit_usd`, `mode: enforce | observe`). Follows the `MetricsCollector` / `TraceCollector` observer pattern: `check_before_request()` reads cumulative session cost from the session store (works across restarts/replicas) and per-tenant cost from an in-process accumulator, raising `BudgetExceededError` when a hard limit would be crossed; `record_after_request()` refreshes the in-process counter and logs a single soft-warning per scope per identifier. `BudgetExceededError` maps to **HTTP 402 Payment Required** with a structured detail body (`error`, `scope`, `identifier`, `current_usd`, `limit_usd`) so callers can distinguish budget rejection from rate-limit (`429`) and auth (`401/403`). `observe` mode downgrades raising to log-only. Per-tenant scope is "this agent process's view" — accurate for single-replica; multi-replica tenant aggregation is documented as out of scope here.
+- **OTEL GenAI semantic conventions on trace spans** ([#124](https://github.com/fips-agents/agent-template/pull/124)). `TraceCollector` stamps the standard GenAI attribute names alongside the legacy ones so OTEL backends (Tempo, Honeycomb, Grafana Cloud, etc.) get the keys they expect: `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.system` on the request span; `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.system` on the model_call span. Legacy `prompt_tokens` / `completion_tokens` / `total_tokens` / `total_time` are preserved verbatim — no breakage for existing trace consumers (`TraceSummary` aggregation, `/v1/traces/{id}` viewers, custom dashboards). `OTELTraceStore` carries the new keys through automatically via its generic span-attribute copy loop.
+
+### Notes
+
+- **Backward-compatible defaults.** All four features are opt-in. `BudgetConfig.is_active()` returns `False` when no limits are set, so existing deployments without budget config see zero behavior change. `metrics.token_label_mode` defaults to `"model"`. `pricing` defaults to all-zero rates so `/usage` returns `cost_usd: 0.0` until rates are configured. OTEL GenAI attributes are additive on existing spans.
+- **Cluster-smoked end-to-end** against `fipsagents-platform 0.2.1` and `RedHatAI/gpt-oss-20b` on RHPDS. Cumulative `cost_data` GET, `/v1/sessions/{id}/usage`, `agent_tokens_total{tenant_id,session_id}` labels, and BudgetEnforcer soft-warnings will be verified post-publish during the 0.15.0 re-smoke.
+
 ## [0.14.2] - 2026-04-28
 
 ### Added
