@@ -502,6 +502,51 @@ class PricingConfig(BaseModel):
     models: dict[str, PricingRate] = Field(default_factory=dict)
 
 
+class BudgetLimits(BaseModel):
+    """Soft (warn) and hard (enforce) USD limits.
+
+    ``warn_usd`` is logged when the running total crosses it. ``limit_usd``
+    triggers :class:`fipsagents.server.budget.BudgetExceededError` (HTTP 402)
+    when ``budget.mode`` is ``enforce``. Setting either to ``0`` (the default)
+    disables that threshold.
+    """
+
+    warn_usd: float = Field(default=0.0, ge=0.0)
+    limit_usd: float = Field(default=0.0, ge=0.0)
+
+
+class BudgetConfig(BaseModel):
+    """Per-session and per-tenant cost budgets.
+
+    Per-session budgets read cumulative ``cost_data`` from the session
+    store and convert to USD via :class:`PricingConfig`.  Per-tenant
+    budgets aggregate session deltas in-process — accurate for
+    single-replica deployments and for "this agent's view" of cross-session
+    tenant cost.  Multi-replica tenant aggregation requires a separate
+    cross-agent service and is out of scope here.
+
+    ``mode``:
+
+    - ``observe`` — log warnings + limit crossings, never raise.
+    - ``enforce`` (default) — raise ``BudgetExceededError`` on hard limit.
+    """
+
+    mode: Literal["observe", "enforce"] = "enforce"
+    per_session: BudgetLimits = Field(default_factory=BudgetLimits)
+    per_tenant: BudgetLimits = Field(default_factory=BudgetLimits)
+
+    def is_active(self) -> bool:
+        """True if any limit is configured (warn or hard, session or tenant)."""
+        return any(
+            v > 0.0 for v in (
+                self.per_session.warn_usd,
+                self.per_session.limit_usd,
+                self.per_tenant.warn_usd,
+                self.per_tenant.limit_usd,
+            )
+        )
+
+
 class ServerConfig(BaseModel):
     """HTTP server binding and feature configuration."""
 
@@ -541,6 +586,7 @@ class AgentConfig(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
+    budget: BudgetConfig = Field(default_factory=BudgetConfig)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)
 
 
