@@ -34,6 +34,7 @@ from .models import (
     _messages_to_dicts,
     _sync_response,
 )
+from .budget import BudgetExceededError, create_budget_enforcer
 from .collector import TraceCollector
 from .metrics import NullMetricsCollector, create_metrics_collector
 from .sessions import SessionStore, create_session_store
@@ -123,6 +124,7 @@ class OpenAIChatServer:
         self._trace_store: TraceStore | None = None
         self._feedback_store: FeedbackStore | None = None
         self._metrics_collector: Any = None  # Set in lifespan
+        self._budget_enforcer: Any = None  # Set in lifespan
         self._housekeeping_task: asyncio.Task | None = None
         self._sqlite_mgr: Any = None
 
@@ -210,6 +212,13 @@ class OpenAIChatServer:
         self._metrics_collector = create_metrics_collector(
             enabled=server_cfg.metrics.enabled,
             token_label_mode=server_cfg.metrics.token_label_mode,
+        )
+
+        # Initialize budget enforcer.  No-op when no limits are configured.
+        self._budget_enforcer = create_budget_enforcer(
+            self._agent.config.budget,
+            pricing=self._agent.config.pricing,
+            session_store=self._session_store,
         )
 
         # Run housekeeping only if at least one *locally persistent*
@@ -577,6 +586,26 @@ class OpenAIChatServer:
         # gateway in front (local dev, smoke tests).
         tenant_id = request.headers.get("X-Tenant") or "default"
 
+        # Budget pre-check: rejects (402) if cumulative session/tenant
+        # cost is already over a configured hard limit.  No-op when no
+        # budget is configured.
+        if self._budget_enforcer is not None:
+            try:
+                await self._budget_enforcer.check_before_request(
+                    session_id=req.session_id, tenant_id=tenant_id,
+                )
+            except BudgetExceededError as exc:
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "error": "budget_exceeded",
+                        "scope": exc.scope,
+                        "identifier": exc.identifier,
+                        "current_usd": exc.current_usd,
+                        "limit_usd": exc.limit_usd,
+                    },
+                ) from exc
+
         # Session: load prior messages if session_id provided.
         if req.session_id and self._session_store:
             stored = await self._session_store.load(req.session_id)
@@ -627,6 +656,18 @@ class OpenAIChatServer:
                 await self._persist_cost_data(
                     req.session_id, metrics, model_name,
                 )
+            # Budget post-record: refresh the in-process tenant counter
+            # from the new session cost. Logs soft-warning crossings.
+            # Run even without a session_id so future tenant-only modes work.
+            if self._budget_enforcer is not None:
+                try:
+                    await self._budget_enforcer.record_after_request(
+                        session_id=req.session_id, tenant_id=tenant_id,
+                    )
+                except Exception:  # noqa: BLE001 — keep response alive
+                    logger.warning(
+                        "Budget post-record failed", exc_info=True,
+                    )
             if collector:
                 await collector.end_request()
             if self._metrics_collector and metrics_start is not None:
@@ -648,7 +689,7 @@ class OpenAIChatServer:
                 incoming, model_name, overrides=overrides,
                 session_id=req.session_id, collector=collector,
                 metrics_start=metrics_start, trace_id=trace_id,
-                tenant_id=tenant_id,
+                tenant_id=tenant_id, run_budget_post=True,
             ),
             media_type="text/event-stream",
             headers={
@@ -740,6 +781,7 @@ class OpenAIChatServer:
         metrics_start: float | None = None,
         trace_id: str | None = None,
         tenant_id: str | None = None,
+        run_budget_post: bool = False,
     ) -> AsyncIterator[str]:
         """Drive the agent's event stream, serialising to OpenAI SSE chunks.
 
@@ -801,6 +843,16 @@ class OpenAIChatServer:
                 await self._persist_cost_data(
                     session_id, captured_metrics, model_name,
                 )
+            # Budget post-record (mirrors the sync path).
+            if run_budget_post and self._budget_enforcer is not None:
+                try:
+                    await self._budget_enforcer.record_after_request(
+                        session_id=session_id, tenant_id=tenant_id,
+                    )
+                except Exception:  # noqa: BLE001 — keep response alive
+                    logger.warning(
+                        "Budget post-record failed", exc_info=True,
+                    )
 
     # -- Cost-data accumulator -----------------------------------------------
 

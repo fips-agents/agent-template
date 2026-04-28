@@ -44,7 +44,7 @@ class _StubAgent(BaseAgent):
 
     def __init__(self, events=None, *, model_name: str = "stub-model", **kwargs):
         # Bypass BaseAgent.__init__ — we own everything the server touches.
-        from fipsagents.baseagent.config import PricingConfig
+        from fipsagents.baseagent.config import BudgetConfig, PricingConfig
         self._events = events or []
         self._system_prompt: str = ""
         self.messages: list[dict] = []
@@ -58,6 +58,7 @@ class _StubAgent(BaseAgent):
                 injection_tag="user_memories",
             ),
             pricing=PricingConfig(),
+            budget=BudgetConfig(),
             server=types.SimpleNamespace(
                 storage=types.SimpleNamespace(
                     backend=None,
