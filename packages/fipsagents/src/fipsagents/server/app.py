@@ -339,7 +339,9 @@ class OpenAIChatServer:
         self.app.get("/v1/feedback/stats")(self._feedback_stats)
         self.app.get("/v1/feedback")(self._list_feedback)
         self.app.post("/v1/files")(self._upload_file)
+        self.app.get("/v1/files")(self._list_files)
         self.app.get("/v1/files/{file_id}")(self._get_file)
+        self.app.delete("/v1/files/{file_id}")(self._delete_file)
         self.app.post("/v1/chat/completions")(self._chat_completions)
         self.app.get("/metrics")(self._metrics_endpoint)
 
@@ -684,6 +686,53 @@ class OpenAIChatServer:
             )
         from dataclasses import asdict
         return JSONResponse(asdict(record))
+
+    async def _delete_file(self, file_id: str):
+        """Remove a file's metadata and bytes. 404 on unknown."""
+        if self._file_store is None or self._agent is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+        if not self._agent.config.server.files.enabled:
+            raise HTTPException(
+                status_code=404, detail="File uploads are not enabled",
+            )
+        deleted = await self._file_store.delete(file_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=404, detail=f"File {file_id} not found",
+            )
+        return JSONResponse({"deleted": True, "file_id": file_id})
+
+    async def _list_files(
+        self,
+        session_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ):
+        """List files attached to a session, newest first.
+
+        ``session_id`` is required — listing every file across all
+        sessions would leak metadata across users in shared deployments
+        and isn't a use case the FileStore ABC supports.
+        """
+        if self._file_store is None or self._agent is None:
+            raise HTTPException(status_code=503, detail="Server not ready")
+        if not self._agent.config.server.files.enabled:
+            raise HTTPException(
+                status_code=404, detail="File uploads are not enabled",
+            )
+        if not _SESSION_ID_RE.match(session_id):
+            raise HTTPException(
+                status_code=400,
+                detail="session_id must be 1-128 chars: letters, digits, "
+                "hyphens, or underscores",
+            )
+        from dataclasses import asdict
+        records = await self._file_store.list_for_session(
+            session_id,
+            limit=min(max(limit, 0), 1000),
+            offset=max(offset, 0),
+        )
+        return JSONResponse([asdict(r) for r in records])
 
     async def _resolve_file_attachments(
         self, file_ids: list[str],

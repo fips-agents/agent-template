@@ -369,3 +369,121 @@ class TestFileIdsInjection:
         # Only the user message — no system context injected.
         assert len(captured) == 1
         assert captured[0]["role"] == "user"
+
+
+# ---------------------------------------------------------------------------
+# DELETE /v1/files/{file_id}
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteFile:
+    def test_delete_existing_file(self, tmp_path):
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            up = client.post(
+                "/v1/files",
+                files={"file": ("a.txt", b"hello world", "text/plain")},
+            )
+            file_id = up.json()["file_id"]
+
+            resp = client.delete(f"/v1/files/{file_id}")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["deleted"] is True
+            assert body["file_id"] == file_id
+
+            # Subsequent GET should 404.
+            assert client.get(f"/v1/files/{file_id}").status_code == 404
+
+    def test_delete_unknown_returns_404(self, tmp_path):
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            resp = client.delete("/v1/files/file_does_not_exist")
+        assert resp.status_code == 404
+
+    def test_delete_disabled_returns_404(self, tmp_path):
+        server = _build_server_with_files(tmp_path, enabled=False)
+        with TestClient(server.app) as client:
+            resp = client.delete("/v1/files/anything")
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/files (list for session)
+# ---------------------------------------------------------------------------
+
+
+class TestListFiles:
+    def test_list_filters_by_session(self, tmp_path):
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            for i in range(3):
+                client.post(
+                    "/v1/files",
+                    files={"file": (f"a{i}.txt", f"body {i}".encode(), "text/plain")},
+                    data={"session_id": "sess-a"},
+                )
+            client.post(
+                "/v1/files",
+                files={"file": ("b.txt", b"other", "text/plain")},
+                data={"session_id": "sess-b"},
+            )
+
+            resp = client.get("/v1/files", params={"session_id": "sess-a"})
+        assert resp.status_code == 200
+        records = resp.json()
+        assert len(records) == 3
+        assert all(r["session_id"] == "sess-a" for r in records)
+
+    def test_list_unknown_session_empty(self, tmp_path):
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            resp = client.get("/v1/files", params={"session_id": "nope"})
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_list_respects_limit_and_offset(self, tmp_path):
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            for i in range(5):
+                client.post(
+                    "/v1/files",
+                    files={"file": (f"f{i}.txt", b"hello world", "text/plain")},
+                    data={"session_id": "sess-p"},
+                )
+
+            page1 = client.get(
+                "/v1/files",
+                params={"session_id": "sess-p", "limit": 2, "offset": 0},
+            ).json()
+            page2 = client.get(
+                "/v1/files",
+                params={"session_id": "sess-p", "limit": 2, "offset": 2},
+            ).json()
+        assert len(page1) == 2
+        assert len(page2) == 2
+        assert {r["file_id"] for r in page1}.isdisjoint(
+            {r["file_id"] for r in page2},
+        )
+
+    def test_list_requires_session_id(self, tmp_path):
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            resp = client.get("/v1/files")
+        # FastAPI raises 422 for missing required query params.
+        assert resp.status_code == 422
+
+    def test_list_invalid_session_id_returns_400(self, tmp_path):
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            resp = client.get(
+                "/v1/files", params={"session_id": "bad/session id!"},
+            )
+        assert resp.status_code == 400
+        assert "session_id" in resp.json()["detail"]
+
+    def test_list_disabled_returns_404(self, tmp_path):
+        server = _build_server_with_files(tmp_path, enabled=False)
+        with TestClient(server.app) as client:
+            resp = client.get("/v1/files", params={"session_id": "anything"})
+        assert resp.status_code == 404
