@@ -224,9 +224,11 @@ When backend is `null`, both sessions and traces degrade to no-ops (fully backwa
 
 ### Sessions
 
-`SessionStore` is an ABC with three implementations: `NullSessionStore` (default, ephemeral -- messages live only for the request lifetime), `SqliteSessionStore` (edge/dev), and `PostgresSessionStore` (enterprise). The server loads conversation history before each request and saves it after, so the agent subclass never touches persistence directly.
+`SessionStore` is an ABC with four implementations: `NullSessionStore` (default, ephemeral -- messages live only for the request lifetime), `SqliteSessionStore` (edge/dev), `PostgresSessionStore` (enterprise), and `HttpSessionStore` (delegates to a sibling `fipsagents-platform` service over REST -- see [Cross-Agent Platform Service](#cross-agent-platform-service)). The server loads conversation history before each request and saves it after, so the agent subclass never touches persistence directly.
 
-REST endpoints: `POST /v1/sessions`, `GET /v1/sessions/{id}`, `DELETE /v1/sessions/{id}`.
+The ABC also exposes `update(session_id, *, cost_data=None) -> bool` and `get_cost_data(session_id) -> dict` for the per-turn cost-tracking accumulator wired into `OpenAIChatServer`. Each turn's `prompt_tokens` / `completion_tokens` (extracted from the terminal `StreamComplete` event) are accumulated and persisted via `update()`; failures are caught and logged so cost-tracking issues never break the chat response. SQLite stores `cost_data` as a `TEXT` column (JSON-encoded, application-side shallow merge); Postgres uses native `JSONB ||` merge. `HttpSessionStore.get_cost_data()` raises `NotImplementedError` until the platform exposes a GET endpoint -- HTTP-backed deployments currently fall back to per-turn-delta writes (see [fipsagents-platform#4](https://github.com/fips-agents/fipsagents-platform/issues/4)).
+
+REST endpoints: `POST /v1/sessions`, `GET /v1/sessions/{id}`, `PATCH /v1/sessions/{id}` (partial update for `cost_data`), `DELETE /v1/sessions/{id}`.
 
 `CreateSessionRequest` is a Pydantic model that validates session IDs: alphanumeric characters, hyphens, and underscores only, 1-128 characters. The same validation applies to the optional `session_id` field on `ChatCompletionRequest`. Sessions support two creation modes: explicit creation via `POST /v1/sessions`, and auto-create-on-first-use -- when a `session_id` is passed on a chat completion request, the `save()` method uses upsert semantics and creates the session if it doesn't exist. The explicit endpoint is optional but recommended when you need to control the ID or check for duplicates.
 
@@ -732,7 +734,7 @@ This is the least disruptive path that addresses the multi-agent rough edges wit
 
 - **Backward compatible.** Single-agent deployments keep their current SQLite/Postgres setup.
 - **Multi-agent path is clean.** One new service, deployment-time config flag, switch one agent at a time by editing its `agent.yaml`.
-- **Cost Tracking (#104) fits naturally.** Per-session token usage attaches to session records via `SessionStore.update()`. Whether the session store is `SqliteSessionStore` or `HttpSessionStore`, the BaseAgent-side code is identical — the data lands wherever sessions land.
+- **Cost Tracking (#104) v1 has shipped on this foundation.** Per-session token usage attaches to session records via `SessionStore.update()` (added in fipsagents 0.14.0). Whether the session store is `SqliteSessionStore` or `HttpSessionStore`, the BaseAgent-side code is identical — the data lands wherever sessions land. SQLite/Postgres backends get cumulative semantics for free; HTTP-backed deployments need [fipsagents-platform#4](https://github.com/fips-agents/fipsagents-platform/issues/4) to close the cumulative-read gap. Pricing model, `BudgetEnforcer` observer, and aggregation endpoints are queued as v2.
 - **Auth boundary becomes possible.** The platform service has its own auth surface (JWT against the same Keycloak as the gateway), so per-agent service-account tokens can gate writes.
 - **OTEL is not forced.** A future iteration can have the platform's `TraceStore` ship to OTEL internally, but adopters do not have to deploy a collector in step one.
 
