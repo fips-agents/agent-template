@@ -16,6 +16,7 @@ from fipsagents.server.files import (
     _generate_file_id,
     _sha256,
     create_file_store,
+    detect_mime,
 )
 
 
@@ -401,6 +402,42 @@ class TestSqliteFileStoreDelete:
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
+
+
+class TestDetectMime:
+    def test_plaintext(self):
+        assert detect_mime(b"hello world") == "text/plain"
+
+    def test_pdf_magic_bytes(self):
+        body = (
+            b"%PDF-1.4\n%\xc7\xec\x8f\xa2\n"
+            b"1 0 obj\n<< /Type /Catalog >>\nendobj\n"
+            b"trailer\n<< /Root 1 0 R >>\n"
+            b"%%EOF\n"
+        )
+        assert detect_mime(body) == "application/pdf"
+
+    def test_returns_none_when_module_missing(self, monkeypatch):
+        from fipsagents.server import files as files_mod
+
+        def _missing():
+            raise ImportError("simulated")
+
+        monkeypatch.setattr(files_mod, "_get_magic_module", _missing)
+        # Reset the warn-once flag so the fallback path actually runs.
+        monkeypatch.setattr(files_mod, "_magic_unavailable_logged", False)
+
+        assert detect_mime(b"anything") is None
+
+    def test_returns_none_on_runtime_error(self, monkeypatch):
+        from fipsagents.server import files as files_mod
+
+        class _Boom:
+            def from_buffer(self, data):
+                raise RuntimeError("libmagic exploded")
+
+        monkeypatch.setattr(files_mod, "_get_magic_module", lambda: _Boom())
+        assert detect_mime(b"anything") is None
 
 
 class TestCreateFileStore:

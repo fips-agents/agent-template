@@ -70,6 +70,12 @@ files = [
     # PPTX, XLSX, HTML, and images. Plaintext parsing is built-in and
     # works without docling; this extra adds binary-format support.
     "docling>=2.30",
+    # MIME sniffing — detect actual file content rather than trusting
+    # the client-supplied Content-Type header. Requires libmagic at the
+    # OS level (``brew install libmagic`` on macOS, ``dnf install
+    # file-libs`` on UBI/RHEL). Falls back gracefully when libmagic is
+    # absent: server logs a warning and uses the client-supplied type.
+    "python-magic>=0.4.27",
 ]
 dev = [
     "pytest>=7.0",

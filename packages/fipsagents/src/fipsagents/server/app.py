@@ -53,6 +53,7 @@ from .files import (
     _generate_file_id,
     _sha256,
     create_file_store,
+    detect_mime,
 )
 from .parser import FileParser, create_parser
 
@@ -641,7 +642,14 @@ class OpenAIChatServer:
             chunks.append(chunk)
         data = b"".join(chunks)
 
-        mime_type = file.content_type or "application/octet-stream"
+        # Prefer content-sniffed MIME over the client-supplied
+        # Content-Type. A client can lie about Content-Type (rename
+        # foo.exe to foo.pdf and POST as application/pdf) but cannot
+        # rewrite the file's magic bytes — libmagic reads those.
+        # Falls back to the client claim when libmagic is unavailable.
+        sniffed = detect_mime(data)
+        claimed = file.content_type or "application/octet-stream"
+        mime_type = sniffed or claimed
         if files_cfg.allowed_mime_types and mime_type not in files_cfg.allowed_mime_types:
             raise HTTPException(
                 status_code=415,

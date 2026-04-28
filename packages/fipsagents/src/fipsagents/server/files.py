@@ -51,6 +51,59 @@ def _bytes_path(bytes_dir: str, file_id: str) -> str:
     return os.path.join(bytes_dir, shard, file_id)
 
 
+# Module-level cache so we only complain about a missing libmagic once
+# per process instead of on every upload.
+_magic_unavailable_logged = False
+
+
+def detect_mime(data: bytes) -> str | None:
+    """Sniff the MIME type of *data* via libmagic, or None on failure.
+
+    Returns the detected MIME (e.g. ``application/pdf``) when both
+    python-magic and libmagic are available; logs a one-time warning
+    and returns None when either is missing. The caller is expected to
+    fall back to the client-supplied ``Content-Type`` in that case.
+
+    The first call constructs a ``Magic`` instance which loads the
+    libmagic database; subsequent calls reuse it via a module-level
+    cache.
+    """
+    global _magic_unavailable_logged
+    try:
+        magic_mod = _get_magic_module()
+    except ImportError:
+        if not _magic_unavailable_logged:
+            logger.warning(
+                "detect_mime: python-magic / libmagic not available; "
+                "falling back to client-supplied Content-Type. Install "
+                "python-magic and libmagic for content-based MIME "
+                "validation (fipsagents[files] + system libmagic).",
+            )
+            _magic_unavailable_logged = True
+        return None
+    try:
+        return magic_mod.from_buffer(data)
+    except Exception as exc:
+        logger.warning("detect_mime: libmagic raised %s: %s", type(exc).__name__, exc)
+        return None
+
+
+def _get_magic_module():
+    """Return a cached ``magic.Magic(mime=True)`` instance.
+
+    Split out for test injection — callers can monkey-patch this to
+    simulate libmagic being absent without uninstalling the library.
+    """
+    cached = getattr(_get_magic_module, "_cached", None)
+    if cached is not None:
+        return cached
+    import magic  # type: ignore[import-not-found]
+
+    m = magic.Magic(mime=True)
+    _get_magic_module._cached = m  # type: ignore[attr-defined]
+    return m
+
+
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------

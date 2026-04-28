@@ -519,3 +519,103 @@ class TestListFiles:
         with TestClient(server.app) as client:
             resp = client.get("/v1/files", params={"session_id": "anything"})
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# MIME sniffing via python-magic
+# ---------------------------------------------------------------------------
+
+
+# Real-ish payloads with the right magic bytes. python-magic returns
+# different verdicts for tiny stubs vs full-structure files; these
+# stubs are large enough for libmagic to identify them.
+_PDF_BYTES = (
+    b"%PDF-1.4\n%\xc7\xec\x8f\xa2\n"
+    b"1 0 obj\n<< /Type /Catalog >>\nendobj\n"
+    b"trailer\n<< /Root 1 0 R >>\n"
+    b"%%EOF\n"
+)
+
+
+class TestMimeSniffing:
+    def test_sniffer_overrides_misleading_content_type(self, tmp_path):
+        """A client claims text/plain but the bytes are a PDF — record
+        and allowlist must use the sniffed MIME."""
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            resp = client.post(
+                "/v1/files",
+                # Lying about content-type: claims text/plain, sends PDF.
+                files={"file": ("a.pdf", _PDF_BYTES, "text/plain")},
+            )
+        assert resp.status_code == 201
+        # libmagic identified it correctly despite the client's claim.
+        assert resp.json()["mime_type"] == "application/pdf"
+
+    def test_allowlist_applies_to_sniffed_value(self, tmp_path):
+        """Allowlist rejects bytes whose sniffed type isn't allowed,
+        even when the client claims an allowed type."""
+        server = _build_server_with_files(
+            tmp_path, allowed=["text/plain"],
+        )
+        with TestClient(server.app) as client:
+            resp = client.post(
+                "/v1/files",
+                # Claims text/plain (allowed) but the bytes are a PDF.
+                files={"file": ("a.pdf", _PDF_BYTES, "text/plain")},
+            )
+        assert resp.status_code == 415
+        assert "application/pdf" in resp.json()["detail"]
+
+    def test_allowlist_passes_when_sniffed_matches(self, tmp_path):
+        """Allowlist accepts when the sniffed MIME is on the list,
+        regardless of what the client claimed."""
+        server = _build_server_with_files(
+            tmp_path, allowed=["application/pdf"],
+        )
+        with TestClient(server.app) as client:
+            resp = client.post(
+                "/v1/files",
+                # Client claims a junk content-type; bytes are real PDF.
+                files={"file": ("a.pdf", _PDF_BYTES, "application/garbage")},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["mime_type"] == "application/pdf"
+
+    def test_falls_back_to_claim_when_libmagic_unavailable(
+        self, tmp_path, monkeypatch,
+    ):
+        """When libmagic is missing, sniffer returns None and the
+        endpoint falls back to the client-supplied Content-Type."""
+        from fipsagents.server import files as files_mod
+
+        def _no_magic():
+            raise ImportError("libmagic missing in this test")
+
+        monkeypatch.setattr(files_mod, "_get_magic_module", _no_magic)
+        # Reset the once-per-process warning gate so the fallback fires.
+        monkeypatch.setattr(files_mod, "_magic_unavailable_logged", False)
+
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            resp = client.post(
+                "/v1/files",
+                files={"file": ("a.txt", b"hello world", "text/plain")},
+            )
+        assert resp.status_code == 201
+        # Falls back to the client-supplied type.
+        assert resp.json()["mime_type"] == "text/plain"
+
+    def test_plaintext_sniffed_correctly(self, tmp_path):
+        """Sanity check — plaintext bytes detect as text/plain even
+        when the client labels them application/octet-stream."""
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            resp = client.post(
+                "/v1/files",
+                files={"file": (
+                    "notes.txt", b"hello world", "application/octet-stream",
+                )},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["mime_type"] == "text/plain"
