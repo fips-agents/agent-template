@@ -619,3 +619,120 @@ class TestMimeSniffing:
             )
         assert resp.status_code == 201
         assert resp.json()["mime_type"] == "text/plain"
+
+
+# ---------------------------------------------------------------------------
+# Virus scanning integration with /v1/files
+# ---------------------------------------------------------------------------
+
+
+class _FakeScanner:
+    """In-process stand-in for VirusScanner used in endpoint tests."""
+
+    def __init__(self, *, infected=False, error=None, viruses=None):
+        from fipsagents.server.scanner import ScanResult
+        if error is not None:
+            self._result = ScanResult.failed(error)
+        elif infected:
+            self._result = ScanResult.found(viruses or ["EICAR-Test-File"])
+        else:
+            self._result = ScanResult.clean()
+        self.calls: list[tuple[bytes, str]] = []
+
+    async def scan(self, data, *, filename):
+        self.calls.append((data, filename))
+        return self._result
+
+    async def close(self):
+        pass
+
+
+def _build_server_with_scanner(tmp_path, scanner, *, fail_mode="open"):
+    AgentClass = _make_agent_class([], model_name="m1")
+    bytes_dir = str(tmp_path / "files")
+    sqlite_path = str(tmp_path / "agent.db")
+
+    class _A(AgentClass):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.config.server.storage.backend = "sqlite"
+            self.config.server.storage.sqlite_path = sqlite_path
+            self.config.server.files.enabled = True
+            self.config.server.files.bytes_dir = bytes_dir
+            self.config.server.files.backend = "sqlite"
+            self.config.server.files.scanner.fail_mode = fail_mode
+
+    server = OpenAIChatServer(_A)
+    # Replace the scanner that lifespan would create with our fake.
+    # We have to do this _inside_ the TestClient context — see the
+    # individual tests below.
+    server._injected_scanner = scanner  # type: ignore[attr-defined]
+    return server
+
+
+class TestVirusScanningIntegration:
+    def test_clean_upload_succeeds(self, tmp_path):
+        scanner = _FakeScanner(infected=False)
+        server = _build_server_with_scanner(tmp_path, scanner)
+        with TestClient(server.app) as client:
+            server._virus_scanner = scanner  # override after lifespan
+            resp = client.post(
+                "/v1/files",
+                files={"file": ("a.txt", b"hello world", "text/plain")},
+            )
+        assert resp.status_code == 201
+        # Scanner saw the bytes.
+        assert len(scanner.calls) == 1
+        assert scanner.calls[0][0] == b"hello world"
+
+    def test_infected_upload_returns_422(self, tmp_path):
+        scanner = _FakeScanner(infected=True, viruses=["EICAR-Test-File"])
+        server = _build_server_with_scanner(tmp_path, scanner)
+        with TestClient(server.app) as client:
+            server._virus_scanner = scanner
+            resp = client.post(
+                "/v1/files",
+                files={"file": ("evil.bin", b"x5O...", "text/plain")},
+            )
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["detail"]["error"] == "infected"
+        assert body["detail"]["viruses"] == ["EICAR-Test-File"]
+
+    def test_scanner_failure_open_mode_accepts(self, tmp_path):
+        scanner = _FakeScanner(error="connection refused")
+        server = _build_server_with_scanner(tmp_path, scanner, fail_mode="open")
+        with TestClient(server.app) as client:
+            server._virus_scanner = scanner
+            resp = client.post(
+                "/v1/files",
+                files={"file": ("a.txt", b"hello world", "text/plain")},
+            )
+        # Open mode: upload accepted despite scanner failure.
+        assert resp.status_code == 201
+
+    def test_scanner_failure_closed_mode_rejects(self, tmp_path):
+        scanner = _FakeScanner(error="connection refused")
+        server = _build_server_with_scanner(
+            tmp_path, scanner, fail_mode="closed",
+        )
+        with TestClient(server.app) as client:
+            server._virus_scanner = scanner
+            resp = client.post(
+                "/v1/files",
+                files={"file": ("a.txt", b"hello world", "text/plain")},
+            )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["detail"]["error"] == "scanner_unavailable"
+
+    def test_default_no_scanner_url_passes(self, tmp_path):
+        """Without a scanner URL configured, the default NullScanner
+        accepts every upload — no special test setup needed."""
+        server = _build_server_with_files(tmp_path)
+        with TestClient(server.app) as client:
+            resp = client.post(
+                "/v1/files",
+                files={"file": ("a.txt", b"hello world", "text/plain")},
+            )
+        assert resp.status_code == 201

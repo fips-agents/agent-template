@@ -56,6 +56,7 @@ from .files import (
     detect_mime,
 )
 from .parser import FileParser, create_parser
+from .scanner import VirusScanner, create_scanner
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,7 @@ class OpenAIChatServer:
         self._feedback_store: FeedbackStore | None = None
         self._file_store: FileStore | None = None
         self._file_parser: FileParser | None = None
+        self._virus_scanner: VirusScanner | None = None
         self._metrics_collector: Any = None  # Set in lifespan
         self._budget_enforcer: Any = None  # Set in lifespan
         self._housekeeping_task: asyncio.Task | None = None
@@ -232,6 +234,10 @@ class OpenAIChatServer:
         self._file_parser = create_parser(
             enabled=server_cfg.files.enabled,
         )
+        self._virus_scanner = create_scanner(
+            url=server_cfg.files.scanner.url,
+            timeout_seconds=server_cfg.files.scanner.timeout_seconds,
+        )
 
         # Initialize metrics collector.
         self._metrics_collector = create_metrics_collector(
@@ -270,6 +276,7 @@ class OpenAIChatServer:
             await self._trace_store.close()
             await self._feedback_store.close()
             await self._file_store.close()
+            await self._virus_scanner.close()
             if self._sqlite_mgr:
                 await self._sqlite_mgr.close_all()
             self._agent = None
@@ -657,6 +664,36 @@ class OpenAIChatServer:
                     f"MIME type '{mime_type}' is not in the allowlist"
                 ),
             )
+
+        # Virus scan. NullScanner (the default when no URL is
+        # configured) returns clean immediately. HttpScanner posts to
+        # the configured sidecar; on infected → 422, on scanner error
+        # honour fail_mode.
+        if self._virus_scanner is not None:
+            scan = await self._virus_scanner.scan(
+                data, filename=file.filename or "unnamed",
+            )
+            if scan.infected:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "infected",
+                        "viruses": scan.viruses,
+                    },
+                )
+            if scan.error is not None:
+                fail_mode = files_cfg.scanner.fail_mode
+                logger.warning(
+                    "VirusScanner: %s (fail_mode=%s)", scan.error, fail_mode,
+                )
+                if fail_mode == "closed":
+                    raise HTTPException(
+                        status_code=503,
+                        detail={
+                            "error": "scanner_unavailable",
+                            "message": scan.error,
+                        },
+                    )
 
         user_id = request.headers.get("X-Auth-Subject", "anonymous")
         record = FileRecord(

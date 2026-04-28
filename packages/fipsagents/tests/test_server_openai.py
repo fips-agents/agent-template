@@ -97,6 +97,11 @@ class _StubAgent(BaseAgent):
                     allowed_mime_types=[],
                     max_age_hours=720,
                     backend=None,
+                    scanner=types.SimpleNamespace(
+                        url="",
+                        timeout_seconds=30.0,
+                        fail_mode="open",
+                    ),
                 ),
             ),
         )

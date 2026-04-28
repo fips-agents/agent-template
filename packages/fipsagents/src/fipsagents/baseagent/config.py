@@ -467,6 +467,33 @@ class FeedbackConfig(_PerStoreBackendMixin):
     max_age_hours: int = Field(default=720, ge=0)
 
 
+class ScannerConfig(BaseModel):
+    """Virus-scanning sidecar settings.
+
+    The scanner runs between MIME sniffing and parsing on every
+    upload. It speaks HTTP to a sidecar that wraps ClamAV (or any
+    other engine that matches the contract): POST the file bytes,
+    expect a JSON body of ``{"infected": bool, "viruses": [str]}`` or
+    a 200/422 status.
+
+    ``fail_mode`` controls behavior when the scanner sidecar is
+    unreachable or errors:
+
+    - ``open`` (default) — accept the upload and log a warning. Right
+      for non-production / dev environments where occasional sidecar
+      hiccups should not break the API.
+    - ``closed`` — reject the upload with HTTP 503. Right for
+      production where every file must be scanned before storage.
+
+    When ``url`` is empty (default), no scanner is configured and the
+    upload path runs without virus checks.
+    """
+
+    url: str = ""
+    timeout_seconds: float = Field(default=30.0, gt=0.0)
+    fail_mode: Literal["open", "closed"] = "open"
+
+
 class FilesConfig(_PerStoreBackendMixin):
     """File upload settings.
 
@@ -482,6 +509,7 @@ class FilesConfig(_PerStoreBackendMixin):
     bytes_dir: str = "./files"
     allowed_mime_types: list[str] = Field(default_factory=list)
     max_age_hours: int = Field(default=720, ge=0)
+    scanner: ScannerConfig = Field(default_factory=ScannerConfig)
 
 
 class PricingRate(BaseModel):
