@@ -56,6 +56,19 @@ class SessionStore(ABC):
         """
 
     @abstractmethod
+    async def get_cost_data(self, session_id: str) -> dict:
+        """Return the current accumulated ``cost_data`` for a session.
+
+        Symmetric companion to :meth:`update` so callers (notably the
+        server's per-turn cost accumulator) can read the existing totals
+        before computing the next write.
+
+        Returns an empty dict if the session is missing or has no
+        cost_data yet. Backends without a read endpoint (notably the
+        HTTP-backed store) raise :class:`NotImplementedError`.
+        """
+
+    @abstractmethod
     async def delete(self, session_id: str) -> bool:
         """Remove a session. Return True if it existed."""
 
@@ -92,6 +105,9 @@ class NullSessionStore(SessionStore):
         cost_data: dict | None = None,
     ) -> bool:
         return False
+
+    async def get_cost_data(self, session_id: str) -> dict:
+        return {}
 
     async def delete(self, session_id: str) -> bool:
         return False
@@ -213,6 +229,20 @@ CREATE TABLE IF NOT EXISTS sessions (
         await db.commit()
         logger.debug("SqliteSessionStore: updated %s cost_data", session_id)
         return True
+
+    async def get_cost_data(self, session_id: str) -> dict:
+        db = await self._get_db()
+        cursor = await db.execute(
+            "SELECT cost_data FROM sessions WHERE session_id = ?",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return {}
+        try:
+            return json.loads(row[0])
+        except (TypeError, ValueError):
+            return {}
 
     async def delete(self, session_id: str) -> bool:
         db = await self._get_db()
@@ -359,6 +389,26 @@ CREATE TABLE IF NOT EXISTS sessions (
         if updated:
             logger.debug("PostgresSessionStore: updated %s cost_data", session_id)
         return updated
+
+    async def get_cost_data(self, session_id: str) -> dict:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT cost_data FROM sessions WHERE session_id = $1",
+                session_id,
+            )
+        if row is None:
+            return {}
+        cost = row["cost_data"]
+        # asyncpg auto-decodes JSONB to Python objects, but be defensive.
+        if cost is None:
+            return {}
+        if isinstance(cost, str):
+            try:
+                return json.loads(cost)
+            except (TypeError, ValueError):
+                return {}
+        return cost
 
     async def delete(self, session_id: str) -> bool:
         pool = await self._get_pool()

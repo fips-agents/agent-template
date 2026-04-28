@@ -221,6 +221,21 @@ async def test_session_update_none_cost_data_delegates_to_exists() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_get_cost_data_raises_not_implemented() -> None:
+    """The HTTP backend has no GET cost_data endpoint yet -- raise so the
+    server-side accumulator can fall back to a delta-only write."""
+    rec = _Recorder([])
+    store = HttpSessionStore(
+        "http://platform.test", transport=httpx.MockTransport(rec),
+    )
+    with pytest.raises(NotImplementedError):
+        await store.get_cost_data("sess_anything")
+    # No HTTP request should have been issued.
+    assert rec.requests == []
+    await store.close()
+
+
+@pytest.mark.asyncio
 async def test_session_update_5xx_raises() -> None:
     rec = _Recorder([httpx.Response(500, json={"detail": "boom"})])
     store = HttpSessionStore(

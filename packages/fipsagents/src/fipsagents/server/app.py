@@ -558,6 +558,9 @@ class OpenAIChatServer:
             # Session: save after sync response.
             if req.session_id and self._session_store:
                 await self._session_store.save(req.session_id, agent.messages)
+                await self._persist_cost_data(
+                    req.session_id, metrics, model_name,
+                )
             if collector:
                 await collector.end_request()
             if self._metrics_collector and metrics_start is not None:
@@ -677,6 +680,7 @@ class OpenAIChatServer:
             self._agent.messages = list(incoming)
 
             stream_status = "ok"
+            captured_metrics: StreamMetrics | None = None
             try:
                 events = self._agent.astep_stream(max_iterations=10, **(overrides or {}))
                 if self._metrics_collector is not None:
@@ -685,6 +689,18 @@ class OpenAIChatServer:
                     )
                 if collector:
                     events = collector.observe(events)
+
+                # Pass-through observer that snapshots the StreamMetrics
+                # from the StreamComplete event so the post-stream
+                # cost-data accumulator can read them.
+                async def _capture_metrics(stream):
+                    nonlocal captured_metrics
+                    async for ev in stream:
+                        if isinstance(ev, StreamComplete):
+                            captured_metrics = ev.metrics
+                        yield ev
+
+                events = _capture_metrics(events)
                 async for chunk in stream_events_as_sse(
                     events, model_name, trace_id=trace_id,
                 ):
@@ -706,6 +722,70 @@ class OpenAIChatServer:
             # Session: save after streaming completes.
             if session_id and self._session_store:
                 await self._session_store.save(session_id, self._agent.messages)
+                await self._persist_cost_data(
+                    session_id, captured_metrics, model_name,
+                )
+
+    # -- Cost-data accumulator -----------------------------------------------
+
+    async def _persist_cost_data(
+        self,
+        session_id: str,
+        metrics: StreamMetrics | None,
+        model_name: str,
+    ) -> None:
+        """Accumulate this turn's token usage into the session's cost_data.
+
+        Cumulative-for-the-session: read the existing accumulator, add
+        this turn's deltas, write it back. Failures are logged and
+        swallowed -- cost tracking must never break the chat response.
+
+        Backends that don't support reading cost_data (eg
+        :class:`HttpSessionStore`) raise :class:`NotImplementedError`
+        from ``get_cost_data``; in that case we treat the existing
+        total as empty and the next ``update`` records this turn's
+        delta only. A follow-up issue tracks exposing the platform
+        read endpoint so HTTP-backed deployments get cumulative totals.
+        """
+        if metrics is None or self._session_store is None:
+            return
+
+        prompt = metrics.prompt_tokens
+        completion = metrics.completion_tokens
+        # Nothing useful to record when the provider didn't report usage.
+        if prompt is None and completion is None:
+            return
+
+        try:
+            existing = await self._session_store.get_cost_data(session_id)
+        except NotImplementedError:
+            existing = {}
+        except Exception:  # noqa: BLE001 — keep chat response alive
+            logger.warning(
+                "Failed to read cost_data for %s; using empty baseline",
+                session_id,
+                exc_info=True,
+            )
+            existing = {}
+
+        new_data = {
+            "input_tokens": int(existing.get("input_tokens", 0) or 0)
+            + int(prompt or 0),
+            "output_tokens": int(existing.get("output_tokens", 0) or 0)
+            + int(completion or 0),
+            "cached_tokens": int(existing.get("cached_tokens", 0) or 0),
+            "model": model_name or existing.get("model"),
+            "turn_count": int(existing.get("turn_count", 0) or 0) + 1,
+        }
+
+        try:
+            await self._session_store.update(session_id, cost_data=new_data)
+        except Exception:  # noqa: BLE001 — keep chat response alive
+            logger.warning(
+                "Failed to persist cost_data for %s",
+                session_id,
+                exc_info=True,
+            )
 
     # -- Run -----------------------------------------------------------------
 

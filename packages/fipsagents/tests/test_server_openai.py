@@ -854,3 +854,308 @@ def test_create_feedback_rejects_invalid_rating():
 
     with pytest.raises(ValidationError):
         CreateFeedbackRequest(rating=0)
+
+
+# ---------------------------------------------------------------------------
+# Cost-data accumulator (per-turn token usage → SessionStore.update)
+# ---------------------------------------------------------------------------
+
+
+def _build_server_with_sqlite_sessions(tmp_path, events, *, model_name="stub"):
+    """Build a server with sessions enabled and backed by SQLite."""
+    AgentClass = _make_agent_class(events, model_name=model_name)
+    db_path = str(tmp_path / "sessions.db")
+
+    class _A(AgentClass):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.config.server.storage = types.SimpleNamespace(
+                backend="sqlite",
+                sqlite_path=db_path,
+                database_url="",
+                platform_url="",
+                platform_token="",
+            )
+            self.config.server.sessions = types.SimpleNamespace(
+                enabled=True,
+                max_age_hours=0,
+                backend=None,
+            )
+
+    return OpenAIChatServer(_A)
+
+
+def test_cost_data_persisted_across_turns(tmp_path):
+    """Two completions on the same session_id accumulate cumulative totals."""
+    metrics = StreamMetrics(
+        prompt_tokens=10, completion_tokens=4, total_tokens=14,
+    )
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    server = _build_server_with_sqlite_sessions(
+        tmp_path, events, model_name="stub-model",
+    )
+    with TestClient(server.app) as client:
+        # Pre-create the session so the first save's upsert finds it.
+        resp = client.post("/v1/sessions", json={"session_id": "sess_cost"})
+        assert resp.status_code == 201
+
+        for _ in range(2):
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": False,
+                    "session_id": "sess_cost",
+                },
+            )
+            assert resp.status_code == 200
+
+        # Read cost_data directly from the sqlite store to verify.
+        store = server._session_store
+        cost = asyncio.get_event_loop().run_until_complete(
+            store.get_cost_data("sess_cost")
+        )
+
+    assert cost == {
+        "input_tokens": 20,
+        "output_tokens": 8,
+        "cached_tokens": 0,
+        "model": "stub-model",
+        "turn_count": 2,
+    }
+
+
+def test_cost_data_no_session_no_persist(tmp_path):
+    """Without a session_id, update() must not be invoked."""
+    metrics = StreamMetrics(prompt_tokens=10, completion_tokens=4)
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    server = _build_server_with_sqlite_sessions(tmp_path, events)
+
+    with TestClient(server.app) as client:
+        store = server._session_store
+        update_calls: list = []
+        original_update = store.update
+
+        async def _spy(session_id, *, cost_data=None):
+            update_calls.append((session_id, cost_data))
+            return await original_update(session_id, cost_data=cost_data)
+
+        store.update = _spy  # type: ignore[method-assign]
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+        )
+        assert resp.status_code == 200
+
+    assert update_calls == []
+
+
+def test_cost_data_persist_failure_does_not_break_response(tmp_path):
+    """If update() raises, the chat response still completes successfully."""
+    metrics = StreamMetrics(prompt_tokens=10, completion_tokens=4)
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    server = _build_server_with_sqlite_sessions(tmp_path, events)
+
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/sessions", json={"session_id": "sess_boom"},
+        )
+        assert resp.status_code == 201
+
+        async def _boom(session_id, *, cost_data=None):  # noqa: ARG001
+            raise RuntimeError("simulated platform 500")
+
+        server._session_store.update = _boom  # type: ignore[method-assign]
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "session_id": "sess_boom",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["choices"][0]["message"]["content"] == "ok"
+
+
+def test_cost_data_null_session_store_is_noop():
+    """With NullSessionStore (default), the server doesn't crash."""
+    metrics = StreamMetrics(prompt_tokens=10, completion_tokens=4)
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    # _build_server uses the default stub config (sessions disabled,
+    # NullSessionStore). The chat request without a session_id must
+    # succeed.
+    server = _build_server(events)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+        )
+    assert resp.status_code == 200
+    # Even when session_id is provided but store is the Null backend
+    # (sessions disabled in config), no crash.
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "session_id": "sess_anything",
+            },
+        )
+    assert resp.status_code == 200
+
+
+def test_cost_data_persisted_across_streaming_turns(tmp_path):
+    """The streaming path also accumulates per-turn token usage."""
+    metrics = StreamMetrics(
+        prompt_tokens=7, completion_tokens=3, total_tokens=10,
+    )
+    events = [
+        ContentDelta(content="hi"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    server = _build_server_with_sqlite_sessions(
+        tmp_path, events, model_name="stream-stub",
+    )
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/sessions", json={"session_id": "sess_stream"},
+        )
+        assert resp.status_code == 201
+
+        for _ in range(2):
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True,
+                    "session_id": "sess_stream",
+                },
+            )
+            assert resp.status_code == 200
+            # Drain so the streaming task completes before next turn.
+            _ = resp.text
+
+        cost = asyncio.get_event_loop().run_until_complete(
+            server._session_store.get_cost_data("sess_stream")
+        )
+
+    assert cost["input_tokens"] == 14
+    assert cost["output_tokens"] == 6
+    assert cost["turn_count"] == 2
+    assert cost["model"] == "stream-stub"
+
+
+def test_cost_data_no_usage_no_persist(tmp_path):
+    """When the model didn't report usage, no cost_data is written."""
+    # No prompt_tokens / completion_tokens → metrics has all-None counts.
+    metrics = StreamMetrics()
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    server = _build_server_with_sqlite_sessions(tmp_path, events)
+
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/sessions", json={"session_id": "sess_nousage"},
+        )
+        assert resp.status_code == 201
+
+        update_calls: list = []
+        original_update = server._session_store.update
+
+        async def _spy(session_id, *, cost_data=None):
+            update_calls.append((session_id, cost_data))
+            return await original_update(session_id, cost_data=cost_data)
+
+        server._session_store.update = _spy  # type: ignore[method-assign]
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "session_id": "sess_nousage",
+            },
+        )
+        assert resp.status_code == 200
+
+    assert update_calls == []
+
+
+def test_cost_data_http_get_not_implemented_falls_back_to_delta(tmp_path):
+    """When get_cost_data raises NotImplementedError, the next write is the delta only.
+
+    This emulates the HttpSessionStore case until the platform exposes a
+    GET cost_data endpoint. The accumulator must NOT crash; it simply
+    treats the existing total as empty so the write becomes a per-turn
+    delta rather than a true cumulative.
+    """
+    metrics = StreamMetrics(prompt_tokens=10, completion_tokens=4)
+    events = [
+        ContentDelta(content="ok"),
+        StreamComplete(finish_reason="stop", metrics=metrics),
+    ]
+    server = _build_server_with_sqlite_sessions(tmp_path, events)
+
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/sessions", json={"session_id": "sess_http_like"},
+        )
+        assert resp.status_code == 201
+
+        async def _no_read(session_id):  # noqa: ARG001
+            raise NotImplementedError("simulated http backend")
+
+        server._session_store.get_cost_data = _no_read  # type: ignore[method-assign]
+
+        # Two turns: each writes the per-turn delta because the read
+        # raises NotImplementedError. With a real Sqlite backend the
+        # update() path still merges into the row, so we expect two
+        # separate writes that DO accumulate via update()'s shallow
+        # merge -- but turn_count won't be cumulative since we can't
+        # read the prior value. That is the documented behaviour.
+        for _ in range(2):
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": False,
+                    "session_id": "sess_http_like",
+                },
+            )
+            assert resp.status_code == 200
+
+        # Restore the real reader to inspect what actually got written.
+        del server._session_store.get_cost_data  # type: ignore[attr-defined]
+        cost = asyncio.get_event_loop().run_until_complete(
+            server._session_store.get_cost_data("sess_http_like")
+        )
+
+    # Each write replaced (write-wins) the per-turn delta, not the cumulative.
+    assert cost["input_tokens"] == 10
+    assert cost["output_tokens"] == 4
+    assert cost["turn_count"] == 1

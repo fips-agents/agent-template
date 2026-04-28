@@ -69,6 +69,11 @@ class TestNullSessionStore:
         assert await store.update("anything", cost_data={"x": 1}) is False
         assert await store.update("anything") is False
 
+    @pytest.mark.asyncio
+    async def test_get_cost_data_returns_empty_dict(self):
+        store = NullSessionStore()
+        assert await store.get_cost_data("anything") == {}
+
 
 # ---------------------------------------------------------------------------
 # SqliteSessionStore
@@ -247,6 +252,34 @@ class TestSqliteSessionStore:
 
         cost = await self._read_cost_data(sqlite_store, sid)
         assert cost == {"tokens": 100, "usd": 0.01}
+
+    @pytest.mark.asyncio
+    async def test_get_cost_data_empty_by_default(self, sqlite_store):
+        """A freshly created session has no cost_data."""
+        sid = await sqlite_store.create()
+        assert await sqlite_store.get_cost_data(sid) == {}
+
+    @pytest.mark.asyncio
+    async def test_get_cost_data_returns_merged_state(self, sqlite_store):
+        """get_cost_data round-trips the accumulator state."""
+        sid = await sqlite_store.create()
+        await sqlite_store.update(
+            sid, cost_data={"input_tokens": 11, "model": "stub"},
+        )
+        await sqlite_store.update(
+            sid, cost_data={"output_tokens": 5, "model": "stub-2"},
+        )
+        cost = await sqlite_store.get_cost_data(sid)
+        assert cost == {
+            "input_tokens": 11,
+            "output_tokens": 5,
+            "model": "stub-2",
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_cost_data_missing_returns_empty(self, sqlite_store):
+        """An unknown session returns an empty dict, not None."""
+        assert await sqlite_store.get_cost_data("nope") == {}
 
     @pytest.mark.asyncio
     async def test_migration_adds_cost_data_column(self, tmp_path):
