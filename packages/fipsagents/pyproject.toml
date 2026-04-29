@@ -77,6 +77,13 @@ files = [
     # absent: server logs a warning and uses the client-supplied type.
     "python-magic>=0.4.27",
 ]
+s3 = [
+    # S3-compatible object storage for /v1/files bytes (per ADR-0001).
+    # Works against AWS S3, MinIO, GCS S3-mode, Cloudflare R2, and
+    # Backblaze B2. aioboto3 wraps boto3 with async/await; botocore is
+    # a transitive dep used directly for Config/exceptions.
+    "aioboto3>=12.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",

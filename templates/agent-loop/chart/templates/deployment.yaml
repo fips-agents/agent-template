@@ -91,6 +91,43 @@ spec:
               value: {{ printf "%s/.metadata/agent.db" .Values.files.persistence.mountPath | quote }}
             {{- end }}
             {{- end }}
+            {{- if .Values.files.bytesBackend.type }}
+            # S3-compatible bytes backend (per ADR-0001). When set, the
+            # PVC at files.persistence.mountPath becomes redundant for
+            # bytes — keep persistence for the SQLite metadata DB if
+            # backend is sqlite, drop the PVC entirely if backend is
+            # postgres.
+            - name: FILES_BYTES_BACKEND
+              value: {{ .Values.files.bytesBackend.type | quote }}
+            {{- if .Values.files.bytesBackend.bucket }}
+            - name: FILES_S3_BUCKET
+              value: {{ .Values.files.bytesBackend.bucket | quote }}
+            {{- end }}
+            {{- if .Values.files.bytesBackend.endpoint }}
+            - name: FILES_S3_ENDPOINT
+              value: {{ .Values.files.bytesBackend.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.files.bytesBackend.region }}
+            - name: FILES_S3_REGION
+              value: {{ .Values.files.bytesBackend.region | quote }}
+            {{- end }}
+            {{- if .Values.files.bytesBackend.accessKey }}
+            - name: FILES_S3_ACCESS_KEY
+              value: {{ .Values.files.bytesBackend.accessKey | quote }}
+            {{- end }}
+            {{- if .Values.files.bytesBackend.secretKey }}
+            - name: FILES_S3_SECRET_KEY
+              value: {{ .Values.files.bytesBackend.secretKey | quote }}
+            {{- end }}
+            {{- if .Values.files.bytesBackend.prefix }}
+            - name: FILES_S3_PREFIX
+              value: {{ .Values.files.bytesBackend.prefix | quote }}
+            {{- end }}
+            {{- if .Values.files.bytesBackend.pathStyle }}
+            - name: FILES_S3_PATH_STYLE
+              value: "true"
+            {{- end }}
+            {{- end }}
             {{- end }}
           {{- end }}
           {{- if and .Values.files.enabled .Values.files.persistence.enabled }}

@@ -135,6 +135,7 @@ class OpenAIChatServer:
         self._trace_store: TraceStore | None = None
         self._feedback_store: FeedbackStore | None = None
         self._file_store: FileStore | None = None
+        self._bytes_store: Any = None  # BytesStore — owned by us, closed at shutdown
         self._file_parser: FileParser | None = None
         self._virus_scanner: VirusScanner | None = None
         self._metrics_collector: Any = None  # Set in lifespan
@@ -239,11 +240,37 @@ class OpenAIChatServer:
             and self._sqlite_mgr is not None
         ):
             files_sqlite_conn = await self._sqlite_mgr.acquire(files_sqlite_path)
+        # Build the BytesStore from bytes_backend config (per ADR-0001).
+        # Default (type=local_fs) keeps 0.16.0 deployments working.
+        from .bytes_store import create_bytes_store
+        bytes_store = create_bytes_store(
+            server_cfg.files.bytes_backend.type,
+            bytes_dir=server_cfg.files.bytes_dir,
+            s3_bucket=server_cfg.files.bytes_backend.bucket,
+            s3_endpoint=(
+                server_cfg.files.bytes_backend.endpoint or None
+            ),
+            s3_region=server_cfg.files.bytes_backend.region,
+            s3_access_key=(
+                server_cfg.files.bytes_backend.access_key or None
+            ),
+            s3_secret_key=(
+                server_cfg.files.bytes_backend.secret_key or None
+            ),
+            s3_prefix=server_cfg.files.bytes_backend.prefix,
+            s3_path_style=server_cfg.files.bytes_backend.path_style,
+        )
+        # Hold a reference so we can close the bytes store at shutdown.
+        # FileStore.close() only closes BytesStore when it owns the
+        # lifecycle (i.e. was synthesized internally); when we inject
+        # one, ownership stays with the caller.
+        self._bytes_store = bytes_store
         self._file_store = create_file_store(
             files_backend,
             sqlite_path=files_sqlite_path,
             database_url=server_cfg.storage.database_url,
             bytes_dir=server_cfg.files.bytes_dir,
+            bytes_store=bytes_store,
             sqlite_connection=files_sqlite_conn,
         )
         self._file_parser = create_parser(
@@ -291,6 +318,8 @@ class OpenAIChatServer:
             await self._trace_store.close()
             await self._feedback_store.close()
             await self._file_store.close()
+            if self._bytes_store is not None:
+                await self._bytes_store.close()
             await self._virus_scanner.close()
             if self._sqlite_mgr:
                 await self._sqlite_mgr.close_all()
