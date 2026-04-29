@@ -1,6 +1,6 @@
 # ADR-0002: Large-File Chunking and pgvector Retrieval for `/v1/files`
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-04-29
 - **Deciders**: rdwj
 - **Related issues**: [agent-template#100](https://github.com/fips-agents/agent-template/issues/100)
@@ -374,10 +374,23 @@ For green-field deployments: enable `chunking` from day one; no PVC needed for c
 - **Re-embedding on model change.** Operator concern. Document as "delete and re-upload" for now; an online migration tool can be a follow-up.
 - **Chunk-level signed URLs / page references.** The `metadata` JSONB column carries `page_number` / `section_path` from Docling, but exposing them in the API response (e.g. citations like `[doc.pdf, p. 42]`) is a follow-up.
 
+## Decisions
+
+Three open questions were resolved before merge:
+
+1. **`tiktoken` is a soft dep with a char/4 fallback.** `RecursiveTokenChunker` will use `tiktoken` when importable and fall back to a `len(text) // 4` heuristic otherwise. The `[chunking]` extra does not pin `tiktoken` as a hard dep; deployments that want tighter token accounting opt into it via `pip install fipsagents[chunking,tiktoken]` (or just install `tiktoken` directly). Rationale: `tiktoken` pulls Rust extensions that complicate FIPS builds and adds ~5 MB; the heuristic is within ±20% for English-like text and is good enough for chunk-boundary decisions.
+
+2. **`MemoryConfig.budget` drives chunking defaults too.** When `chunking` is enabled and `MemoryConfig.budget` is set, the chunking knobs inherit a preset:
+   - `small` → `chunk_size_tokens: 400`, `retrieval_top_k: 3`, `small_file_threshold_tokens: 2000`
+   - `medium` (default) → `chunk_size_tokens: 600`, `retrieval_top_k: 5`, `small_file_threshold_tokens: 4000`
+   - `large` → `chunk_size_tokens: 800`, `retrieval_top_k: 8`, `small_file_threshold_tokens: 8000`
+
+   Explicit `chunking.*` values always override the preset. Implementation mirrors `_apply_budget_presets` on `MemoryConfig` — a `model_validator(mode="before")` using `data.setdefault()`.
+
+3. **App-level cascade is the contract; no DB-level FK.** `FileStore.delete()` calls `ChunkStore.delete_for_file()` before deleting the metadata row. No foreign key is declared at the database level because metadata may live in SQLite while chunks live in Postgres — a cross-database FK is impossible. The `FileStore.delete()` docstring will document the cascade contract explicitly. Operators running both metadata and chunks in the same Postgres instance may add a manual FK if they want, but the framework does not depend on it.
+
 ## Follow-ups
 
-- File a tracking issue: "feat(server): chunking + pgvector retrieval for /v1/files (closes one bullet of #100)".
-- Decide on `tiktoken` as a hard dep of the `[chunking]` extra vs. a soft dep with a char-count fallback. Lean toward soft dep — `tiktoken` is ~5 MB and pulls Rust extensions which complicate FIPS builds.
+- File a tracking issue: "feat(server): chunking + pgvector retrieval for /v1/files (closes one bullet of #100)". *(Filed as #137.)*
 - Integration test: end-to-end against a containerized Postgres-with-pgvector and the cluster's embedding endpoint. Marker `chunking_live`. Skips when `EMBEDDING_URL` is unset.
 - Update Module 9 of the examples site once shipped: replace "files inject as full text" with "files >4 K tokens are chunked and retrieved per turn".
-- Consider whether `MemoryConfig.budget` (small/medium/large) should also drive chunking defaults — small models should default to `retrieval_top_k: 3` and `chunk_size_tokens: 400`. Probably yes; defer to implementation.
