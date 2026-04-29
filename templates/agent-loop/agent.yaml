@@ -267,7 +267,11 @@ server:
     enabled: ${FILES_ENABLED:-false}
     backend: ${FILES_BACKEND:-}
     max_file_size_bytes: ${FILES_MAX_SIZE_BYTES:-52428800}  # 50 MiB
-    bytes_dir: ./files                                       # sqlite-backend only
+    # bytes_dir is the local-FS path SqliteFileStore / PostgresFileStore
+    # write bytes to. Mount a PVC at this path in production (the Helm
+    # chart sets FILES_BYTES_DIR via files.persistence.mountPath);
+    # without a PVC, uploads are wiped on every pod restart.
+    bytes_dir: ${FILES_BYTES_DIR:-./files}
     max_age_hours: 720                                       # files expire after 30 days
     allowed_mime_types: []
     # Uncomment entries above to restrict at the agent layer:

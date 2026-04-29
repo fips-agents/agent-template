@@ -157,6 +157,26 @@ files:
   # Empty defers to agent.yaml's allowed_mime_types (which itself can be
   # empty, deferring to the gateway's allowlist).
   allowedMime: ""
+  # Persistent volume for the agent's file bytes (`bytes_dir`). Both
+  # `SqliteFileStore` and `PostgresFileStore` write file content to a
+  # local-filesystem path; without a PVC, every pod restart wipes the
+  # uploaded bytes (metadata in Postgres survives; bytes don't).
+  #
+  # Single-replica deployments: ReadWriteOnce is fine.
+  # Multi-replica deployments: requires ReadWriteMany (NFS / CephFS /
+  # cloud-managed RWX). RWO will fail on the second replica's pod
+  # scheduling. The fundamentally cleaner answer is the S3-compatible
+  # bytes backend (see ADR-0001 in docs/adr/) — track agent-template#100.
+  #
+  # When .persistence.enabled, the chart sets FILES_BYTES_DIR on the
+  # agent container so the in-image agent.yaml default of `./files` is
+  # overridden to `mountPath`.
+  persistence:
+    enabled: false
+    size: 5Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    mountPath: /var/lib/agent/files
   # ClamAV sidecar — pre-deployed image with an HTTP shim that the
   # framework's HttpScanner contract expects.
   virusScanner:

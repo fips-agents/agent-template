@@ -255,10 +255,16 @@ def _build_recording_server(tmp_path):
 
 class TestFileIdsInjection:
     def test_inject_unparsed_file_emits_stub(self, tmp_path):
-        # Without docling installed, binary uploads end up in
-        # parse_status="skipped" — the PlaintextParser fall-through
-        # cannot decode them. The injection path treats every
-        # non-completed parse_status as a stub.
+        # The injection path emits a stub for every non-completed parse_status.
+        # The exact terminal status depends on the local environment:
+        #   * Docling missing → PlaintextParser fall-through can't decode the
+        #     PDF magic bytes, parse_status="skipped".
+        #   * Docling present (eg dev machines with the [files] extra
+        #     installed) → DoclingParser tries the truncated payload and
+        #     errors out, parse_status="failed".
+        # Either way the injection contract is the same: a stub that cites
+        # filename + MIME and surfaces parse_status so the LLM knows the
+        # bytes weren't parsed.
         server = _build_recording_server(tmp_path)
         with TestClient(server.app) as client:
             up = client.post(
@@ -283,7 +289,10 @@ class TestFileIdsInjection:
         assert captured[0]["role"] == "system"
         assert "notes.pdf" in captured[0]["content"]
         assert "application/pdf" in captured[0]["content"]
-        assert "parse_status: skipped" in captured[0]["content"]
+        assert (
+            "parse_status: skipped" in captured[0]["content"]
+            or "parse_status: failed" in captured[0]["content"]
+        ), captured[0]["content"]
         assert captured[1]["role"] == "user"
         assert captured[1]["content"] == "Summarise the file."
 

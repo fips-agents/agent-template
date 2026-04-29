@@ -1,3 +1,17 @@
+# Project-level gitleaks config. Run from the repo root so this file is
+# auto-discovered:
+#
+#   gitleaks detect --no-banner --redact
+#
+# When invoking from a subdirectory or CI runner that uses a different
+# working directory, pass the config explicitly:
+#
+#   gitleaks detect --source <repo-root> --config <repo-root>/.gitleaks.toml
+#
+# Running from a subdirectory without --config silently skips the
+# allowlist and surfaces test-fixture fakes in test_tool_inspector.py /
+# test_guardrails.py as false positives.
+
 [allowlist]
   description = "Project-specific allowlist for false positives"
 

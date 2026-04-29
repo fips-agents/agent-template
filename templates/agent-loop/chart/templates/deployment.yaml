@@ -73,7 +73,20 @@ spec:
             - name: FILES_MAX_SIZE_BYTES
               value: {{ .Values.files.maxSizeBytes | quote }}
             {{- end }}
+            {{- if .Values.files.persistence.enabled }}
+            # Override the in-image bytes_dir default so SqliteFileStore /
+            # PostgresFileStore write file bytes to the mounted PVC. Without
+            # this the agent would write to ephemeral container storage and
+            # bytes would be lost on every pod restart.
+            - name: FILES_BYTES_DIR
+              value: {{ .Values.files.persistence.mountPath | quote }}
             {{- end }}
+            {{- end }}
+          {{- end }}
+          {{- if and .Values.files.enabled .Values.files.persistence.enabled }}
+          volumeMounts:
+            - name: files-bytes
+              mountPath: {{ .Values.files.persistence.mountPath | quote }}
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
@@ -209,12 +222,17 @@ spec:
               mountPath: /var/lib/clamav
           {{- end }}
         {{- end }}
-      {{- if or .Values.sandbox.enabled (and .Values.files.enabled .Values.files.virusScanner.enabled .Values.files.virusScanner.persistence.enabled) }}
+      {{- if or .Values.sandbox.enabled (and .Values.files.enabled .Values.files.persistence.enabled) (and .Values.files.enabled .Values.files.virusScanner.enabled .Values.files.virusScanner.persistence.enabled) }}
       volumes:
         {{- if .Values.sandbox.enabled }}
         - name: sandbox-tmp
           emptyDir:
             sizeLimit: 10Mi
+        {{- end }}
+        {{- if and .Values.files.enabled .Values.files.persistence.enabled }}
+        - name: files-bytes
+          persistentVolumeClaim:
+            claimName: {{ include "agent-template.fullname" . }}-files-bytes
         {{- end }}
         {{- if and .Values.files.enabled .Values.files.virusScanner.enabled .Values.files.virusScanner.persistence.enabled }}
         - name: clamav-db
