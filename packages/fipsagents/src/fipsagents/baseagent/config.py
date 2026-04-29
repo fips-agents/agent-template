@@ -523,6 +523,74 @@ class BytesBackendConfig(BaseModel):
     path_style: bool = False
 
 
+class ChunkingConfig(BaseModel):
+    """Large-file chunking + retrieval settings (per ADR-0002).
+
+    When enabled, files whose extracted text exceeds
+    ``small_file_threshold_tokens`` are split into chunks, embedded, and
+    stored in a vector database. At chat-completion time the chunked
+    file's content is retrieved per-query instead of dumping the full
+    text into the prompt — the canonical RAG path scoped to the user's
+    referenced ``file_ids``.
+
+    ``backend: null`` (the default) keeps the 0.17.0 full-text behavior.
+    ``backend: pgvector`` requires ``database_url`` and ``embedding_url``
+    plus the ``[chunking]`` extra installed.
+
+    ``budget`` mirrors :class:`MemoryConfig.budget` — selecting a preset
+    sets sensible defaults for ``chunk_size_tokens``,
+    ``small_file_threshold_tokens``, and ``retrieval_top_k``. Explicit
+    values always override the preset.
+
+    ``chunking.enabled: false`` is the universal default; existing
+    deployments upgrade with no behavior change.
+    """
+
+    _BUDGET_PRESETS: ClassVar[dict[str, dict[str, Any]]] = {
+        "small": {
+            "chunk_size_tokens": 400,
+            "retrieval_top_k": 3,
+            "small_file_threshold_tokens": 2000,
+        },
+        "medium": {
+            "chunk_size_tokens": 600,
+            "retrieval_top_k": 5,
+            "small_file_threshold_tokens": 4000,
+        },
+        "large": {
+            "chunk_size_tokens": 800,
+            "retrieval_top_k": 8,
+            "small_file_threshold_tokens": 8000,
+        },
+    }
+
+    enabled: bool = False
+    backend: Literal["null", "pgvector"] = "null"
+    database_url: str = ""
+    embedding_url: str = ""
+    embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_dimension: int = Field(default=768, gt=0)
+    table_name: str = "file_chunks"
+    budget: Literal["small", "medium", "large", "custom"] | None = None
+    chunk_size_tokens: int = Field(default=600, gt=0)
+    chunk_overlap_tokens: int = Field(default=100, ge=0)
+    small_file_threshold_tokens: int = Field(default=4000, ge=0)
+    retrieval_top_k: int = Field(default=5, ge=1)
+    retrieval_min_score: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_budget_presets(cls, data: Any) -> Any:
+        """Fill in budget-controlled fields the user didn't set."""
+        if not isinstance(data, dict):
+            return data
+        budget = data.get("budget")
+        if budget and budget in cls._BUDGET_PRESETS:
+            for key, val in cls._BUDGET_PRESETS[budget].items():
+                data.setdefault(key, val)
+        return data
+
+
 class FilesConfig(_PerStoreBackendMixin):
     """File upload settings.
 
@@ -539,6 +607,11 @@ class FilesConfig(_PerStoreBackendMixin):
     only — useful when ``bytes_dir`` is on a PVC and the metadata DB
     should be co-located on the same volume (so both bytes and metadata
     survive pod restarts). Empty defers to ``storage.sqlite_path``.
+
+    ``chunking`` is the optional retrieval-augmentation layer (per
+    ADR-0002). Disabled by default; enable to chunk large files at
+    upload time and retrieve only the relevant chunks at chat-completion
+    time instead of injecting the full extracted text.
     """
 
     enabled: bool = False
@@ -549,6 +622,7 @@ class FilesConfig(_PerStoreBackendMixin):
     allowed_mime_types: list[str] = Field(default_factory=list)
     max_age_hours: int = Field(default=720, ge=0)
     scanner: ScannerConfig = Field(default_factory=ScannerConfig)
+    chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
 
 
 class PricingRate(BaseModel):
