@@ -225,12 +225,26 @@ class OpenAIChatServer:
             platform_url=server_cfg.storage.platform_url,
             platform_token=server_cfg.storage.platform_token,
         )
+        files_sqlite_path = (
+            server_cfg.files.sqlite_path
+            or server_cfg.storage.sqlite_path
+        )
+        # When files override storage.sqlite_path, acquire a separate
+        # connection from the manager (it dedupes by resolved path, so
+        # passing the unchanged storage path falls back to sqlite_conn).
+        files_sqlite_conn = sqlite_conn
+        if (
+            files_backend == "sqlite"
+            and server_cfg.files.sqlite_path
+            and self._sqlite_mgr is not None
+        ):
+            files_sqlite_conn = await self._sqlite_mgr.acquire(files_sqlite_path)
         self._file_store = create_file_store(
             files_backend,
-            sqlite_path=server_cfg.storage.sqlite_path,
+            sqlite_path=files_sqlite_path,
             database_url=server_cfg.storage.database_url,
             bytes_dir=server_cfg.files.bytes_dir,
-            sqlite_connection=sqlite_conn,
+            sqlite_connection=files_sqlite_conn,
         )
         self._file_parser = create_parser(
             enabled=server_cfg.files.enabled,
