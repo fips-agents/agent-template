@@ -206,6 +206,35 @@ files:
     secretKey: ""
     prefix: ""                # optional key prefix within the bucket
     pathStyle: false
+  # Large-file chunking + retrieval (per ADR-0002). When enabled, files
+  # whose extracted text exceeds small_file_threshold_tokens are split,
+  # embedded via the configured OpenAI-compatible embedding endpoint,
+  # and stored in pgvector. At chat-completion time the chunked file's
+  # content is retrieved per-query rather than dumped wholesale into the
+  # prompt — the canonical RAG path scoped to the request's file_ids.
+  #
+  # Disabled by default; smaller files always inject as full text.
+  # Enable to opt this deployment into chunking — requires:
+  #   - the [chunking] extra in the container build
+  #   - a reachable pgvector instance (databaseUrl)
+  #   - a reachable OpenAI-compatible embeddings endpoint (embeddingUrl)
+  #
+  # The chart sets CHUNKING_* env vars on the agent container when
+  # enabled; the in-image agent.yaml's files.chunking block resolves
+  # them. Empty values defer to the agent.yaml defaults.
+  #
+  # budget mirrors memory.budget so a deployment using `budget: small`
+  # for memory naturally gets matching chunking defaults — set the same
+  # value here for parity.
+  chunking:
+    enabled: false
+    backend: pgvector            # "" | pgvector | null
+    databaseUrl: ""              # postgresql://user:pass@host:5432/db
+    embeddingUrl: ""             # eg http://embedding.<ns>.svc/v1
+    embeddingModel: ""           # empty defers to agent.yaml default
+    embeddingDimension: ""       # empty defers to agent.yaml default (768)
+    tableName: ""                # empty defers to agent.yaml default
+    budget: ""                   # "" | small | medium | large | custom
   # ClamAV sidecar — pre-deployed image with an HTTP shim that the
   # framework's HttpScanner contract expects.
   virusScanner:

@@ -324,6 +324,60 @@ server:
       timeout_seconds: 30.0
       fail_mode: ${FILES_SCANNER_FAIL_MODE:-open}
 
+    # -- Large-file chunking + retrieval (optional, per ADR-0002) ------------
+    #
+    # When enabled, files whose extracted text exceeds
+    # `small_file_threshold_tokens` are split into chunks, embedded via the
+    # configured OpenAI-compatible embedding endpoint, and stored in
+    # pgvector. At chat-completion time the chunked file's content is
+    # retrieved per-query (top-K nearest chunks scoped to the user's
+    # `file_ids`) instead of dumping the full text into the prompt.
+    #
+    # Disabled by default — flip `enabled: true` and provide a pgvector URL
+    # + embedding endpoint to opt in. Files smaller than the threshold and
+    # files uploaded while chunking is disabled fall back to full-text
+    # injection (the 0.17.0 behaviour).
+    #
+    # `backend: pgvector` requires the [chunking] extra in the container
+    # build (`pip install fipsagents[chunking]`).
+    #
+    # Budget presets parallel `memory.budget` so a deployment using
+    # `${MEMORY_BUDGET}` for memory naturally gets matching chunking
+    # defaults — set `${CHUNKING_BUDGET}` to the same value:
+    #   small   -- chunk_size_tokens=400, retrieval_top_k=3,
+    #              small_file_threshold_tokens=2000
+    #   medium  -- 600 / 5  / 4000     (default sizing)
+    #   large   -- 800 / 8  / 8000
+    #   custom  -- no preset; set the per-tier knobs explicitly
+    #
+    # Production env vars:
+    #   CHUNKING_ENABLED          -- "true" to enable
+    #   CHUNKING_BACKEND          -- "pgvector" (default "null" = disabled)
+    #   PGVECTOR_URL              -- Postgres+pgvector connection string
+    #                                (postgresql://user:pass@host:5432/db)
+    #   EMBEDDING_URL             -- OpenAI-compatible embeddings endpoint
+    #   EMBEDDING_MODEL           -- model identifier passed to the endpoint
+    #   EMBEDDING_DIMENSION       -- vector dim (must match the model)
+    #   CHUNKING_TABLE            -- pgvector table name (default file_chunks)
+    #   CHUNKING_BUDGET           -- "small" | "medium" | "large" | "custom"
+    chunking:
+      enabled: ${CHUNKING_ENABLED:-false}
+      # Quoted so the default stays the literal string "null" — Pydantic's
+      # Literal["null", "pgvector"] rejects YAML's bare null (None).
+      backend: "${CHUNKING_BACKEND:-null}"
+      database_url: "${PGVECTOR_URL:-}"
+      embedding_url: "${EMBEDDING_URL:-}"
+      embedding_model: "${EMBEDDING_MODEL:-all-MiniLM-L6-v2}"
+      embedding_dimension: ${EMBEDDING_DIMENSION:-768}
+      table_name: "${CHUNKING_TABLE:-file_chunks}"
+      # budget: ${CHUNKING_BUDGET:-medium}
+      # Per-tier knobs (override the budget preset):
+      # chunk_size_tokens: 600
+      # chunk_overlap_tokens: 100
+      # small_file_threshold_tokens: 4000
+      # retrieval_top_k: 5
+      # retrieval_min_score: 0.0
+
 # -- Memory backend (optional) -----------------------------------------------
 #
 # Controls which memory backend the agent uses.
