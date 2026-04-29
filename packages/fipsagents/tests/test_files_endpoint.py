@@ -256,7 +256,6 @@ class TestFilesSqlitePathOverride:
         # Default behavior — covered by the existing _build_server_with_files
         # fixture which sets storage.sqlite_path and leaves files.sqlite_path
         # empty. Just confirm uploads land at the storage path.
-        from pathlib import Path
         server = _build_server_with_files(tmp_path)
         storage_db = tmp_path / "agent.db"
         with TestClient(server.app) as client:
