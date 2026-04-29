@@ -278,7 +278,10 @@ server:
     # FILES_SQLITE_DB_PATH=${mountPath}/.metadata/agent.db when
     # files.persistence.enabled and backend is sqlite). Empty defers to
     # storage.sqlite_path.
-    sqlite_path: ${FILES_SQLITE_DB_PATH:-}
+    # Quoted so empty ${VAR:-} yields "" (string), not null —
+    # Pydantic rejects None for str fields. Same caveat applies to
+    # every str-field substitution with an empty default below.
+    sqlite_path: "${FILES_SQLITE_DB_PATH:-}"
     # Bytes-storage backend (per ADR-0001). Composes with the metadata
     # ``backend`` so eg "postgres metadata + S3 bytes" is one config
     # block, not a separate FileStore class.
@@ -296,13 +299,15 @@ server:
     # falls through boto3's default chain when access_key/secret_key
     # are empty (IAM role, env vars, EC2 metadata).
     bytes_backend:
-      type: ${FILES_BYTES_BACKEND:-local_fs}
-      bucket: ${FILES_S3_BUCKET:-}
-      endpoint: ${FILES_S3_ENDPOINT:-}
-      region: ${FILES_S3_REGION:-us-east-1}
-      access_key: ${FILES_S3_ACCESS_KEY:-}
-      secret_key: ${FILES_S3_SECRET_KEY:-}
-      prefix: ${FILES_S3_PREFIX:-}
+      # String fields are quoted so empty ${VAR:-} substitutions yield
+      # "" (string), not null — Pydantic rejects None for str fields.
+      type: "${FILES_BYTES_BACKEND:-local_fs}"
+      bucket: "${FILES_S3_BUCKET:-}"
+      endpoint: "${FILES_S3_ENDPOINT:-}"
+      region: "${FILES_S3_REGION:-us-east-1}"
+      access_key: "${FILES_S3_ACCESS_KEY:-}"
+      secret_key: "${FILES_S3_SECRET_KEY:-}"
+      prefix: "${FILES_S3_PREFIX:-}"
       path_style: ${FILES_S3_PATH_STYLE:-false}
     max_age_hours: 720                                       # files expire after 30 days
     allowed_mime_types: []
