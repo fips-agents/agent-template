@@ -232,9 +232,11 @@ The image is immutable: code, tools, prompts, skills, rules, and `agent.yaml` de
 
 ## File Uploads
 
-Toggle file uploads on by setting `server.files.enabled: true` in `agent.yaml` and adding the `[files]` extra to your container build (`pip install -e .[files]`). The extra pulls in `docling` (text extraction) and `python-magic` (content-based MIME sniffing).
+Toggle file uploads on by setting `server.files.enabled: true` in `agent.yaml` and adding the `[files]` extra to your container build (`pip install -e .[files]`). The extra pulls in `docling` (text extraction) and `python-magic` (content-based MIME sniffing). Note: `[files]` adds ~5 GB to the image because Docling pulls `torch` + `transformers`. If your agent only ingests plain text / Markdown / JSON, leave the extra off — `PlaintextParser` ships in core and covers those formats.
 
 Once enabled, `POST /v1/files` accepts multipart uploads, parses extracted text inline, and persists metadata + bytes to the configured backend. Subsequent `POST /v1/chat/completions` requests can reference uploads by passing `file_ids: ["file_..."]` — the framework injects each file's extracted text into the conversation before the LLM sees the user's prompt.
+
+For production deployments, also enable `files.persistence` in `chart/values.yaml` to mount a PVC at `bytes_dir`. Without one, `SqliteFileStore` and `PostgresFileStore` write file bytes to ephemeral container storage and uploads vanish on every pod restart (Postgres metadata survives; bytes don't). The chart sets `FILES_BYTES_DIR` to the configured `mountPath` so the in-image `agent.yaml` default is overridden. Multi-replica deployments need `accessMode: ReadWriteMany`; the cleaner long-term answer is the S3-compatible bytes backend tracked in `docs/adr/0001-s3-bytes-backend.md`.
 
 To deploy a ClamAV sidecar for virus scanning, set `files.virusScanner.enabled=true` in `chart/values.yaml`. The Helm chart wires the agent's `FILES_SCANNER_URL` env var to `http://localhost:8088/scan` automatically — your sidecar image must expose an HTTP shim that translates the framework's `POST bytes → JSON {infected, viruses}` contract to clamd.
 

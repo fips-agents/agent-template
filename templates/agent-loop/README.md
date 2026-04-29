@@ -155,6 +155,38 @@ make clean PROJECT=my-namespace     # Remove from OpenShift
 `make redeploy` forces OpenShift to pull the latest image and restart pods —
 use this when deploying with the same tag (e.g. `:latest`).
 
+### Image size notes
+
+The base image (no extras) lands around ~1 GB. Extras grow it noticeably:
+
+| Extra | Adds | Why |
+|---|---|---|
+| `[server]` | ~50 MB | FastAPI + uvicorn + aiosqlite |
+| `[metrics]` | ~5 MB | `prometheus_client` |
+| `[otel]` | ~80 MB | OpenTelemetry SDK + OTLP gRPC exporter |
+| **`[files]`** | **~5–6 GB** | **Docling pulls in `torch` + `transformers` for document parsing.** Plain text / Markdown / JSON do not require Docling — leave the extra off if your agent only ingests those formats and rely on the built-in `PlaintextParser`. |
+
+A typical `[server, files]` build lands around 6.5–7 GB. Plan PVC and image-pull
+budgets accordingly; first-pull on a fresh node takes 60–90 s.
+
+### OpenShift binary BuildConfig
+
+The build context ships a `Containerfile` (Podman convention, identical syntax
+to a `Dockerfile`). `oc new-build --binary --strategy=docker` defaults to
+expecting a file literally named `Dockerfile`, so set `dockerfilePath` after
+creating the BuildConfig:
+
+```sh
+oc new-build --binary --strategy=docker --name=$NAME -n $NS
+oc patch bc/$NAME -n $NS --type=merge \
+  -p '{"spec":{"strategy":{"dockerStrategy":{"dockerfilePath":"Containerfile"}}}}'
+oc start-build $NAME -n $NS --from-dir=. --follow
+```
+
+`make build` (Podman locally) and the OpenShift `BuildConfig` rendered by
+the chart already handle this — the snippet above is for ad-hoc binary
+builds (eg cluster smokes).
+
 ## Development Commands
 
 ```sh
