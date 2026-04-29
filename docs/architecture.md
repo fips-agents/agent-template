@@ -524,6 +524,46 @@ Custom backends can be registered via `backend: custom` with a `backend_class` d
 
 For multi-agent deployments with MemoryHub, multiple agents can connect to the same instance. Scope-based visibility (user, project, role, organization, enterprise) and RBAC control which agents can see which memories, enabling shared-memory architectures without coupling the agents to each other.
 
+## File Uploads
+
+`POST /v1/files` accepts multipart uploads, persists each file via the configured `FileStore`, and lets subsequent `/v1/chat/completions` requests reference them by passing `file_ids: ["file_..."]`. The framework injects each file's content into the conversation before the LLM sees the user's prompt. Uploads are an opt-in feature — set `server.files.enabled: true` and install the `[files]` extra to pull in Docling (text extraction) and `python-magic` (content-based MIME sniffing).
+
+### Storage layout (per ADR-0001)
+
+`FileStore` owns metadata; bytes are delegated to a separate `BytesStore`. The two compose:
+
+- **Metadata backends** — `SqliteFileStore` (single-replica dev) or `PostgresFileStore` (production). Both persist `FileRecord` rows: id, filename, MIME, size, status, extracted text, plus chunking lifecycle columns (see below).
+- **Bytes backends** — `LocalFsBytesStore` (sharded local filesystem at `bytes_dir`, single-replica only) or `S3BytesStore` (S3-compatible: AWS S3, MinIO, GCS S3-mode, R2, B2 — multi-replica safe, requires the `[s3]` extra).
+
+The split means "Postgres metadata + S3 bytes" is one config block, not a separate `FileStore` class. `DELETE /v1/files/{id}` cascades through both stores plus the `ChunkStore` (when chunking is enabled) before the metadata row is removed.
+
+### Optional virus scanning
+
+When `scanner.url` is configured, every upload is POSTed to a ClamAV-fronting HTTP sidecar before persistence. The sidecar exposes a `{infected, viruses}` JSON contract. `fail_mode: open` (dev default) accepts uploads when the scanner is unreachable; `fail_mode: closed` (production-recommended) returns 503.
+
+### Large-file chunking + retrieval (per ADR-0002)
+
+Without chunking, every referenced file's full extracted text is injected into the prompt. That works for small files but blows the context window on long PDFs. Chunking turns file references into a per-query retrieval — the canonical RAG path scoped to the request's `file_ids`.
+
+When `server.files.chunking.enabled: true`, the upload pipeline forks at the size threshold:
+
+1. **Small files** (`<= small_file_threshold_tokens`) — full text inlined, identical to the 0.17.0 behaviour.
+2. **Large files** (`> small_file_threshold_tokens`) — `app.py::_chunk_uploaded_file` runs asynchronously after the upload responds. The `Chunker` splits text into overlapping windows, each chunk is embedded via the configured OpenAI-compatible embedding endpoint, and the result is written to the `ChunkStore`. `chunk_status` and `chunk_count` columns on `FileRecord` track lifecycle (`pending` → `in_progress` → `completed` / `failed`).
+
+At chat-completion time, `app.py::_resolve_file_attachments` runs a three-way fork:
+
+- **Chunked + ready** — the user's last message becomes the retrieval query, `chunk_store.search()` returns the top-K nearest chunks for each `file_id`, and only those chunks are injected.
+- **Chunked, not ready** (warm-up window) — falls back to full-text injection so the request still works.
+- **Chunking disabled** — full-text path, unchanged from 0.17.0.
+
+`Chunker` has two implementations: `RecursiveTokenChunker` (token-based splitter, default) and `DoclingChunker` (heading-aware Markdown splitter, auto-selected when the `[files]` extra is installed). `tiktoken` is a soft dep — when unavailable, the chunker falls back to a `len(text)//4` character heuristic, which keeps FIPS-only builds working without a hard dependency on a non-FIPS tokenizer.
+
+`ChunkStore` mirrors the `BytesStore`/`FileStore` ABC pattern: `NullChunkStore` (default, no-op) and `PgvectorChunkStore` (Postgres + pgvector, requires `[chunking]` extra). The pgvector store enforces per-file scoping at retrieval — `file_id` is part of the query predicate, not just a filter — so a chunk uploaded by user A is never surfaced to user B's `file_ids`. That scoping is the auth boundary; there is no separate access-control layer between `chunk_store.search()` and the embedding result.
+
+`ChunkingConfig` carries budget presets parallel to `MemoryConfig`. `budget: small` (chunk 400 tokens / top-K 3 / threshold 2K) suits small-context models; `budget: medium` (600 / 5 / 4K, default sizing) suits 32K–128K models; `budget: large` (800 / 8 / 8K) suits 128K+ models. Explicit per-tier knobs (`chunk_size_tokens`, `chunk_overlap_tokens`, `small_file_threshold_tokens`, `retrieval_top_k`, `retrieval_min_score`) override the preset. `backend: "null"` (the default) preserves the 0.17.0 full-text behaviour; `backend: "pgvector"` requires `database_url` and `embedding_url`.
+
+See [ADR-0002](adr/0002-large-file-chunking-pgvector.md) for the full design discussion: alternatives considered, the per-file-scope auth argument, why the warm-up window falls back to full-text rather than blocking, and what's deferred (reranking, hybrid BM25+vector search, native `HybridChunker` with `DoclingDocument`).
+
 ## Reasoning Extraction
 
 Some models emit chain-of-thought reasoning in the `reasoning_content` delta field (gpt-oss-20b, o-series). Others embed it in the content stream as `<think>…</think>` XML blocks (Granite 3.3, DeepSeek). Without extraction, think tags leak into the user-visible response.
