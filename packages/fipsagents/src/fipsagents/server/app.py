@@ -57,6 +57,12 @@ from .files import (
 )
 from .parser import FileParser, create_parser
 from .scanner import VirusScanner, create_scanner
+from .chunker import Chunker, count_tokens, create_chunker
+from .chunk_store import (
+    ChunkStore,
+    NullChunkStore,
+    create_pgvector_chunk_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +144,9 @@ class OpenAIChatServer:
         self._bytes_store: Any = None  # BytesStore — owned by us, closed at shutdown
         self._file_parser: FileParser | None = None
         self._virus_scanner: VirusScanner | None = None
+        self._chunker: Chunker | None = None
+        self._chunk_store: ChunkStore | None = None
+        self._chunking_tasks: set[asyncio.Task] = set()
         self._metrics_collector: Any = None  # Set in lifespan
         self._budget_enforcer: Any = None  # Set in lifespan
         self._housekeeping_task: asyncio.Task | None = None
@@ -281,6 +290,31 @@ class OpenAIChatServer:
             timeout_seconds=server_cfg.files.scanner.timeout_seconds,
         )
 
+        # Chunking layer (ADR-0002). Always allocate a chunker (cheap)
+        # so the upload path can compute token counts; the chunk_store
+        # only does real work when chunking.enabled and backend=pgvector.
+        chunking_cfg = server_cfg.files.chunking
+        self._chunker = create_chunker(
+            enabled=server_cfg.files.enabled and chunking_cfg.enabled,
+        )
+        if (
+            server_cfg.files.enabled
+            and chunking_cfg.enabled
+            and chunking_cfg.backend == "pgvector"
+        ):
+            self._chunk_store = await create_pgvector_chunk_store(
+                database_url=(
+                    chunking_cfg.database_url
+                    or server_cfg.storage.database_url
+                ),
+                embedding_url=chunking_cfg.embedding_url,
+                embedding_model=chunking_cfg.embedding_model,
+                embedding_dimension=chunking_cfg.embedding_dimension,
+                table_name=chunking_cfg.table_name,
+            )
+        else:
+            self._chunk_store = NullChunkStore()
+
         # Initialize metrics collector.
         self._metrics_collector = create_metrics_collector(
             enabled=server_cfg.metrics.enabled,
@@ -314,10 +348,18 @@ class OpenAIChatServer:
                 except asyncio.CancelledError:
                     pass
             await self._agent.shutdown()
+            # Drain any in-flight async chunking tasks before tearing
+            # down the stores they're writing to.
+            if self._chunking_tasks:
+                pending = list(self._chunking_tasks)
+                self._chunking_tasks.clear()
+                await asyncio.gather(*pending, return_exceptions=True)
             await self._session_store.close()
             await self._trace_store.close()
             await self._feedback_store.close()
             await self._file_store.close()
+            if self._chunk_store is not None:
+                await self._chunk_store.close()
             if self._bytes_store is not None:
                 await self._bytes_store.close()
             await self._virus_scanner.close()
@@ -762,7 +804,36 @@ class OpenAIChatServer:
             record.extracted_text = outcome.text
             record.parse_error = outcome.error
 
+        # Decide chunk_status before persisting so the row reflects what
+        # is about to happen. The actual chunking runs after save() in a
+        # background task (ADR-0002 lifecycle).
+        chunking_cfg = files_cfg.chunking
+        chunk_threshold = chunking_cfg.small_file_threshold_tokens
+        will_chunk = (
+            chunking_cfg.enabled
+            and not isinstance(self._chunk_store, NullChunkStore)
+            and record.extracted_text is not None
+            and count_tokens(record.extracted_text) > chunk_threshold
+        )
+        if will_chunk:
+            record.chunk_status = "processing"
+        elif record.extracted_text is not None:
+            # Below threshold or chunking disabled — full-text path.
+            record.chunk_status = "skipped"
+        # else: leave the default "pending" — no extracted text means
+        # the chunking decision is moot.
+
         await self._file_store.save(record, data)
+
+        # Kick off async chunking. The handle is held in
+        # ``_chunking_tasks`` so the lifespan shutdown can drain it.
+        if will_chunk:
+            task = asyncio.create_task(
+                self._chunk_uploaded_file(record),
+                name=f"chunk_file_{record.file_id}",
+            )
+            self._chunking_tasks.add(task)
+            task.add_done_callback(self._chunking_tasks.discard)
 
         return JSONResponse(
             {
@@ -773,11 +844,80 @@ class OpenAIChatServer:
                 "sha256": record.sha256,
                 "parse_status": record.parse_status,
                 "parse_error": record.parse_error,
+                "chunk_status": record.chunk_status,
+                "chunk_count": record.chunk_count,
                 "session_id": record.session_id,
                 "created_at": record.created_at,
             },
             status_code=201,
         )
+
+    async def _chunk_uploaded_file(self, record: FileRecord) -> None:
+        """Async chunk + embed task spawned from ``_upload_file``.
+
+        Writes status transitions back to the file store so a polling
+        client (or the chat-completion retrieval path) can see when
+        chunks become available. Failures are logged and recorded as
+        ``chunk_status: failed`` — they do not propagate to the upload
+        response (which already 201-ed).
+        """
+        if (
+            self._chunker is None
+            or self._chunk_store is None
+            or self._file_store is None
+        ):
+            return
+        if not record.extracted_text:
+            return
+        chunking_cfg = self._agent.config.server.files.chunking  # type: ignore[union-attr]
+        try:
+            chunks = await self._chunker.chunk(
+                record.extracted_text,
+                chunk_size_tokens=chunking_cfg.chunk_size_tokens,
+                chunk_overlap_tokens=chunking_cfg.chunk_overlap_tokens,
+            )
+            if not chunks:
+                await self._file_store.update_chunk_status(
+                    record.file_id,
+                    chunk_status="skipped",
+                    chunk_count=0,
+                )
+                return
+            written = await self._chunk_store.save_chunks(
+                record.file_id,
+                chunks,
+                user_id=record.user_id,
+                session_id=record.session_id,
+            )
+            if written > 0:
+                await self._file_store.update_chunk_status(
+                    record.file_id,
+                    chunk_status="completed",
+                    chunk_count=written,
+                )
+            else:
+                await self._file_store.update_chunk_status(
+                    record.file_id,
+                    chunk_status="failed",
+                    chunk_count=0,
+                )
+        except Exception:
+            logger.warning(
+                "Chunking failed for file_id=%s — falling back to full-text",
+                record.file_id,
+                exc_info=True,
+            )
+            try:
+                await self._file_store.update_chunk_status(
+                    record.file_id,
+                    chunk_status="failed",
+                    chunk_count=0,
+                )
+            except Exception:  # pragma: no cover — defensive
+                logger.debug(
+                    "Could not write chunk_status=failed for %s",
+                    record.file_id, exc_info=True,
+                )
 
     async def _get_file(self, file_id: str):
         """Return file metadata. 404 if not found or store disabled."""
@@ -803,6 +943,21 @@ class OpenAIChatServer:
             raise HTTPException(
                 status_code=404, detail="File uploads are not enabled",
             )
+        # ADR-0002 cascade: drop chunks before metadata so a user
+        # observing concurrent operations never sees orphan chunks
+        # outliving their parent file. Best-effort — failures are
+        # logged but do not block the metadata delete (the cascade is
+        # also re-run by housekeeping over time).
+        if self._chunk_store is not None and not isinstance(
+            self._chunk_store, NullChunkStore,
+        ):
+            try:
+                await self._chunk_store.delete_for_file(file_id)
+            except Exception:
+                logger.warning(
+                    "ChunkStore: cascade delete failed for %s",
+                    file_id, exc_info=True,
+                )
         deleted = await self._file_store.delete(file_id)
         if not deleted:
             raise HTTPException(
@@ -843,25 +998,46 @@ class OpenAIChatServer:
         return JSONResponse([asdict(r) for r in records])
 
     async def _resolve_file_attachments(
-        self, file_ids: list[str],
+        self,
+        file_ids: list[str],
+        *,
+        last_user_message: str = "",
     ) -> list[dict[str, Any]]:
-        """Fetch each file's extracted text and produce system messages.
+        """Fetch each file's content and produce system messages.
 
-        Files with completed extraction are injected as full content;
-        files in pending / processing / failed / skipped states are
-        injected as a stub noting filename, MIME type, and parse status
-        so the model can acknowledge the attachment without
-        hallucinating content. Unknown ``file_id`` values raise HTTP 400
-        — the caller controls the list and a missing reference is
-        always a client bug.
+        Three branches per file (ADR-0002):
+
+        - Chunked path: when chunking is enabled, the file has finished
+          chunking (``chunk_count > 0``), and ``last_user_message`` is
+          non-empty, retrieve top-K chunks via the configured
+          ``ChunkStore`` and inject only those.
+        - Full-text path: the existing 0.17.0 behavior — inject the
+          whole ``extracted_text``. Used when chunking is disabled, the
+          file is below the size threshold, chunking is still in
+          progress (warm-up window), or chunking failed (graceful
+          degradation).
+        - Stub path: file has no extracted text yet (parse pending /
+          failed / skipped) — inject a "content not available" note.
+
+        Unknown ``file_id`` values raise HTTP 400 — the caller controls
+        the list and a missing reference is always a client bug.
         """
         if self._file_store is None or self._agent is None:
             raise HTTPException(status_code=503, detail="Server not ready")
-        if not self._agent.config.server.files.enabled:
+        files_cfg = self._agent.config.server.files
+        if not files_cfg.enabled:
             raise HTTPException(
                 status_code=400,
                 detail="file_ids supplied but file uploads are not enabled",
             )
+
+        chunking_cfg = files_cfg.chunking
+        chunked_enabled = (
+            chunking_cfg.enabled
+            and self._chunk_store is not None
+            and not isinstance(self._chunk_store, NullChunkStore)
+            and bool(last_user_message)
+        )
 
         messages: list[dict[str, Any]] = []
         for fid in file_ids:
@@ -875,6 +1051,30 @@ class OpenAIChatServer:
                 f"[Attached file: {record.filename} "
                 f"({record.mime_type}, {record.size_bytes} bytes)]"
             )
+
+            # Chunked retrieval branch.
+            if (
+                chunked_enabled
+                and record.chunk_count > 0
+                and record.chunk_status == "completed"
+                and self._chunk_store is not None
+            ):
+                chunks = await self._chunk_store.search(
+                    fid,
+                    last_user_message,
+                    limit=chunking_cfg.retrieval_top_k,
+                    min_score=chunking_cfg.retrieval_min_score,
+                )
+                if chunks:
+                    body = "\n---\n".join(c.content for c in chunks)
+                    messages.append({
+                        "role": "system",
+                        "content": f"{header}\n{body}",
+                    })
+                    continue
+                # No matches — fall through to full-text rather than
+                # leaving the model with nothing.
+
             if record.extracted_text:
                 messages.append({
                     "role": "system",
@@ -958,7 +1158,20 @@ class OpenAIChatServer:
         # as system messages just before the current user turn so the
         # model treats them as context for this request.
         if req.file_ids:
-            file_msgs = await self._resolve_file_attachments(req.file_ids)
+            # Pull the last user message text so chunk retrieval has a
+            # query. Fall back to an empty string when the request has
+            # no user-role message (e.g. system-only payloads) — the
+            # resolver then takes the full-text branch.
+            last_user = ""
+            for msg in reversed(incoming):
+                if msg.get("role") == "user":
+                    content = msg.get("content")
+                    if isinstance(content, str):
+                        last_user = content
+                    break
+            file_msgs = await self._resolve_file_attachments(
+                req.file_ids, last_user_message=last_user,
+            )
             if file_msgs:
                 # Insert before the last incoming message (the user's
                 # current turn) so prior session history retains its

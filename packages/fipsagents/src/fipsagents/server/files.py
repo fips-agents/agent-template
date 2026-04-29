@@ -112,6 +112,7 @@ def _get_magic_module():
 
 
 ParseStatus = Literal["pending", "processing", "completed", "failed", "skipped"]
+ChunkStatus = Literal["pending", "processing", "completed", "failed", "skipped"]
 
 
 @dataclass
@@ -130,6 +131,16 @@ class FileRecord:
     - ``completed``  — ``extracted_text`` is populated
     - ``failed``     — ``parse_error`` is populated
     - ``skipped``    — file type intentionally not parsed (binary, unknown)
+
+    ``chunk_status`` lifecycle (ADR-0002):
+
+    - ``pending``    — chunking not yet attempted (default; also when
+                       chunking is disabled in config)
+    - ``processing`` — async chunking in flight after upload
+    - ``completed``  — chunks written to ChunkStore; ``chunk_count > 0``
+    - ``failed``     — chunking attempted but raised
+    - ``skipped``    — file is below ``small_file_threshold_tokens`` and
+                       takes the full-text path; ``chunk_count == 0``
     """
 
     file_id: str
@@ -142,6 +153,8 @@ class FileRecord:
     extracted_text: str | None = None
     parse_status: ParseStatus = "pending"
     parse_error: str | None = None
+    chunk_status: ChunkStatus = "pending"
+    chunk_count: int = 0
     created_at: str = field(default_factory=_utc_now_iso)
     deleted_at: str | None = None
 
@@ -187,6 +200,21 @@ class FileStore(ABC):
         parse_error: str | None = None,
     ) -> bool:
         """Update parse-result fields. Returns True if the file existed."""
+
+    @abstractmethod
+    async def update_chunk_status(
+        self,
+        file_id: str,
+        *,
+        chunk_status: ChunkStatus | None = None,
+        chunk_count: int | None = None,
+    ) -> bool:
+        """Update chunk-result fields (ADR-0002).
+
+        Called by the server's async chunking task when it transitions
+        a file from ``processing`` → ``completed`` (or ``failed``).
+        Returns True when the file existed.
+        """
 
     @abstractmethod
     async def list_for_session(
@@ -241,6 +269,15 @@ class NullFileStore(FileStore):
     ) -> bool:
         return False
 
+    async def update_chunk_status(
+        self,
+        file_id: str,
+        *,
+        chunk_status: ChunkStatus | None = None,
+        chunk_count: int | None = None,
+    ) -> bool:
+        return False
+
     async def list_for_session(
         self,
         session_id: str,
@@ -282,6 +319,8 @@ CREATE TABLE IF NOT EXISTS files (
     extracted_text   TEXT,
     parse_status     TEXT NOT NULL DEFAULT 'pending',
     parse_error      TEXT,
+    chunk_status     TEXT NOT NULL DEFAULT 'pending',
+    chunk_count      INTEGER NOT NULL DEFAULT 0,
     bytes_path       TEXT NOT NULL,
     created_at       TEXT NOT NULL,
     deleted_at       TEXT
@@ -291,6 +330,17 @@ CREATE TABLE IF NOT EXISTS files (
     )
     _CREATE_INDEX_CREATED = (
         "CREATE INDEX IF NOT EXISTS idx_files_created ON files (created_at)"
+    )
+    # ADR-0002: chunk_status / chunk_count are added via ALTER for tables
+    # created on 0.16.0 / 0.17.0.  SQLite has no IF NOT EXISTS for ADD
+    # COLUMN, so we probe with PRAGMA table_info before applying.
+    _MIGRATIONS = (
+        ("chunk_status",
+         "ALTER TABLE files ADD COLUMN chunk_status TEXT NOT NULL "
+         "DEFAULT 'pending'"),
+        ("chunk_count",
+         "ALTER TABLE files ADD COLUMN chunk_count INTEGER NOT NULL "
+         "DEFAULT 0"),
     )
 
     def __init__(
@@ -330,6 +380,12 @@ CREATE TABLE IF NOT EXISTS files (
         await db.execute(self._CREATE_TABLE)
         await db.execute(self._CREATE_INDEX_SESSION)
         await db.execute(self._CREATE_INDEX_CREATED)
+        # Migrate older tables to the ADR-0002 columns when missing.
+        cursor = await db.execute("PRAGMA table_info(files)")
+        existing = {row[1] for row in await cursor.fetchall()}
+        for column, ddl in self._MIGRATIONS:
+            if column not in existing:
+                await db.execute(ddl)
         await db.commit()
         self._initialized = True
 
@@ -363,8 +419,9 @@ CREATE TABLE IF NOT EXISTS files (
             "INSERT INTO files ("
             "  file_id, session_id, user_id, filename, mime_type, "
             "  size_bytes, sha256, extracted_text, parse_status, "
-            "  parse_error, bytes_path, created_at, deleted_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  parse_error, chunk_status, chunk_count, bytes_path, "
+            "  created_at, deleted_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record.file_id,
                 record.session_id,
@@ -376,6 +433,8 @@ CREATE TABLE IF NOT EXISTS files (
                 record.extracted_text,
                 record.parse_status,
                 record.parse_error,
+                record.chunk_status,
+                record.chunk_count,
                 record.file_id,
                 record.created_at,
                 record.deleted_at,
@@ -393,7 +452,8 @@ CREATE TABLE IF NOT EXISTS files (
         cursor = await db.execute(
             "SELECT file_id, session_id, user_id, filename, mime_type, "
             "       size_bytes, sha256, extracted_text, parse_status, "
-            "       parse_error, created_at, deleted_at "
+            "       parse_error, chunk_status, chunk_count, "
+            "       created_at, deleted_at "
             "FROM files WHERE file_id = ? AND deleted_at IS NULL",
             (file_id,),
         )
@@ -411,8 +471,10 @@ CREATE TABLE IF NOT EXISTS files (
             extracted_text=row[7],
             parse_status=row[8],
             parse_error=row[9],
-            created_at=row[10],
-            deleted_at=row[11],
+            chunk_status=row[10],
+            chunk_count=row[11],
+            created_at=row[12],
+            deleted_at=row[13],
         )
 
     async def get_bytes(self, file_id: str) -> bytes | None:
@@ -498,7 +560,8 @@ CREATE TABLE IF NOT EXISTS files (
         cursor = await db.execute(
             "SELECT file_id, session_id, user_id, filename, mime_type, "
             "       size_bytes, sha256, extracted_text, parse_status, "
-            "       parse_error, created_at, deleted_at "
+            "       parse_error, chunk_status, chunk_count, "
+            "       created_at, deleted_at "
             "FROM files "
             "WHERE session_id = ? AND deleted_at IS NULL "
             "ORDER BY created_at DESC "
@@ -518,11 +581,42 @@ CREATE TABLE IF NOT EXISTS files (
                 extracted_text=r[7],
                 parse_status=r[8],
                 parse_error=r[9],
-                created_at=r[10],
-                deleted_at=r[11],
+                chunk_status=r[10],
+                chunk_count=r[11],
+                created_at=r[12],
+                deleted_at=r[13],
             )
             for r in rows
         ]
+
+    async def update_chunk_status(
+        self,
+        file_id: str,
+        *,
+        chunk_status: ChunkStatus | None = None,
+        chunk_count: int | None = None,
+    ) -> bool:
+        if chunk_status is None and chunk_count is None:
+            return await self._exists(file_id)
+
+        sets: list[str] = []
+        params: list[Any] = []
+        if chunk_status is not None:
+            sets.append("chunk_status = ?")
+            params.append(chunk_status)
+        if chunk_count is not None:
+            sets.append("chunk_count = ?")
+            params.append(chunk_count)
+        params.append(file_id)
+
+        db = await self._get_db()
+        cursor = await db.execute(
+            f"UPDATE files SET {', '.join(sets)} "
+            "WHERE file_id = ? AND deleted_at IS NULL",
+            tuple(params),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
     async def delete(self, file_id: str) -> bool:
         db = await self._get_db()
@@ -614,6 +708,8 @@ CREATE TABLE IF NOT EXISTS files (
     extracted_text   TEXT,
     parse_status     TEXT NOT NULL DEFAULT 'pending',
     parse_error      TEXT,
+    chunk_status     TEXT NOT NULL DEFAULT 'pending',
+    chunk_count      INTEGER NOT NULL DEFAULT 0,
     bytes_path       TEXT NOT NULL,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     deleted_at       TIMESTAMPTZ
@@ -623,6 +719,13 @@ CREATE TABLE IF NOT EXISTS files (
     )
     _CREATE_INDEX_CREATED = (
         "CREATE INDEX IF NOT EXISTS idx_files_created ON files (created_at)"
+    )
+    # ADR-0002: idempotent migrations for tables created on 0.16.0/0.17.0.
+    _MIGRATIONS = (
+        "ALTER TABLE files ADD COLUMN IF NOT EXISTS chunk_status TEXT "
+        "NOT NULL DEFAULT 'pending'",
+        "ALTER TABLE files ADD COLUMN IF NOT EXISTS chunk_count INTEGER "
+        "NOT NULL DEFAULT 0",
     )
 
     def __init__(
@@ -658,6 +761,8 @@ CREATE TABLE IF NOT EXISTS files (
             await conn.execute(self._CREATE_TABLE)
             await conn.execute(self._CREATE_INDEX_SESSION)
             await conn.execute(self._CREATE_INDEX_CREATED)
+            for stmt in self._MIGRATIONS:
+                await conn.execute(stmt)
         self._initialized = True
 
     async def save(self, record: FileRecord, data: bytes) -> str:
@@ -696,9 +801,11 @@ CREATE TABLE IF NOT EXISTS files (
                 "INSERT INTO files ("
                 "  file_id, session_id, user_id, filename, mime_type, "
                 "  size_bytes, sha256, extracted_text, parse_status, "
-                "  parse_error, bytes_path, created_at, deleted_at"
+                "  parse_error, chunk_status, chunk_count, bytes_path, "
+                "  created_at, deleted_at"
                 ") VALUES "
-                "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, "
+                " $13, $14, $15)",
                 record.file_id,
                 record.session_id,
                 record.user_id,
@@ -709,6 +816,8 @@ CREATE TABLE IF NOT EXISTS files (
                 record.extracted_text,
                 record.parse_status,
                 record.parse_error,
+                record.chunk_status,
+                record.chunk_count,
                 record.file_id,
                 created_at,
                 deleted_at,
@@ -725,7 +834,8 @@ CREATE TABLE IF NOT EXISTS files (
             row = await conn.fetchrow(
                 "SELECT file_id, session_id, user_id, filename, mime_type, "
                 "       size_bytes, sha256, extracted_text, parse_status, "
-                "       parse_error, created_at, deleted_at "
+                "       parse_error, chunk_status, chunk_count, "
+                "       created_at, deleted_at "
                 "FROM files WHERE file_id = $1 AND deleted_at IS NULL",
                 file_id,
             )
@@ -742,6 +852,8 @@ CREATE TABLE IF NOT EXISTS files (
             extracted_text=row["extracted_text"],
             parse_status=row["parse_status"],
             parse_error=row["parse_error"],
+            chunk_status=row["chunk_status"],
+            chunk_count=row["chunk_count"],
             created_at=_iso(row["created_at"]),
             deleted_at=_iso(row["deleted_at"]),
         )
@@ -831,7 +943,8 @@ CREATE TABLE IF NOT EXISTS files (
             rows = await conn.fetch(
                 "SELECT file_id, session_id, user_id, filename, mime_type, "
                 "       size_bytes, sha256, extracted_text, parse_status, "
-                "       parse_error, created_at, deleted_at "
+                "       parse_error, chunk_status, chunk_count, "
+                "       created_at, deleted_at "
                 "FROM files "
                 "WHERE session_id = $1 AND deleted_at IS NULL "
                 "ORDER BY created_at DESC "
@@ -850,11 +963,41 @@ CREATE TABLE IF NOT EXISTS files (
                 extracted_text=r["extracted_text"],
                 parse_status=r["parse_status"],
                 parse_error=r["parse_error"],
+                chunk_status=r["chunk_status"],
+                chunk_count=r["chunk_count"],
                 created_at=_iso(r["created_at"]),
                 deleted_at=_iso(r["deleted_at"]),
             )
             for r in rows
         ]
+
+    async def update_chunk_status(
+        self,
+        file_id: str,
+        *,
+        chunk_status: ChunkStatus | None = None,
+        chunk_count: int | None = None,
+    ) -> bool:
+        if chunk_status is None and chunk_count is None:
+            return await self._exists(file_id)
+
+        sets: list[str] = []
+        params: list[Any] = []
+        if chunk_status is not None:
+            sets.append(f"chunk_status = ${len(params) + 2}")
+            params.append(chunk_status)
+        if chunk_count is not None:
+            sets.append(f"chunk_count = ${len(params) + 2}")
+            params.append(chunk_count)
+
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                f"UPDATE files SET {', '.join(sets)} "
+                "WHERE file_id = $1 AND deleted_at IS NULL",
+                file_id, *params,
+            )
+        return not result.endswith("0")
 
     async def delete(self, file_id: str) -> bool:
         pool = await self._get_pool()
