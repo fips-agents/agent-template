@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from .bytes_store import BytesStore, LocalFsBytesStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -296,10 +298,20 @@ CREATE TABLE IF NOT EXISTS files (
         db_path: str = "./agent.db",
         *,
         bytes_dir: str = "./files",
+        bytes_store: BytesStore | None = None,
         connection: Any = None,
     ) -> None:
         self._db_path = db_path
         self._bytes_dir = bytes_dir
+        # When the caller passes their own bytes_store we don't own
+        # its lifecycle. When we synthesize one from bytes_dir we close
+        # it on shutdown.
+        if bytes_store is None:
+            self._bytes_store: BytesStore = LocalFsBytesStore(bytes_dir)
+            self._owns_bytes_store = True
+        else:
+            self._bytes_store = bytes_store
+            self._owns_bytes_store = False
         self._db: Any = connection
         self._managed = connection is not None
         self._initialized = False
@@ -319,7 +331,6 @@ CREATE TABLE IF NOT EXISTS files (
         await db.execute(self._CREATE_INDEX_SESSION)
         await db.execute(self._CREATE_INDEX_CREATED)
         await db.commit()
-        os.makedirs(self._bytes_dir, exist_ok=True)
         self._initialized = True
 
     async def save(self, record: FileRecord, data: bytes) -> str:
@@ -337,14 +348,16 @@ CREATE TABLE IF NOT EXISTS files (
         # Trust caller-provided sha256 if present, else fill it in.
         sha = record.sha256 or actual_sha
 
-        path = _bytes_path(self._bytes_dir, record.file_id)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        # Write to a temp file then rename for atomicity.
-        tmp = f"{path}.tmp"
-        with open(tmp, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, path)
+        # Write bytes first; if metadata insert fails we have an
+        # orphan in BytesStore (mitigated by housekeeping). The reverse
+        # would orphan the metadata pointing at nothing.
+        await self._bytes_store.put(
+            record.file_id, data, content_type=record.mime_type,
+        )
 
+        # bytes_path is vestigial post-ADR-0001 — kept NOT NULL so old
+        # rows don't break; populated with file_id so the column has
+        # something meaningful when humans inspect the table.
         db = await self._get_db()
         await db.execute(
             "INSERT INTO files ("
@@ -363,7 +376,7 @@ CREATE TABLE IF NOT EXISTS files (
                 record.extracted_text,
                 record.parse_status,
                 record.parse_error,
-                path,
+                record.file_id,
                 record.created_at,
                 record.deleted_at,
             ),
@@ -405,23 +418,21 @@ CREATE TABLE IF NOT EXISTS files (
     async def get_bytes(self, file_id: str) -> bytes | None:
         db = await self._get_db()
         cursor = await db.execute(
-            "SELECT bytes_path FROM files "
+            "SELECT 1 FROM files "
             "WHERE file_id = ? AND deleted_at IS NULL",
             (file_id,),
         )
         row = await cursor.fetchone()
         if row is None:
             return None
-        path = row[0]
-        try:
-            with open(path, "rb") as fh:
-                return fh.read()
-        except FileNotFoundError:
+        data = await self._bytes_store.get(file_id)
+        if data is None:
             logger.warning(
-                "SqliteFileStore: metadata for %s exists but bytes missing at %s",
-                file_id, path,
+                "SqliteFileStore: metadata for %s exists but bytes "
+                "missing in BytesStore",
+                file_id,
             )
-            return None
+        return data
 
     async def get_extracted_text(self, file_id: str) -> str | None:
         db = await self._get_db()
@@ -516,43 +527,43 @@ CREATE TABLE IF NOT EXISTS files (
     async def delete(self, file_id: str) -> bool:
         db = await self._get_db()
         cursor = await db.execute(
-            "SELECT bytes_path FROM files "
+            "SELECT 1 FROM files "
             "WHERE file_id = ? AND deleted_at IS NULL",
             (file_id,),
         )
         row = await cursor.fetchone()
         if row is None:
             return False
-        path = row[0]
         await db.execute("DELETE FROM files WHERE file_id = ?", (file_id,))
         await db.commit()
+        # Best-effort bytes delete; if the bytes are already gone we
+        # still consider the metadata-side delete a success.
         try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-        # Best-effort: remove the shard dir if it's now empty.
-        shard_dir = os.path.dirname(path)
-        try:
-            if shard_dir and shard_dir != self._bytes_dir:
-                os.rmdir(shard_dir)
-        except OSError:
-            pass
+            await self._bytes_store.delete(file_id)
+        except Exception:
+            logger.warning(
+                "SqliteFileStore: bytes_store.delete failed for %s",
+                file_id, exc_info=True,
+            )
         return True
 
     async def delete_before(self, cutoff: datetime) -> int:
         db = await self._get_db()
         cursor = await db.execute(
-            "SELECT file_id, bytes_path FROM files WHERE created_at < ?",
+            "SELECT file_id FROM files WHERE created_at < ?",
             (cutoff.isoformat(),),
         )
         rows = await cursor.fetchall()
         if not rows:
             return 0
-        for _, path in rows:
+        for (fid,) in rows:
             try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
+                await self._bytes_store.delete(fid)
+            except Exception:
+                logger.warning(
+                    "SqliteFileStore: housekeeping bytes_store.delete failed "
+                    "for %s", fid, exc_info=True,
+                )
         await db.execute(
             "DELETE FROM files WHERE created_at < ?",
             (cutoff.isoformat(),),
@@ -570,6 +581,8 @@ CREATE TABLE IF NOT EXISTS files (
             await self._db.close()
             self._db = None
             self._initialized = False
+        if self._owns_bytes_store:
+            await self._bytes_store.close()
 
 
 # ---------------------------------------------------------------------------
@@ -612,9 +625,21 @@ CREATE TABLE IF NOT EXISTS files (
         "CREATE INDEX IF NOT EXISTS idx_files_created ON files (created_at)"
     )
 
-    def __init__(self, database_url: str, *, bytes_dir: str = "./files") -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        bytes_dir: str = "./files",
+        bytes_store: BytesStore | None = None,
+    ) -> None:
         self._database_url = database_url
         self._bytes_dir = bytes_dir
+        if bytes_store is None:
+            self._bytes_store: BytesStore = LocalFsBytesStore(bytes_dir)
+            self._owns_bytes_store = True
+        else:
+            self._bytes_store = bytes_store
+            self._owns_bytes_store = False
         self._pool: Any = None  # asyncpg.Pool
         self._initialized = False
 
@@ -633,7 +658,6 @@ CREATE TABLE IF NOT EXISTS files (
             await conn.execute(self._CREATE_TABLE)
             await conn.execute(self._CREATE_INDEX_SESSION)
             await conn.execute(self._CREATE_INDEX_CREATED)
-        os.makedirs(self._bytes_dir, exist_ok=True)
         self._initialized = True
 
     async def save(self, record: FileRecord, data: bytes) -> str:
@@ -650,12 +674,12 @@ CREATE TABLE IF NOT EXISTS files (
             )
         sha = record.sha256 or actual_sha
 
-        path = _bytes_path(self._bytes_dir, record.file_id)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = f"{path}.tmp"
-        with open(tmp, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, path)
+        # Bytes first; orphan bytes on metadata-insert failure are
+        # mitigated by housekeeping. Reverse order would orphan
+        # metadata pointing at nothing.
+        await self._bytes_store.put(
+            record.file_id, data, content_type=record.mime_type,
+        )
 
         # FileRecord.created_at is a string for SQLite-friendly storage;
         # parse it back to a datetime for TIMESTAMPTZ. Default to now()
@@ -664,6 +688,8 @@ CREATE TABLE IF NOT EXISTS files (
         created_at = _parse_iso(record.created_at) or datetime.now(timezone.utc)
         deleted_at = _parse_iso(record.deleted_at)
 
+        # bytes_path is vestigial post-ADR-0001; populated with file_id
+        # so the column has something meaningful when humans inspect.
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
@@ -683,7 +709,7 @@ CREATE TABLE IF NOT EXISTS files (
                 record.extracted_text,
                 record.parse_status,
                 record.parse_error,
-                path,
+                record.file_id,
                 created_at,
                 deleted_at,
             )
@@ -724,22 +750,20 @@ CREATE TABLE IF NOT EXISTS files (
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT bytes_path FROM files "
+                "SELECT 1 FROM files "
                 "WHERE file_id = $1 AND deleted_at IS NULL",
                 file_id,
             )
         if row is None:
             return None
-        path = row["bytes_path"]
-        try:
-            with open(path, "rb") as fh:
-                return fh.read()
-        except FileNotFoundError:
+        data = await self._bytes_store.get(file_id)
+        if data is None:
             logger.warning(
-                "PostgresFileStore: metadata for %s exists but bytes missing at %s",
-                file_id, path,
+                "PostgresFileStore: metadata for %s exists but bytes "
+                "missing in BytesStore",
+                file_id,
             )
-            return None
+        return data
 
     async def get_extracted_text(self, file_id: str) -> str | None:
         pool = await self._get_pool()
@@ -836,43 +860,42 @@ CREATE TABLE IF NOT EXISTS files (
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT bytes_path FROM files "
+                "SELECT 1 FROM files "
                 "WHERE file_id = $1 AND deleted_at IS NULL",
                 file_id,
             )
             if row is None:
                 return False
-            path = row["bytes_path"]
             await conn.execute(
                 "DELETE FROM files WHERE file_id = $1",
                 file_id,
             )
         try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-        shard_dir = os.path.dirname(path)
-        try:
-            if shard_dir and shard_dir != self._bytes_dir:
-                os.rmdir(shard_dir)
-        except OSError:
-            pass
+            await self._bytes_store.delete(file_id)
+        except Exception:
+            logger.warning(
+                "PostgresFileStore: bytes_store.delete failed for %s",
+                file_id, exc_info=True,
+            )
         return True
 
     async def delete_before(self, cutoff: datetime) -> int:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT file_id, bytes_path FROM files WHERE created_at < $1",
+                "SELECT file_id FROM files WHERE created_at < $1",
                 cutoff,
             )
             if not rows:
                 return 0
             for r in rows:
                 try:
-                    os.remove(r["bytes_path"])
-                except FileNotFoundError:
-                    pass
+                    await self._bytes_store.delete(r["file_id"])
+                except Exception:
+                    logger.warning(
+                        "PostgresFileStore: housekeeping bytes_store.delete "
+                        "failed for %s", r["file_id"], exc_info=True,
+                    )
             await conn.execute(
                 "DELETE FROM files WHERE created_at < $1",
                 cutoff,
@@ -887,6 +910,10 @@ CREATE TABLE IF NOT EXISTS files (
     async def close(self) -> None:
         if self._pool is not None:
             await self._pool.close()
+            self._pool = None
+            self._initialized = False
+        if self._owns_bytes_store:
+            await self._bytes_store.close()
             self._pool = None
             self._initialized = False
 
@@ -919,31 +946,38 @@ def create_file_store(
     sqlite_path: str = "./agent.db",
     database_url: str = "",
     bytes_dir: str = "./files",
+    bytes_store: BytesStore | None = None,
     sqlite_connection: Any = None,
 ) -> FileStore:
     """Create a file store from config values.
 
-    Supported backends:
+    Supported metadata backends:
       - ``sqlite``   — :class:`SqliteFileStore` (single-replica, dev / edge)
-      - ``postgres`` — :class:`PostgresFileStore` (metadata in PG, bytes
-                       on local FS; production deployments must mount
-                       ``bytes_dir`` on a PVC)
+      - ``postgres`` — :class:`PostgresFileStore` (metadata in PG)
       - ``http``     — platform-routed (not yet implemented)
       - ``None``     — :class:`NullFileStore` (accepted-then-discarded)
 
-    The S3-compatible bytes backend lands in a follow-up PR; until then
-    Postgres deployments share the SQLite layout for raw bytes.
+    Bytes storage is pluggable via *bytes_store* (per ADR-0001). When
+    ``None``, a :class:`LocalFsBytesStore` is constructed from
+    *bytes_dir* — backward-compatible with 0.16.0 deployments. Wire an
+    :class:`S3BytesStore` for multi-replica or production deployments
+    that need object storage; see :func:`create_bytes_store`.
     """
     if backend == "sqlite":
         return SqliteFileStore(
             sqlite_path,
             bytes_dir=bytes_dir,
+            bytes_store=bytes_store,
             connection=sqlite_connection,
         )
     if backend == "postgres":
         if not database_url:
             raise ValueError("PostgresFileStore requires database_url")
-        return PostgresFileStore(database_url, bytes_dir=bytes_dir)
+        return PostgresFileStore(
+            database_url,
+            bytes_dir=bytes_dir,
+            bytes_store=bytes_store,
+        )
     if backend == "http":
         raise NotImplementedError(
             "FileStore backend 'http' is not yet implemented; "

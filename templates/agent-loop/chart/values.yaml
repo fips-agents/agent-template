@@ -184,6 +184,28 @@ files:
     storageClass: ""
     accessMode: ReadWriteOnce
     mountPath: /var/lib/agent/files
+  # S3-compatible bytes backend (per ADR-0001). When type=s3, the chart
+  # sets FILES_BYTES_BACKEND + FILES_S3_* env vars on the agent so the
+  # in-image agent.yaml's bytes_backend block resolves correctly. Bytes
+  # land in the bucket; metadata lives in the configured backend
+  # (sqlite or postgres). Multi-replica safe — replaces the PVC story.
+  #
+  # Credentials: set access_key/secret_key when boto3's default chain
+  # (IAM role, env vars, EC2 metadata) is unavailable. For OpenShift,
+  # prefer mounting a Secret and feeding it via .Values.env or an
+  # external-secrets operator rather than putting raw values here.
+  #
+  # MinIO requires path_style: true. AWS S3 native: leave path_style
+  # off and omit endpoint.
+  bytesBackend:
+    type: ""                  # "" | local_fs | s3 | null  (empty defers to agent.yaml default)
+    bucket: ""
+    endpoint: ""              # eg http://minio.<ns>.svc:9000 — leave empty for AWS S3
+    region: us-east-1
+    accessKey: ""
+    secretKey: ""
+    prefix: ""                # optional key prefix within the bucket
+    pathStyle: false
   # ClamAV sidecar — pre-deployed image with an HTTP shim that the
   # framework's HttpScanner contract expects.
   virusScanner:

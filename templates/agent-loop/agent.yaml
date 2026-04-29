@@ -279,6 +279,31 @@ server:
     # files.persistence.enabled and backend is sqlite). Empty defers to
     # storage.sqlite_path.
     sqlite_path: ${FILES_SQLITE_DB_PATH:-}
+    # Bytes-storage backend (per ADR-0001). Composes with the metadata
+    # ``backend`` so eg "postgres metadata + S3 bytes" is one config
+    # block, not a separate FileStore class.
+    #
+    #   type: local_fs   — sharded local filesystem at bytes_dir
+    #                      (single-replica only; backward-compatible
+    #                      with 0.16.0 deployments)
+    #   type: s3         — S3-compatible object storage (AWS S3, MinIO,
+    #                      GCS S3-mode, Cloudflare R2, Backblaze B2).
+    #                      Requires ``pip install fipsagents[s3]``.
+    #                      Multi-replica safe.
+    #   type: null       — accept-and-discard (tests)
+    #
+    # For S3, set bucket + endpoint (omit for AWS) + region. Auth
+    # falls through boto3's default chain when access_key/secret_key
+    # are empty (IAM role, env vars, EC2 metadata).
+    bytes_backend:
+      type: ${FILES_BYTES_BACKEND:-local_fs}
+      bucket: ${FILES_S3_BUCKET:-}
+      endpoint: ${FILES_S3_ENDPOINT:-}
+      region: ${FILES_S3_REGION:-us-east-1}
+      access_key: ${FILES_S3_ACCESS_KEY:-}
+      secret_key: ${FILES_S3_SECRET_KEY:-}
+      prefix: ${FILES_S3_PREFIX:-}
+      path_style: ${FILES_S3_PATH_STYLE:-false}
     max_age_hours: 720                                       # files expire after 30 days
     allowed_mime_types: []
     # Uncomment entries above to restrict at the agent layer:

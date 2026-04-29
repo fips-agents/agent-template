@@ -494,14 +494,46 @@ class ScannerConfig(BaseModel):
     fail_mode: Literal["open", "closed"] = "open"
 
 
+class BytesBackendConfig(BaseModel):
+    """Bytes-storage backend (per ADR-0001).
+
+    Composes with the metadata ``backend`` to give multi-target file
+    storage:
+
+    - ``type: local_fs`` (default) — sharded local filesystem at
+      :attr:`FilesConfig.bytes_dir`. Single-replica only.
+    - ``type: s3`` — S3-compatible object storage (AWS S3, MinIO,
+      GCS S3-mode, Cloudflare R2, Backblaze B2). Requires the
+      ``[s3]`` extra (``pip install fipsagents[s3]``).
+    - ``type: null`` — bytes are accepted then discarded; useful in
+      tests and dry-run modes.
+
+    For S3 deployments, ``access_key`` / ``secret_key`` are optional
+    when boto3's default credential chain is sufficient (IAM role, env
+    vars, EC2 metadata service, etc.).
+    """
+
+    type: Literal["local_fs", "s3", "null"] = "local_fs"
+    bucket: str = ""
+    endpoint: str = ""
+    region: str = "us-east-1"
+    access_key: str = ""
+    secret_key: str = ""
+    prefix: str = ""
+    path_style: bool = False
+
+
 class FilesConfig(_PerStoreBackendMixin):
     """File upload settings.
 
-    ``bytes_dir`` is only used by ``SqliteFileStore`` for local-FS bytes
-    storage in dev mode; production deployments using S3-compatible bytes
-    storage will ignore it. ``allowed_mime_types`` is enforced by the
-    ``POST /v1/files`` endpoint when present (an empty list disables the
-    allowlist).
+    ``bytes_dir`` is the local-FS root used when
+    ``bytes_backend.type == "local_fs"`` (default for backward
+    compatibility with 0.16.0). For S3-compatible storage, set
+    ``bytes_backend.type: s3`` plus ``bucket`` / ``endpoint`` /
+    credentials.
+
+    ``allowed_mime_types`` is enforced by the ``POST /v1/files``
+    endpoint when present (an empty list disables the allowlist).
 
     ``sqlite_path`` overrides ``storage.sqlite_path`` for the file store
     only — useful when ``bytes_dir`` is on a PVC and the metadata DB
@@ -512,6 +544,7 @@ class FilesConfig(_PerStoreBackendMixin):
     enabled: bool = False
     max_file_size_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
     bytes_dir: str = "./files"
+    bytes_backend: BytesBackendConfig = Field(default_factory=BytesBackendConfig)
     sqlite_path: str = ""
     allowed_mime_types: list[str] = Field(default_factory=list)
     max_age_hours: int = Field(default=720, ge=0)

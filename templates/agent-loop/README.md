@@ -165,6 +165,7 @@ The base image (no extras) lands around ~1 GB. Extras grow it noticeably:
 | `[metrics]` | ~5 MB | `prometheus_client` |
 | `[otel]` | ~80 MB | OpenTelemetry SDK + OTLP gRPC exporter |
 | **`[files]`** | **~5–6 GB** | **Docling pulls in `torch` + `transformers` for document parsing.** Plain text / Markdown / JSON do not require Docling — leave the extra off if your agent only ingests those formats and rely on the built-in `PlaintextParser`. |
+| `[s3]` | ~30 MB | `aioboto3` for S3-compatible bytes storage (per ADR-0001). Required when `files.bytesBackend.type: s3`; safe to skip otherwise. |
 
 A typical `[server, files]` build lands around 6.5–7 GB. Plan PVC and image-pull
 budgets accordingly; first-pull on a fresh node takes 60–90 s.
