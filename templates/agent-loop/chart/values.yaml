@@ -171,6 +171,13 @@ files:
   # When .persistence.enabled, the chart sets FILES_BYTES_DIR on the
   # agent container so the in-image agent.yaml default of `./files` is
   # overridden to `mountPath`.
+  #
+  # For SqliteFileStore (backend: sqlite or unset), the chart also sets
+  # FILES_SQLITE_DB_PATH=<mountPath>/.metadata/agent.db so the metadata
+  # DB lives on the same PVC as the bytes — otherwise it stays in
+  # storage.sqlite_path (typically ephemeral) and bytes survive but are
+  # orphaned (404 on GET /v1/files/{id}). Postgres backends are
+  # unaffected; their metadata is in the database.
   persistence:
     enabled: false
     size: 5Gi

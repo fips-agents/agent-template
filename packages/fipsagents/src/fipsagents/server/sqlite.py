@@ -32,6 +32,13 @@ class SqliteConnectionManager:
         if resolved in self._connections:
             return self._connections[resolved]
 
+        # Ensure the parent directory exists. When the chart sets
+        # FILES_SQLITE_DB_PATH=<pvc>/.metadata/agent.db, the `.metadata/`
+        # subdir won't exist on a freshly-provisioned PVC.
+        parent = os.path.dirname(resolved)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
         import aiosqlite
 
         conn = await aiosqlite.connect(resolved)

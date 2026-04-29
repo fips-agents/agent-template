@@ -502,11 +502,17 @@ class FilesConfig(_PerStoreBackendMixin):
     storage will ignore it. ``allowed_mime_types`` is enforced by the
     ``POST /v1/files`` endpoint when present (an empty list disables the
     allowlist).
+
+    ``sqlite_path`` overrides ``storage.sqlite_path`` for the file store
+    only — useful when ``bytes_dir`` is on a PVC and the metadata DB
+    should be co-located on the same volume (so both bytes and metadata
+    survive pod restarts). Empty defers to ``storage.sqlite_path``.
     """
 
     enabled: bool = False
     max_file_size_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
     bytes_dir: str = "./files"
+    sqlite_path: str = ""
     allowed_mime_types: list[str] = Field(default_factory=list)
     max_age_hours: int = Field(default=720, ge=0)
     scanner: ScannerConfig = Field(default_factory=ScannerConfig)

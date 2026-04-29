@@ -272,6 +272,13 @@ server:
     # chart sets FILES_BYTES_DIR via files.persistence.mountPath);
     # without a PVC, uploads are wiped on every pod restart.
     bytes_dir: ${FILES_BYTES_DIR:-./files}
+    # Override storage.sqlite_path for the SqliteFileStore metadata DB
+    # only. When bytes_dir is on a PVC, point this at the same volume so
+    # both bytes and metadata survive pod restarts (the chart sets
+    # FILES_SQLITE_DB_PATH=${mountPath}/.metadata/agent.db when
+    # files.persistence.enabled and backend is sqlite). Empty defers to
+    # storage.sqlite_path.
+    sqlite_path: ${FILES_SQLITE_DB_PATH:-}
     max_age_hours: 720                                       # files expire after 30 days
     allowed_mime_types: []
     # Uncomment entries above to restrict at the agent layer:

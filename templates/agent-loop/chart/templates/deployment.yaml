@@ -80,6 +80,16 @@ spec:
             # bytes would be lost on every pod restart.
             - name: FILES_BYTES_DIR
               value: {{ .Values.files.persistence.mountPath | quote }}
+            {{- if or (eq .Values.files.backend "sqlite") (eq .Values.files.backend "") }}
+            # Co-locate the SqliteFileStore metadata DB on the same PVC.
+            # PR #130 fixed bytes persistence; without this, metadata
+            # still lives in storage.sqlite_path (typically /tmp/agent.db)
+            # and is wiped on pod restart, leaving uploaded bytes
+            # orphaned (404 on subsequent GET /v1/files/{id}). Postgres
+            # backend is unaffected — its metadata is in the database.
+            - name: FILES_SQLITE_DB_PATH
+              value: {{ printf "%s/.metadata/agent.db" .Values.files.persistence.mountPath | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
           {{- end }}

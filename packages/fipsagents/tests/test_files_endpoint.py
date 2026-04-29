@@ -52,6 +52,7 @@ def _build_server_with_files(
                 list(allowed) if allowed is not None else []
             )
             self.config.server.files.backend = "sqlite"
+            self.config.server.files.sqlite_path = ""
 
     return OpenAIChatServer(_A)
 
@@ -205,6 +206,69 @@ class TestGetFile:
 
 
 # ---------------------------------------------------------------------------
+# files.sqlite_path overrides storage.sqlite_path for the file store
+# (issue #131 — SqliteFileStore metadata DB co-located with bytes_dir on PVC)
+# ---------------------------------------------------------------------------
+
+
+class TestFilesSqlitePathOverride:
+    def test_files_sqlite_path_overrides_storage_path(self, tmp_path):
+        """When set, FilesConfig.sqlite_path wins over StorageConfig.sqlite_path."""
+        AgentClass = _make_agent_class([], model_name="m1")
+        bytes_dir = str(tmp_path / "files")
+        storage_db = str(tmp_path / "storage.db")
+        files_db = str(tmp_path / "metadata" / "files.db")
+
+        class _A(AgentClass):  # type: ignore[misc, valid-type]
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.config.server.storage.backend = "sqlite"
+                self.config.server.storage.sqlite_path = storage_db
+                self.config.server.files.enabled = True
+                self.config.server.files.backend = "sqlite"
+                self.config.server.files.bytes_dir = bytes_dir
+                self.config.server.files.sqlite_path = files_db
+
+        server = OpenAIChatServer(_A)
+        with TestClient(server.app) as client:
+            up = client.post(
+                "/v1/files",
+                files={"file": ("a.txt", b"persist me", "text/plain")},
+            )
+            assert up.status_code == 201, up.text
+            file_id = up.json()["file_id"]
+            got = client.get(f"/v1/files/{file_id}")
+
+        from pathlib import Path
+        # Metadata DB lands at files.sqlite_path (parent dir auto-created
+        # by SqliteConnectionManager).
+        assert Path(files_db).exists(), (
+            f"FilesConfig.sqlite_path was ignored; expected DB at {files_db}"
+        )
+        # End-to-end: the metadata round-trip uses the override path —
+        # if the file store had been wired to storage.sqlite_path, the
+        # GET would 404 because the upload landed in files_db.
+        assert got.status_code == 200
+        assert got.json()["file_id"] == file_id
+
+    def test_empty_files_sqlite_path_falls_back_to_storage(self, tmp_path):
+        """Empty FilesConfig.sqlite_path defers to StorageConfig.sqlite_path."""
+        # Default behavior — covered by the existing _build_server_with_files
+        # fixture which sets storage.sqlite_path and leaves files.sqlite_path
+        # empty. Just confirm uploads land at the storage path.
+        from pathlib import Path
+        server = _build_server_with_files(tmp_path)
+        storage_db = tmp_path / "agent.db"
+        with TestClient(server.app) as client:
+            resp = client.post(
+                "/v1/files",
+                files={"file": ("a.txt", b"x", "text/plain")},
+            )
+        assert resp.status_code == 201
+        assert storage_db.exists()
+
+
+# ---------------------------------------------------------------------------
 # file_ids injection into /v1/chat/completions
 # ---------------------------------------------------------------------------
 
@@ -248,6 +312,7 @@ def _build_recording_server(tmp_path):
             self.config.server.files.enabled = True
             self.config.server.files.bytes_dir = bytes_dir
             self.config.server.files.backend = "sqlite"
+            self.config.server.files.sqlite_path = ""
 
     _RecordingMixin.captured_messages = []
     return OpenAIChatServer(_A)
@@ -669,6 +734,7 @@ def _build_server_with_scanner(tmp_path, scanner, *, fail_mode="open"):
             self.config.server.files.enabled = True
             self.config.server.files.bytes_dir = bytes_dir
             self.config.server.files.backend = "sqlite"
+            self.config.server.files.sqlite_path = ""
             self.config.server.files.scanner.fail_mode = fail_mode
 
     server = OpenAIChatServer(_A)
