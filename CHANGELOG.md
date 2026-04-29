@@ -4,6 +4,27 @@ All notable changes to the `fipsagents` package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.16.0] - 2026-04-28
+
+File Upload track — server-side document ingest with pluggable storage, pluggable inline parsers, content-based MIME sniffing, and a pluggable virus-scanner contract. Closes the bulk of [#100](https://github.com/fips-agents/agent-template/issues/100).
+
+### Added
+
+- **`FileStore` ABC + Null/Sqlite backends + `FilesConfig`**. New top-level `files` block on `AgentConfig` with size cap, allowed MIME list, scanner config, and a `bytes_dir` for local-fs storage. `NullFileStore` (default, ephemeral) and `SqliteFileStore` (single-replica edge/dev) ship; metadata in SQLite, bytes on local FS.
+- **`POST /v1/files` upload endpoint and `file_ids` on chat completions**. Multipart upload returns a `FileRecord`. Chat completion requests can carry `file_ids: [...]` so the server attaches uploaded files to the conversation context.
+- **`DELETE` and `LIST` endpoints for `/v1/files`** ([#100](https://github.com/fips-agents/agent-template/issues/100)). Pagination + filter by `session_id`. Hard-delete removes both metadata and bytes.
+- **Inline file parsing via `PlaintextParser` + `DoclingParser`**. Pluggable `FileParser` ABC with per-MIME dispatch. `PlaintextParser` covers text/markdown/JSON; `DoclingParser` (opt-in via `[files]` extra) covers PDF, DOCX, PPTX, XLSX, HTML, CSV, images. Parsed text is injected into the prompt via the `_attached_file` LLM-tool pattern.
+- **Content-based MIME sniffing for `/v1/files` uploads**. Uses libmagic (via `python-magic`) to determine MIME type from bytes rather than trusting client-supplied `Content-Type`. Mismatches surface as 415. Optional dependency — falls back to client-supplied type when unavailable.
+- **Pluggable `VirusScanner` with HTTP sidecar contract**. `ScannerConfig` lets operators wire any HTTP-speaking scanner (default contract: `POST /scan` returns `{infected: bool, viruses: [...]}`). `fail_mode: open | closed` for production tuning. Helm chart ships a ClamAV sidecar example.
+- **`PostgresFileStore`** ([#127](https://github.com/fips-agents/agent-template/pull/127)). Mirrors `PostgresSessionStore` line-for-line: lazy asyncpg pool, `IF NOT EXISTS` schema, BIGINT size, TIMESTAMPTZ timestamps. Closes the Postgres half of `FileStore` for enterprise multi-replica deployments.
+
+### Notes
+
+- **`HttpFileStore` deferred** — the platform-routed backend still raises `NotImplementedError`; will land alongside `fipsagents-platform`'s `/v1/files` surface.
+- **S3-compatible bytes backend deferred** — Module 9 of the examples site documents MinIO as the future target. Tracked on [#100](https://github.com/fips-agents/agent-template/issues/100); ADR pending.
+- **Optional extras**: `pip install fipsagents[files]` pulls in Docling (~500 MB with torch). Container builds remain opt-in to keep image size down for agents that don't need parsing.
+- **Scaffolded `agent.yaml` config + ClamAV sidecar** ships in the agent-loop template via [#126](https://github.com/fips-agents/agent-template/pull/126). New projects pick up the upload track without manual wiring; the chart toggles the sidecar via `files.virusScanner.enabled`.
+
 ## [0.15.0] - 2026-04-28
 
 Cost Tracking v2 — pricing, budget enforcement, observability. Layers dollar amounts and configurable USD limits on top of the raw token accumulator that shipped in 0.14.x. Closes the bulk of [#104](https://github.com/fips-agents/agent-template/issues/104).
