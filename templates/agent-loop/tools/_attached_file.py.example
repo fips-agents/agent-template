@@ -1,0 +1,68 @@
+"""Example tool: read an attached file's extracted text.
+
+Rename to ``attached_file.py`` (drop the ``_`` prefix and ``.example``
+suffix) to enable. Files starting with ``_`` are skipped by the tool
+discovery loop, so this template ships disabled.
+
+Wires the agent to the ``files`` server feature: when a request arrives
+with ``file_ids`` on the chat-completion body, the framework injects
+each file's extracted text into the conversation automatically. Tools
+in this file let the *LLM* (plane 2) deliberately re-read or query a
+specific upload.
+
+Prerequisites:
+  - server.files.enabled = true in agent.yaml
+  - pip install fipsagents[files]   (or set the [files] extra in your
+    pyproject.toml and rebuild the container image)
+  - server.files.backend set to ``sqlite`` or ``postgres``
+
+Tool calling models only — small models that don't speak the OpenAI
+tool-calling protocol can't trigger this. Tested with gpt-oss-20b and
+Claude. See agent-template CLAUDE.md "Tool calling model requirements"
+for the support matrix.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from fipsagents.baseagent.tools import tool
+
+logger = logging.getLogger(__name__)
+
+
+@tool(
+    description=(
+        "Read the extracted text of a file the user previously uploaded. "
+        "Returns the parsed plaintext (Docling output for PDFs/Office "
+        "docs, raw text for plaintext uploads). Use this when the user "
+        "references an attachment by name and you need to look at its "
+        "actual contents to answer."
+    ),
+    visibility="llm_only",
+)
+async def read_attached_file(file_id: str) -> str:
+    """Fetch the parsed text of an uploaded file.
+
+    Args:
+        file_id: The opaque identifier returned by ``POST /v1/files``,
+            e.g. ``file_abc123def456``.
+    """
+    # The agent reaches its own FileStore via self._file_store on the
+    # server. Tools don't get `self`, so they call the framework's
+    # FileStore singleton via the configured factory.
+    from fipsagents.server.files import create_file_store
+    from fipsagents.baseagent import get_current_agent
+
+    agent = get_current_agent()
+    files_cfg = agent.config.server.files
+    storage = agent.config.server.storage
+    store = create_file_store(
+        files_cfg.backend or storage.backend,
+        sqlite_path=storage.sqlite_path,
+        bytes_dir=files_cfg.bytes_dir,
+    )
+    text = await store.get_extracted_text(file_id)
+    if text is None:
+        return f"No extracted text for {file_id} (file unknown or parsing pending)."
+    return text

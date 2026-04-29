@@ -39,7 +39,7 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "agent-template.fullname" . }}-config
-          {{- if or .Values.env .Values.sandbox.enabled .Values.llm_adapter.enabled }}
+          {{- if or .Values.env .Values.sandbox.enabled .Values.llm_adapter.enabled .Values.files.enabled }}
           env:
             {{- if .Values.env }}
             {{- toYaml .Values.env | nindent 12 }}
@@ -51,6 +51,28 @@ spec:
             {{- if .Values.llm_adapter.enabled }}
             - name: LLM_ADAPTER_URL
               value: "http://localhost:8081/v1"
+            {{- end }}
+            {{- if and .Values.files.enabled .Values.files.virusScanner.enabled }}
+            # When the ClamAV sidecar is enabled, point the agent's
+            # HttpScanner at it. The sidecar's HTTP shim is expected
+            # to expose the {infected, viruses} JSON contract on
+            # /scan over localhost:8088.
+            - name: FILES_SCANNER_URL
+              value: "http://localhost:8088/scan"
+            - name: FILES_SCANNER_FAIL_MODE
+              value: {{ .Values.files.virusScanner.failMode | quote }}
+            {{- end }}
+            {{- if .Values.files.enabled }}
+            - name: FILES_ENABLED
+              value: "true"
+            {{- if .Values.files.backend }}
+            - name: FILES_BACKEND
+              value: {{ .Values.files.backend | quote }}
+            {{- end }}
+            {{- if .Values.files.maxSizeBytes }}
+            - name: FILES_MAX_SIZE_BYTES
+              value: {{ .Values.files.maxSizeBytes | quote }}
+            {{- end }}
             {{- end }}
           {{- end }}
           resources:
@@ -146,9 +168,57 @@ spec:
             initialDelaySeconds: 3
             periodSeconds: 10
         {{- end }}
-      {{- if .Values.sandbox.enabled }}
+        {{- if and .Values.files.enabled .Values.files.virusScanner.enabled }}
+        - name: clamav
+          image: "{{ .Values.files.virusScanner.image.repository }}:{{ .Values.files.virusScanner.image.tag }}"
+          imagePullPolicy: {{ .Values.files.virusScanner.image.pullPolicy }}
+          # Two ports: 3310 (clamd INSTREAM) and 8088 (HTTP shim that
+          # translates the framework's POST-bytes contract into clamd
+          # commands). The reference image exposes both. If your image
+          # only ships clamd, deploy a small sidecar in front (eg
+          # tiangolo/uvicorn-gunicorn-fastapi) that POSTs to clamd.
+          ports:
+            - name: clamd
+              containerPort: 3310
+              protocol: TCP
+            - name: clamd-http
+              containerPort: 8088
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.files.virusScanner.resources | nindent 12 }}
+          livenessProbe:
+            tcpSocket:
+              port: 3310
+            initialDelaySeconds: 60        # signature DB load is slow
+            periodSeconds: 60
+            timeoutSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: 3310
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 3
+          {{- if .Values.files.virusScanner.persistence.enabled }}
+          volumeMounts:
+            - name: clamav-db
+              mountPath: /var/lib/clamav
+          {{- end }}
+        {{- end }}
+      {{- if or .Values.sandbox.enabled (and .Values.files.enabled .Values.files.virusScanner.enabled .Values.files.virusScanner.persistence.enabled) }}
       volumes:
+        {{- if .Values.sandbox.enabled }}
         - name: sandbox-tmp
           emptyDir:
             sizeLimit: 10Mi
+        {{- end }}
+        {{- if and .Values.files.enabled .Values.files.virusScanner.enabled .Values.files.virusScanner.persistence.enabled }}
+        - name: clamav-db
+          persistentVolumeClaim:
+            claimName: {{ include "agent-template.fullname" . }}-clamav-db
+        {{- end }}
       {{- end }}

@@ -230,6 +230,16 @@ The agent runs locally with zero external config using the defaults.
 
 The image is immutable: code, tools, prompts, skills, rules, and `agent.yaml` defaults are all baked in. Only env var overrides (via ConfigMap) and secrets are injected at runtime.
 
+## File Uploads
+
+Toggle file uploads on by setting `server.files.enabled: true` in `agent.yaml` and adding the `[files]` extra to your container build (`pip install -e .[files]`). The extra pulls in `docling` (text extraction) and `python-magic` (content-based MIME sniffing).
+
+Once enabled, `POST /v1/files` accepts multipart uploads, parses extracted text inline, and persists metadata + bytes to the configured backend. Subsequent `POST /v1/chat/completions` requests can reference uploads by passing `file_ids: ["file_..."]` — the framework injects each file's extracted text into the conversation before the LLM sees the user's prompt.
+
+To deploy a ClamAV sidecar for virus scanning, set `files.virusScanner.enabled=true` in `chart/values.yaml`. The Helm chart wires the agent's `FILES_SCANNER_URL` env var to `http://localhost:8088/scan` automatically — your sidecar image must expose an HTTP shim that translates the framework's `POST bytes → JSON {infected, viruses}` contract to clamd.
+
+To let the LLM deliberately re-read an upload (rather than relying on automatic injection), copy `tools/_attached_file.py.example` to `tools/attached_file.py` and rebuild. The example registers an `llm_only` tool that takes a `file_id` and returns the extracted text.
+
 ## Dependencies
 
 - **openai** -- LLM client (async SDK for OpenAI-compatible endpoints)
