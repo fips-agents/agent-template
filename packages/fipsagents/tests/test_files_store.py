@@ -453,8 +453,18 @@ class TestCreateFileStore:
         )
         assert isinstance(store, SqliteFileStore)
 
-    def test_unimplemented_backends_raise(self):
-        with pytest.raises(NotImplementedError, match="postgres"):
+    def test_postgres_requires_url(self):
+        with pytest.raises(ValueError, match="database_url"):
             create_file_store("postgres")
+
+    def test_postgres_returns_postgres_store(self):
+        from fipsagents.server.files import PostgresFileStore
+
+        store = create_file_store(
+            "postgres", database_url="postgresql://localhost/test"
+        )
+        assert isinstance(store, PostgresFileStore)
+
+    def test_http_backend_still_unimplemented(self):
         with pytest.raises(NotImplementedError, match="http"):
             create_file_store("http")
