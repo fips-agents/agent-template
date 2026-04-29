@@ -84,6 +84,18 @@ s3 = [
     # a transitive dep used directly for Config/exceptions.
     "aioboto3>=12.0",
 ]
+chunking = [
+    # Large-file chunking + pgvector retrieval for /v1/files (ADR-0002).
+    # Mirrors the [pgvector] extra — same asyncpg + pgvector deps because
+    # PgvectorChunkStore writes to a dedicated file_chunks table in the
+    # same database. tiktoken is intentionally NOT pinned here: per
+    # ADR-0002 §Decisions, FIPS builds prefer to skip the Rust extension,
+    # and RecursiveTokenChunker falls back to len(text)//4 when tiktoken
+    # is absent. Install with [chunking,tiktoken] for tighter token
+    # accounting.
+    "asyncpg>=0.29.0",
+    "pgvector>=0.3.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
@@ -109,4 +121,5 @@ markers = [
     "llamastack: Tests using LlamaStack proxy dispatch",
     "kagenti: Tests using Kagenti Gateway dispatch",
     "minio: Tests against a live MinIO/S3 endpoint (skipped when unreachable)",
+    "chunking_live: Tests against a live Postgres+pgvector and embedding endpoint (skipped when env unset)",
 ]
