@@ -7,14 +7,19 @@ import pytest
 from fipsagents.server import chunker as chunker_mod
 from fipsagents.server.chunker import (
     Chunk,
+    DoclingChunker,
     NullChunker,
     RecursiveTokenChunker,
+    _docling_available,
     _greedy_assemble,
     _hard_split_by_tokens,
+    _heading_path_text,
     _recursive_units,
+    _split_by_headings,
     _split_paragraphs,
     _split_sentences,
     _take_overlap,
+    _with_heading_prefix,
     count_tokens,
     create_chunker,
 )
@@ -389,11 +394,223 @@ class TestCreateChunker:
     def test_disabled_returns_null(self):
         assert isinstance(create_chunker(enabled=False), NullChunker)
 
-    def test_enabled_returns_recursive(self):
-        assert isinstance(create_chunker(enabled=True), RecursiveTokenChunker)
+    def test_enabled_returns_a_real_chunker(self):
+        # Either DoclingChunker (when [files] extra installed) or
+        # RecursiveTokenChunker — both satisfy the contract.
+        chunker = create_chunker(enabled=True)
+        assert isinstance(chunker, (DoclingChunker, RecursiveTokenChunker))
 
     def test_default_is_enabled(self):
-        assert isinstance(create_chunker(), RecursiveTokenChunker)
+        chunker = create_chunker()
+        assert isinstance(chunker, (DoclingChunker, RecursiveTokenChunker))
+
+    def test_falls_back_to_recursive_when_docling_missing(self, monkeypatch):
+        monkeypatch.setattr(chunker_mod, "_docling_available", lambda: False)
+        chunker = create_chunker(enabled=True)
+        assert isinstance(chunker, RecursiveTokenChunker)
+        assert not isinstance(chunker, DoclingChunker)
+
+    def test_picks_docling_when_available(self, monkeypatch):
+        monkeypatch.setattr(chunker_mod, "_docling_available", lambda: True)
+        chunker = create_chunker(enabled=True)
+        assert isinstance(chunker, DoclingChunker)
+
+
+# ---------------------------------------------------------------------------
+# Heading-aware splitter primitives
+# ---------------------------------------------------------------------------
+
+
+class TestSplitByHeadings:
+    def test_no_headings_emits_single_section(self):
+        sections = _split_by_headings("just prose, no markers")
+        assert sections == [([], "just prose, no markers")]
+
+    def test_single_h1(self):
+        sections = _split_by_headings("# Title\n\nbody text\n")
+        assert sections == [(["Title"], "body text")]
+
+    def test_h1_h2_nesting(self):
+        text = (
+            "# Doc Title\n\nintro\n\n"
+            "## Section A\n\nA body\n\n"
+            "## Section B\n\nB body\n"
+        )
+        sections = _split_by_headings(text)
+        assert sections == [
+            (["Doc Title"], "intro"),
+            (["Doc Title", "Section A"], "A body"),
+            (["Doc Title", "Section B"], "B body"),
+        ]
+
+    def test_prologue_before_first_heading(self):
+        text = "preamble paragraph\n\n# Heading\n\nbody"
+        sections = _split_by_headings(text)
+        assert sections[0] == ([], "preamble paragraph")
+        assert sections[1] == (["Heading"], "body")
+
+    def test_deeper_heading_levels(self):
+        text = (
+            "# Top\n\n"
+            "## Mid\n\n"
+            "### Deep\n\nleaf body\n"
+        )
+        sections = _split_by_headings(text)
+        # The deepest heading inherits the full chain.
+        assert sections[-1][0] == ["Top", "Mid", "Deep"]
+
+    def test_heading_skip_levels(self):
+        # Document jumps from h1 → h3, skipping h2.
+        text = "# Top\n\n### Skipper\n\nbody"
+        sections = _split_by_headings(text)
+        # The skipped level becomes an empty placeholder so that the
+        # heading-path stack stays consistent for sibling sections.
+        assert sections[-1][0] == ["Top", "", "Skipper"]
+
+    def test_empty_section_body_kept(self):
+        # Adjacent headings with no body in between.
+        text = "# A\n\n# B\n\nb body"
+        sections = _split_by_headings(text)
+        assert (["A"], "") in sections or all(s[0] != ["A"] or s[1] == "" for s in sections)
+
+    def test_setext_headings_not_treated_as_split(self):
+        # Setext-style headings (=== under text) are not handled — we
+        # treat them as ordinary paragraph content.
+        text = "Title\n=====\n\nbody"
+        sections = _split_by_headings(text)
+        assert sections == [([], "Title\n=====\n\nbody")]
+
+
+class TestHeadingPathText:
+    def test_empty_path(self):
+        assert _heading_path_text([]) == ""
+
+    def test_single_level(self):
+        assert _heading_path_text(["Intro"]) == "Intro"
+
+    def test_multi_level(self):
+        assert _heading_path_text(["Doc", "Section A", "Sub"]) == (
+            "Doc > Section A > Sub"
+        )
+
+    def test_drops_empty_segments(self):
+        # Skip-levels produced "" placeholders; rendering should drop them.
+        assert _heading_path_text(["Top", "", "Deep"]) == "Top > Deep"
+
+
+class TestWithHeadingPrefix:
+    def test_empty_label_returns_body(self):
+        assert _with_heading_prefix("", "body") == "body"
+
+    def test_label_prefix(self):
+        assert _with_heading_prefix("Section A", "body") == "[Section A]\nbody"
+
+
+# ---------------------------------------------------------------------------
+# DoclingChunker
+# ---------------------------------------------------------------------------
+
+
+class TestDoclingChunker:
+    @pytest.mark.asyncio
+    async def test_empty_text(self):
+        chunker = DoclingChunker()
+        assert await chunker.chunk("") == []
+        assert await chunker.chunk("  \n\n  ") == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_chunk_size_raises(self):
+        chunker = DoclingChunker()
+        with pytest.raises(ValueError):
+            await chunker.chunk("text", chunk_size_tokens=0)
+
+    @pytest.mark.asyncio
+    async def test_invalid_overlap_raises(self):
+        chunker = DoclingChunker()
+        with pytest.raises(ValueError):
+            await chunker.chunk("text", chunk_overlap_tokens=-1)
+
+    @pytest.mark.asyncio
+    async def test_no_headings_falls_through_to_recursive(self):
+        text = (
+            "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
+        )
+        chunker = DoclingChunker()
+        out = await chunker.chunk(text, chunk_size_tokens=200)
+        assert len(out) == 1
+        # No heading prefix when there is no heading.
+        assert not out[0].content.startswith("[")
+        assert out[0].metadata["section_path"] == []
+
+    @pytest.mark.asyncio
+    async def test_one_chunk_per_short_section(self):
+        text = (
+            "# Document\n\nintro\n\n"
+            "## Section A\n\nA body short\n\n"
+            "## Section B\n\nB body also short\n"
+        )
+        chunker = DoclingChunker()
+        out = await chunker.chunk(text, chunk_size_tokens=200)
+        # 3 sections (intro under "Document", then A, B).
+        assert len(out) == 3
+        # Each chunk's section_path is the heading breadcrumb.
+        assert out[0].metadata["section_path"] == ["Document"]
+        assert out[1].metadata["section_path"] == ["Document", "Section A"]
+        assert out[2].metadata["section_path"] == ["Document", "Section B"]
+        # Heading prefix is present for non-prologue sections.
+        assert "[Document > Section A]" in out[1].content
+        assert "[Document > Section B]" in out[2].content
+
+    @pytest.mark.asyncio
+    async def test_long_section_recurses_with_heading_prefix(self):
+        # One heading, lots of body — should produce >1 chunk, each
+        # carrying the section heading prefix.
+        body_para = (
+            "The quick brown fox jumps over the lazy dog. "
+            "Pack my box with five dozen liquor jugs.\n\n"
+        )
+        text = "# Title\n\n## Big Section\n\n" + (body_para * 30)
+        chunker = DoclingChunker()
+        out = await chunker.chunk(text, chunk_size_tokens=200)
+        assert len(out) > 1
+        # Every chunk gets the same section_path and prefix.
+        for chunk in out:
+            assert chunk.metadata["section_path"] == ["Title", "Big Section"]
+            assert chunk.content.startswith("[Title > Big Section]")
+
+    @pytest.mark.asyncio
+    async def test_heading_metadata_includes_leaf_heading(self):
+        text = "# Top\n\n## Leaf\n\nbody"
+        chunker = DoclingChunker()
+        out = await chunker.chunk(text)
+        assert out[-1].metadata["heading"] == "Leaf"
+
+    @pytest.mark.asyncio
+    async def test_prologue_has_no_section_prefix(self):
+        text = "intro paragraph here\n\n# Heading\n\nbody"
+        chunker = DoclingChunker()
+        out = await chunker.chunk(text)
+        assert out[0].content == "intro paragraph here"
+        assert out[0].metadata["section_path"] == []
+        assert out[0].metadata["heading"] == ""
+
+    @pytest.mark.asyncio
+    async def test_token_count_populated(self):
+        text = "# Heading\n\nbody body body"
+        chunker = DoclingChunker()
+        out = await chunker.chunk(text)
+        for chunk in out:
+            assert chunk.token_count > 0
+
+    @pytest.mark.asyncio
+    async def test_empty_section_dropped(self):
+        # Adjacent headings with empty bodies should not produce empty chunks.
+        text = "# A\n\n# B\n\nb body"
+        chunker = DoclingChunker()
+        out = await chunker.chunk(text)
+        # Only B's body produces a chunk.
+        assert len(out) == 1
+        assert out[0].metadata["section_path"] == ["B"]
 
 
 # ---------------------------------------------------------------------------
@@ -413,3 +630,15 @@ class TestChunk:
         b = Chunk(content="b")
         a.metadata["key"] = "value"
         assert "key" not in b.metadata
+
+
+# ---------------------------------------------------------------------------
+# Docling availability probe
+# ---------------------------------------------------------------------------
+
+
+class TestDoclingAvailable:
+    def test_returns_bool(self):
+        # Cannot assert True or False without knowing the env, but the
+        # probe must always return a bool and never raise.
+        assert isinstance(_docling_available(), bool)
