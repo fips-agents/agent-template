@@ -128,6 +128,43 @@ spec:
               value: "true"
             {{- end }}
             {{- end }}
+            {{- if .Values.files.chunking.enabled }}
+            # Large-file chunking + retrieval (per ADR-0002). When enabled,
+            # files >small_file_threshold_tokens are chunked, embedded via
+            # the configured embedding endpoint, and stored in pgvector for
+            # per-query retrieval. Disabled deployments fall through to the
+            # 0.17.0 full-text injection path.
+            - name: CHUNKING_ENABLED
+              value: "true"
+            {{- if .Values.files.chunking.backend }}
+            - name: CHUNKING_BACKEND
+              value: {{ .Values.files.chunking.backend | quote }}
+            {{- end }}
+            {{- if .Values.files.chunking.databaseUrl }}
+            - name: PGVECTOR_URL
+              value: {{ .Values.files.chunking.databaseUrl | quote }}
+            {{- end }}
+            {{- if .Values.files.chunking.embeddingUrl }}
+            - name: EMBEDDING_URL
+              value: {{ .Values.files.chunking.embeddingUrl | quote }}
+            {{- end }}
+            {{- if .Values.files.chunking.embeddingModel }}
+            - name: EMBEDDING_MODEL
+              value: {{ .Values.files.chunking.embeddingModel | quote }}
+            {{- end }}
+            {{- if .Values.files.chunking.embeddingDimension }}
+            - name: EMBEDDING_DIMENSION
+              value: {{ .Values.files.chunking.embeddingDimension | quote }}
+            {{- end }}
+            {{- if .Values.files.chunking.tableName }}
+            - name: CHUNKING_TABLE
+              value: {{ .Values.files.chunking.tableName | quote }}
+            {{- end }}
+            {{- if .Values.files.chunking.budget }}
+            - name: CHUNKING_BUDGET
+              value: {{ .Values.files.chunking.budget | quote }}
+            {{- end }}
+            {{- end }}
             {{- end }}
           {{- end }}
           {{- if and .Values.files.enabled .Values.files.persistence.enabled }}
