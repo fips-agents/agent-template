@@ -130,6 +130,59 @@ sandbox:
   seccomp:
     enabled: false
 
+# -- File uploads + ClamAV sidecar (optional) ---------------------------------
+# Enable to accept POST /v1/files uploads. The agent persists each file via
+# the configured FilesConfig backend and (optionally) extracts text via
+# Docling for inline injection into chat completions.
+#
+# Prerequisites:
+#   1. Add the [files] extra to your container build:
+#        pip install -e .[files]
+#      Adds ~500MB for docling's torch/transformers — opt-in only when the
+#      agent actively ingests files.
+#   2. Set files.enabled=true (or FILES_ENABLED=true via config above).
+#   3. Set files.backend (sqlite for dev, postgres for production).
+#
+# When virusScanner.enabled=true a ClamAV sidecar is deployed in the same
+# pod and reachable at localhost:3310 (TCP) plus an HTTP shim on
+# localhost:8088 that exposes the {infected, viruses} JSON contract the
+# agent's HttpScanner expects. The agent's scanner.url is set to
+# http://localhost:8088/scan automatically.
+files:
+  enabled: false
+  # Sub-knobs override agent.yaml defaults via env vars when set.
+  # Leave empty to inherit the in-image defaults.
+  backend: ""               # "" | sqlite | postgres
+  maxSizeBytes: ""          # eg "52428800" or empty for 50 MiB default
+  # Empty defers to agent.yaml's allowed_mime_types (which itself can be
+  # empty, deferring to the gateway's allowlist).
+  allowedMime: ""
+  # ClamAV sidecar — pre-deployed image with an HTTP shim that the
+  # framework's HttpScanner contract expects.
+  virusScanner:
+    enabled: false
+    failMode: open          # "open" (dev) or "closed" (production-recommended)
+    image:
+      # Reference image: clamav/clamav:stable bundled with a small
+      # FastAPI shim that translates the {infected, viruses} JSON
+      # contract to and from clamd. Replace with your own org build.
+      repository: clamav/clamav
+      tag: stable
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 1Gi          # ClamAV's signature DB is large
+      limits:
+        cpu: 500m
+        memory: 2Gi
+    # Persistent volume for the ClamAV signature database. Without one,
+    # clamd refreshes the full signature set every pod restart (~250 MB).
+    persistence:
+      enabled: false
+      size: 2Gi
+      storageClass: ""
+
 # -- FIPS cluster notes -------------------------------------------------------
 # No FIPS-specific configuration is required. UBI base images ship
 # FIPS-aware OpenSSL and respect the host kernel's fips=1 mode
