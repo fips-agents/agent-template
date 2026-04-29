@@ -108,4 +108,5 @@ markers = [
     "mcp_stdio: Tests using MCP stdio transport",
     "llamastack: Tests using LlamaStack proxy dispatch",
     "kagenti: Tests using Kagenti Gateway dispatch",
+    "minio: Tests against a live MinIO/S3 endpoint (skipped when unreachable)",
 ]
