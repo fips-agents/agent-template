@@ -228,6 +228,7 @@ class OpenAIChatServer:
         self._file_store = create_file_store(
             files_backend,
             sqlite_path=server_cfg.storage.sqlite_path,
+            database_url=server_cfg.storage.database_url,
             bytes_dir=server_cfg.files.bytes_dir,
             sqlite_connection=sqlite_conn,
         )
