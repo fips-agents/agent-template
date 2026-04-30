@@ -23,6 +23,10 @@
     # detectors they exercise. Removing the fakes defeats the tests.
     '''sandbox\/tests\/test_guardrails\.py$''',
     '''packages\/fipsagents\/tests\/test_tool_inspector\.py$''',
+    # Smoke harnesses include placeholder bearer tokens / auth headers
+    # in curl examples. Real credentials come from the operator's env at
+    # run time; the embedded values are documentation, not secrets.
+    '''^scripts\/smoke-.*\.sh$''',
   ]
 
   regexes = [
