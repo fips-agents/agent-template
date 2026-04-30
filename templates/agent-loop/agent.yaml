@@ -324,6 +324,25 @@ server:
       timeout_seconds: 30.0
       fail_mode: ${FILES_SCANNER_FAIL_MODE:-open}
 
+    # -- Docling parser pipeline knobs --------------------------------------
+    #
+    # Tunes the Docling DocumentConverter used by `[files]`-extra builds.
+    # Currently only PDF has knobs surfaced; other formats use Docling's
+    # converter defaults.
+    #
+    # `parser.pdf.do_ocr` defaults to `false` in 0.19.0+. Most modern PDFs
+    # ship a selectable text layer; OCR adds 1-2 seconds per page on a
+    # 2-CPU pod with no quality benefit. Set `FILES_PARSER_PDF_DO_OCR=true`
+    # for scanned PDFs.
+    #
+    # `parser.pdf.do_table_structure` keeps Docling's default (`true`) so
+    # tabular content survives the markdown export. Disable only if you
+    # see table extraction errors on a particular corpus.
+    parser:
+      pdf:
+        do_ocr: ${FILES_PARSER_PDF_DO_OCR:-false}
+        do_table_structure: ${FILES_PARSER_PDF_DO_TABLE_STRUCTURE:-true}
+
     # -- Large-file chunking + retrieval (optional, per ADR-0002) ------------
     #
     # When enabled, files whose extracted text exceeds

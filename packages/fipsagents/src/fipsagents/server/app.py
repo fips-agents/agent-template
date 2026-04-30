@@ -284,6 +284,7 @@ class OpenAIChatServer:
         )
         self._file_parser = create_parser(
             enabled=server_cfg.files.enabled,
+            parser_config=server_cfg.files.parser,
         )
         self._virus_scanner = create_scanner(
             url=server_cfg.files.scanner.url,

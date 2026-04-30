@@ -206,6 +206,17 @@ files:
     secretKey: ""
     prefix: ""                # optional key prefix within the bucket
     pathStyle: false
+  # Docling parser pipeline knobs (resolved against `agent.yaml`'s
+  # files.parser block). Only the PDF pipeline is exposed today; defer
+  # to agent.yaml defaults by leaving these empty.
+  #
+  # The agent.yaml default for `pdf.doOcr` is `false` — text-extractable
+  # PDFs parse in sub-second instead of multiple minutes per page. Set
+  # `pdf.doOcr: "true"` for scanned PDFs only.
+  parser:
+    pdf:
+      doOcr: ""                  # "" | "true" | "false"
+      doTableStructure: ""       # "" | "true" | "false"
   # Large-file chunking + retrieval (per ADR-0002). When enabled, files
   # whose extracted text exceeds small_file_threshold_tokens are split,
   # embedded via the configured OpenAI-compatible embedding endpoint,

@@ -24,6 +24,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fipsagents.baseagent.config import ParserConfig
 
 logger = logging.getLogger(__name__)
 
@@ -156,11 +160,17 @@ class DoclingParser(FileParser):
 
     Falls through to plaintext if the input looks text-shaped, since
     Docling's pipeline is overkill (and slow) for ``.txt`` / ``.md``.
+
+    ``parser_config`` controls Docling pipeline options (currently the
+    PDF pipeline's ``do_ocr`` and ``do_table_structure``). When omitted
+    the framework defaults from :class:`PdfParserConfig` apply
+    (``do_ocr=False`` -- text-extractable PDFs parse without OCR).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, parser_config: "ParserConfig | None" = None) -> None:
         self._converter: object | None = None
         self._plaintext = PlaintextParser()
+        self._parser_config = parser_config
 
     def _ensure_converter(self) -> object:
         if self._converter is not None:
@@ -174,8 +184,37 @@ class DoclingParser(FileParser):
                 "DoclingParser requires the [files] extra. "
                 "Install with: pip install 'fipsagents[files]'"
             ) from exc
-        self._converter = DocumentConverter()
+        format_options = self._build_format_options()
+        if format_options:
+            self._converter = DocumentConverter(format_options=format_options)
+        else:
+            self._converter = DocumentConverter()
         return self._converter
+
+    def _build_format_options(self) -> dict | None:
+        """Translate ``ParserConfig`` into Docling ``format_options``.
+
+        Returns ``None`` when no config was provided so we preserve the
+        no-arg ``DocumentConverter()`` path for callers that don't care
+        about pipeline tuning (and for tests that pre-inject a fake
+        converter via ``self._converter``).
+        """
+        if self._parser_config is None:
+            return None
+        try:
+            from docling.datamodel.base_models import InputFormat
+            from docling.datamodel.pipeline_options import PdfPipelineOptions
+            from docling.document_converter import PdfFormatOption
+        except ImportError:  # pragma: no cover — handled by _ensure_converter
+            return None
+        pdf_cfg = self._parser_config.pdf
+        pipeline_options = PdfPipelineOptions(
+            do_ocr=pdf_cfg.do_ocr,
+            do_table_structure=pdf_cfg.do_table_structure,
+        )
+        return {
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+        }
 
     async def parse(
         self, data: bytes, *, mime_type: str, filename: str,
@@ -250,18 +289,27 @@ def _docling_available() -> bool:
         return False
 
 
-def create_parser(*, enabled: bool = True) -> FileParser:
+def create_parser(
+    *,
+    enabled: bool = True,
+    parser_config: "ParserConfig | None" = None,
+) -> FileParser:
     """Create a parser based on what's available in the environment.
 
     - ``enabled=False`` → :class:`NullParser` (every file marked skipped).
     - ``docling`` installed → :class:`DoclingParser` (handles plaintext
       internally too).
     - Otherwise → :class:`PlaintextParser` (binaries get marked skipped).
+
+    ``parser_config`` is forwarded to :class:`DoclingParser` to apply
+    Docling pipeline tuning (e.g. ``parser.pdf.do_ocr``). It is silently
+    ignored when the resolved parser does not consume it, so callers can
+    pass it unconditionally regardless of the host's installed extras.
     """
     if not enabled:
         return NullParser()
     if _docling_available():
-        return DoclingParser()
+        return DoclingParser(parser_config=parser_config)
     logger.info(
         "create_parser: docling not installed; binary formats will be "
         "skipped. Install fipsagents[files] for PDF/DOCX/etc support.",
