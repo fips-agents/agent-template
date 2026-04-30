@@ -523,6 +523,34 @@ class BytesBackendConfig(BaseModel):
     path_style: bool = False
 
 
+class PdfParserConfig(BaseModel):
+    """Docling PDF pipeline knobs.
+
+    Maps directly onto :class:`docling.datamodel.pipeline_options.PdfPipelineOptions`.
+    Only the high-impact fields are surfaced; other Docling defaults are
+    used as-is.
+
+    ``do_ocr=False`` is the framework default (changed in 0.19.0). Most
+    modern PDFs ship a selectable text layer and OCR adds 1-2 seconds
+    per page on a 2-CPU pod with no quality benefit. Operators with
+    scanned PDFs flip it back on.
+    """
+
+    do_ocr: bool = False
+    do_table_structure: bool = True
+
+
+class ParserConfig(BaseModel):
+    """File-parser settings.
+
+    Currently only PDF has a Docling-specific pipeline; other formats
+    use the converter defaults. Sub-blocks (``docx``, ``pptx``, ...)
+    can be added without breaking existing configs.
+    """
+
+    pdf: PdfParserConfig = Field(default_factory=PdfParserConfig)
+
+
 class ChunkingConfig(BaseModel):
     """Large-file chunking + retrieval settings (per ADR-0002).
 
@@ -612,6 +640,11 @@ class FilesConfig(_PerStoreBackendMixin):
     ADR-0002). Disabled by default; enable to chunk large files at
     upload time and retrieve only the relevant chunks at chat-completion
     time instead of injecting the full extracted text.
+
+    ``parser`` exposes Docling pipeline knobs. The 0.19.0 default flips
+    ``parser.pdf.do_ocr`` to ``False`` -- text-extractable PDFs parse in
+    sub-second instead of multiple minutes. Operators with scanned
+    PDFs set ``do_ocr: true``.
     """
 
     enabled: bool = False
@@ -622,6 +655,7 @@ class FilesConfig(_PerStoreBackendMixin):
     allowed_mime_types: list[str] = Field(default_factory=list)
     max_age_hours: int = Field(default=720, ge=0)
     scanner: ScannerConfig = Field(default_factory=ScannerConfig)
+    parser: ParserConfig = Field(default_factory=ParserConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
 
 

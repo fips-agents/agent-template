@@ -113,6 +113,12 @@ class _StubAgent(BaseAgent):
                         timeout_seconds=30.0,
                         fail_mode="open",
                     ),
+                    parser=types.SimpleNamespace(
+                        pdf=types.SimpleNamespace(
+                            do_ocr=False,
+                            do_table_structure=True,
+                        ),
+                    ),
                     chunking=types.SimpleNamespace(
                         enabled=False,
                         backend="null",

@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import sys
+import types
 
 import pytest
 
+from fipsagents.baseagent.config import ParserConfig, PdfParserConfig
 from fipsagents.server.parser import (
     DoclingParser,
     FileParser,
@@ -289,3 +291,129 @@ class TestCreateParser:
         or not, factory must return a usable FileParser."""
         parser = create_parser(enabled=True)
         assert isinstance(parser, FileParser)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline option propagation (issue #146)
+# ---------------------------------------------------------------------------
+
+
+class _FakeInputFormat:
+    PDF = "pdf-marker"
+
+
+class _FakePdfPipelineOptions:
+    def __init__(self, *, do_ocr, do_table_structure):
+        self.do_ocr = do_ocr
+        self.do_table_structure = do_table_structure
+
+
+class _FakePdfFormatOption:
+    def __init__(self, *, pipeline_options):
+        self.pipeline_options = pipeline_options
+
+
+class _RecordingDocumentConverter:
+    instances: list["_RecordingDocumentConverter"] = []
+
+    def __init__(self, format_options=None):
+        self.format_options = format_options
+        type(self).instances.append(self)
+
+
+@pytest.fixture
+def fake_docling(monkeypatch):
+    """Inject minimal docling stand-ins so DoclingParser._ensure_converter
+    can run without the [files] extra installed.
+
+    Resets the per-test instance log so each test starts clean.
+    """
+    docling_pkg = types.ModuleType("docling")
+    datamodel_pkg = types.ModuleType("docling.datamodel")
+    base_models = types.ModuleType("docling.datamodel.base_models")
+    base_models.InputFormat = _FakeInputFormat
+    pipeline_options = types.ModuleType("docling.datamodel.pipeline_options")
+    pipeline_options.PdfPipelineOptions = _FakePdfPipelineOptions
+    document_converter = types.ModuleType("docling.document_converter")
+    document_converter.DocumentConverter = _RecordingDocumentConverter
+    document_converter.PdfFormatOption = _FakePdfFormatOption
+
+    monkeypatch.setitem(sys.modules, "docling", docling_pkg)
+    monkeypatch.setitem(sys.modules, "docling.datamodel", datamodel_pkg)
+    monkeypatch.setitem(
+        sys.modules, "docling.datamodel.base_models", base_models,
+    )
+    monkeypatch.setitem(
+        sys.modules, "docling.datamodel.pipeline_options", pipeline_options,
+    )
+    monkeypatch.setitem(
+        sys.modules, "docling.document_converter", document_converter,
+    )
+    _RecordingDocumentConverter.instances = []
+    yield _RecordingDocumentConverter
+    _RecordingDocumentConverter.instances = []
+
+
+class TestPipelineOptions:
+    def test_default_config_flips_do_ocr_off(self):
+        """Framework default is do_ocr=False (issue #146)."""
+        cfg = ParserConfig()
+        assert cfg.pdf.do_ocr is False
+        assert cfg.pdf.do_table_structure is True
+
+    def test_no_config_keeps_no_args_constructor(self, fake_docling):
+        """Backward-compat path: DoclingParser() with no config builds
+        DocumentConverter() with no args, leaving Docling's own defaults
+        in place."""
+        parser = DoclingParser()
+        parser._ensure_converter()
+        assert len(fake_docling.instances) == 1
+        assert fake_docling.instances[0].format_options is None
+
+    @pytest.mark.parametrize("do_ocr", [True, False])
+    @pytest.mark.parametrize("do_table_structure", [True, False])
+    def test_pdf_options_propagate_to_converter(
+        self, fake_docling, do_ocr, do_table_structure,
+    ):
+        cfg = ParserConfig(
+            pdf=PdfParserConfig(
+                do_ocr=do_ocr, do_table_structure=do_table_structure,
+            ),
+        )
+        parser = DoclingParser(parser_config=cfg)
+        parser._ensure_converter()
+
+        assert len(fake_docling.instances) == 1
+        format_options = fake_docling.instances[0].format_options
+        assert format_options is not None
+        assert _FakeInputFormat.PDF in format_options
+
+        pdf_format_option = format_options[_FakeInputFormat.PDF]
+        options = pdf_format_option.pipeline_options
+        assert options.do_ocr is do_ocr
+        assert options.do_table_structure is do_table_structure
+
+    def test_factory_forwards_parser_config(self, monkeypatch, fake_docling):
+        monkeypatch.setattr(
+            "fipsagents.server.parser._docling_available", lambda: True,
+        )
+        cfg = ParserConfig(pdf=PdfParserConfig(do_ocr=True))
+        parser = create_parser(enabled=True, parser_config=cfg)
+        assert isinstance(parser, DoclingParser)
+
+        # Lazy-load to confirm the config reaches DocumentConverter.
+        parser._ensure_converter()
+        assert len(fake_docling.instances) == 1
+        options = fake_docling.instances[0].format_options[_FakeInputFormat.PDF]
+        assert options.pipeline_options.do_ocr is True
+
+    def test_factory_without_config_omits_format_options(
+        self, monkeypatch, fake_docling,
+    ):
+        monkeypatch.setattr(
+            "fipsagents.server.parser._docling_available", lambda: True,
+        )
+        parser = create_parser(enabled=True)
+        assert isinstance(parser, DoclingParser)
+        parser._ensure_converter()
+        assert fake_docling.instances[0].format_options is None
