@@ -4,6 +4,57 @@ All notable changes to the `fipsagents` package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.19.0] - 2026-04-30
+
+Docling PDF pipeline knobs on `FilesConfig`. Closes [#146](https://github.com/fips-agents/agent-template/issues/146).
+
+### Added
+
+- **`files.parser.pdf.{do_ocr,do_table_structure}` on `FilesConfig`** ([#147](https://github.com/fips-agents/agent-template/pull/147)). `DoclingParser` now accepts a `parser_config` and threads `PdfPipelineOptions` into the underlying `DocumentConverter`. Surfaced in the agent-loop template (`agent.yaml` + Helm chart values + deployment env wiring) as `${FILES_PARSER_PDF_DO_OCR}` / `${FILES_PARSER_PDF_DO_TABLE_STRUCTURE}` so a fresh scaffold inherits the knobs end-to-end.
+
+### Changed
+
+- **`do_ocr` default flipped to `False`** ([#147](https://github.com/fips-agents/agent-template/pull/147)). Docling's upstream default ran RapidOCR on every PDF page even when the page had a selectable text layer; on a 2-CPU pod a text-extractable 80-page paper took several minutes to parse, blocking the 0.18.0 cluster smoke for PDF inputs. Operators with scanned PDFs opt back in via `FILES_PARSER_PDF_DO_OCR=true` (or chart values). **Behaviour change** for deployments that relied on Docling's previous OCR-on default; confirm scanned-PDF workloads explicitly enable `do_ocr` after upgrade.
+
+### Notes
+
+- **Backward-compatible API.** `DoclingParser()` with no `parser_config` still constructs `DocumentConverter()` with no arguments, so any direct callers (and the existing test paths that inject a fake converter) keep their existing behaviour.
+- **Cluster-smoked.** 13-page / 1.2 MB text-extractable PDF: upload + parse 45s (cold start; mostly Docling layout/table model loads), 31 chunks in pgvector, chat completion with `file_ids` returned correctly-cited content end-to-end. The previous 80-page paper that hung indefinitely on the OCR-on path before the fix is the regression this closes.
+
+## [0.18.0] - 2026-04-29
+
+Large-file chunking + pgvector retrieval (ADR-0002). Closes the bulk of [#137](https://github.com/fips-agents/agent-template/issues/137).
+
+### Added
+
+- **`Chunker` ABC + `RecursiveTokenChunker`** ([#139](https://github.com/fips-agents/agent-template/pull/139)). Token-based splitter in `fipsagents.server.chunker` with `tiktoken` as a soft dep — falls back to `len(text)//4` for FIPS builds.
+- **`ChunkStore` ABC + `PgvectorChunkStore`** ([#140](https://github.com/fips-agents/agent-template/pull/140)). Postgres + pgvector storage mirroring the `BytesStore` / `FileStore` patterns. Per-file scoping at retrieval is the auth boundary. `NullChunkStore` (default no-op) and `PgvectorChunkStore` (requires `[chunking]` extra). `chunk_status` / `chunk_count` columns on `FileRecord` track lifecycle.
+- **Chunking wired into `OpenAIChatServer`** ([#141](https://github.com/fips-agents/agent-template/pull/141)). Files larger than `small_file_threshold_tokens` chunk asynchronously on upload (`app.py::_chunk_uploaded_file`); chat completions with `file_ids` retrieve top-K chunks per request (`app.py::_resolve_file_attachments`) — with full-text fallback when chunking is disabled, in flight, failed, or returns no matches. `DELETE /v1/files/{id}` cascades to `chunk_store.delete_for_file()` before metadata delete.
+- **Heading-aware `DoclingChunker` + auto-selection** ([#142](https://github.com/fips-agents/agent-template/pull/142)). Markdown-heading-aware splitter that auto-selects when the `[files]` extra is installed; otherwise falls back to `RecursiveTokenChunker`.
+- **`ChunkingConfig` in `AgentConfig` + agent-loop template surface** ([#143](https://github.com/fips-agents/agent-template/pull/143)). Budget presets parallel to `MemoryConfig`: `small` (chunk 400 / top-K 3 / threshold 2K), `medium` (600 / 5 / 4K, default), `large` (800 / 8 / 8K), or `custom`. Surfaced in the template as `server.files.chunking` with `${CHUNKING_*}` env-var substitution; chart 0.8.0 → 0.9.0 wires `CHUNKING_*` env vars on the agent container when `files.chunking.enabled`.
+
+### Notes
+
+- **Disabled by default.** Existing 0.17.0 deployments behave identically until `files.chunking.enabled` is set per-deployment. `backend: "null"` (default) preserves the 0.17.0 full-text behaviour; `backend: "pgvector"` requires `database_url` and `embedding_url`.
+- **Optional extras.** `pip install fipsagents[chunking]` pulls in `asyncpg` for the pgvector backend; `[files]` continues to gate Docling. Container builds remain opt-in.
+- **Per-file scoping is the auth boundary.** `PgvectorChunkStore.search()` always filters by `file_id`; cross-file leakage requires misconfiguration of the file-attach path itself.
+
+## [0.17.0] - 2026-04-29
+
+S3-compatible `BytesStore` + SQLite metadata fix.
+
+### Added
+
+- **S3-compatible `BytesStore`** ([#134](https://github.com/fips-agents/agent-template/pull/134), [#135](https://github.com/fips-agents/agent-template/pull/135)). Splits bytes storage from metadata storage per ADR-0001. `SqliteFileStore` and `PostgresFileStore` now compose with a `BytesStore`, so the same metadata backend can target local FS, AWS S3, MinIO, Cloudflare R2, Backblaze B2, or GCS S3-mode. Multi-replica deployments stop needing a RWX PVC. New `[s3]` extra (~30 MB, vs `[files]`'s 5–6 GB). Live MinIO integration test pinned by marker `minio`.
+
+### Fixed
+
+- **`SqliteFileStore` metadata DB now co-locates on the bytes PVC** ([#132](https://github.com/fips-agents/agent-template/pull/132)). `files.persistence` wired `bytes_dir` to a PVC in 0.16.0 but metadata still lived at `storage.sqlite_path` (typically `/tmp`), so bytes survived pod restarts and metadata didn't. New optional `FilesConfig.sqlite_path` overrides `storage.sqlite_path` for the file store only; chart sets `FILES_SQLITE_DB_PATH=<mount>/.metadata/agent.db` when persistence is on and backend is sqlite. Postgres deployments unaffected.
+
+### Notes
+
+- **Backward-compatible.** Existing `FilesConfig.bytes_dir` continues to work when `bytes_backend` is unset — the factory synthesizes a `LocalFsBytesStore`.
+
 ## [0.16.0] - 2026-04-28
 
 File Upload track — server-side document ingest with pluggable storage, pluggable inline parsers, content-based MIME sniffing, and a pluggable virus-scanner contract. Closes the bulk of [#100](https://github.com/fips-agents/agent-template/issues/100).
