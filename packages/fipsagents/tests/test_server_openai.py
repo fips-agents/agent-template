@@ -800,6 +800,138 @@ def test_messages_to_dicts_dumps_content_blocks_to_plain_dicts():
 
 
 # ---------------------------------------------------------------------------
+# _resolve_image_file_ids — file_id:<id> URL rewrite (#101)
+# ---------------------------------------------------------------------------
+
+
+class _FakeBytesStore:
+    """Minimal BytesStore stub that returns canned payloads keyed by file_id."""
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self._payloads = payloads
+        self.gets: list[str] = []
+
+    async def get(self, file_id: str) -> bytes | None:
+        self.gets.append(file_id)
+        return self._payloads.get(file_id)
+
+
+# 1×1 transparent PNG — small enough for inline test payloads, libmagic
+# recognises the PNG signature reliably.
+_PNG_BYTES = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000d49444154789c63000100000005000100200d0a2db40000000049"
+    "454e44ae426082"
+)
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_rewrites_file_id_to_data_uri():
+    """file_id:<id> URLs become inline data: URIs after resolution."""
+    server = _build_server()
+    server._bytes_store = _FakeBytesStore({"file_abc": _PNG_BYTES})
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this"},
+                {"type": "image_url", "image_url": {"url": "file_id:file_abc"}},
+            ],
+        }
+    ]
+    await server._resolve_image_file_ids(messages)
+
+    rewritten = messages[0]["content"][1]["image_url"]["url"]
+    assert rewritten.startswith("data:image/png;base64,")
+    # Verify the BytesStore was actually consulted.
+    assert server._bytes_store.gets == ["file_abc"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_noop_for_string_content():
+    """String-content user messages are untouched."""
+    server = _build_server()
+    server._bytes_store = _FakeBytesStore({})
+
+    messages = [{"role": "user", "content": "hello, no images here"}]
+    await server._resolve_image_file_ids(messages)
+
+    assert messages[0]["content"] == "hello, no images here"
+    # No lookup performed — pre-scan should short-circuit.
+    assert server._bytes_store.gets == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_noop_for_remote_urls():
+    """Remote https URLs and inline data: URIs pass through unchanged."""
+    server = _build_server()
+    server._bytes_store = _FakeBytesStore({})
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/cat.jpg"},
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                },
+            ],
+        }
+    ]
+    await server._resolve_image_file_ids(messages)
+
+    urls = [b["image_url"]["url"] for b in messages[0]["content"]]
+    assert urls == [
+        "https://example.com/cat.jpg",
+        "data:image/png;base64,iVBORw0KGgo=",
+    ]
+    assert server._bytes_store.gets == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_unknown_id_raises_400():
+    server = _build_server()
+    server._bytes_store = _FakeBytesStore({})
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "file_id:missing"}},
+            ],
+        }
+    ]
+    with pytest.raises(fastapi.HTTPException) as ei:
+        await server._resolve_image_file_ids(messages)
+    assert ei.value.status_code == 400
+    assert "missing" in ei.value.detail
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_no_bytes_store_raises_503():
+    """When files are disabled, a file_id reference must surface a 503."""
+    server = _build_server()
+    server._bytes_store = None
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "file_id:abc"}},
+            ],
+        }
+    ]
+    with pytest.raises(fastapi.HTTPException) as ei:
+        await server._resolve_image_file_ids(messages)
+    assert ei.value.status_code == 503
+
+
+# ---------------------------------------------------------------------------
 # /v1/agent-info
 # ---------------------------------------------------------------------------
 
