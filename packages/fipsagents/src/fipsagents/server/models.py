@@ -5,12 +5,11 @@ from __future__ import annotations
 import re
 import time
 import uuid
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 from fipsagents.baseagent.events import StreamMetrics
-
 
 # Session ID format: 1-128 alphanumeric characters, hyphens, or underscores.
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
@@ -37,9 +36,39 @@ class CreateSessionRequest(BaseModel):
         return v
 
 
+class TextBlock(BaseModel):
+    """OpenAI-shaped text content block."""
+
+    type: Literal["text"]
+    text: str
+
+
+class ImageUrl(BaseModel):
+    """Inner ``image_url`` payload for :class:`ImageUrlBlock`.
+
+    ``url`` accepts a remote ``https://`` URL, an inline ``data:`` URI, or
+    the internal ``file_id:<id>`` scheme that the server resolves against
+    its :class:`~fipsagents.server.bytes_store.BytesStore` before
+    forwarding the request to the model.
+    """
+
+    url: str
+    detail: Literal["auto", "low", "high"] | None = None
+
+
+class ImageUrlBlock(BaseModel):
+    """OpenAI-shaped image content block."""
+
+    type: Literal["image_url"]
+    image_url: ImageUrl
+
+
+ContentBlock = Annotated[TextBlock | ImageUrlBlock, Field(discriminator="type")]
+
+
 class ChatMessage(BaseModel):
     role: str
-    content: str | None = None
+    content: str | list[ContentBlock] | None = None
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
 
@@ -141,12 +170,19 @@ class UpdateFeedbackRequest(BaseModel):
 
 
 def _messages_to_dicts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
-    """Convert incoming Pydantic messages back to OpenAI-shaped dicts."""
+    """Convert incoming Pydantic messages back to OpenAI-shaped dicts.
+
+    Multimodal content (a list of :class:`TextBlock` / :class:`ImageUrlBlock`)
+    is dumped block-by-block so the OpenAI SDK receives plain dicts.
+    """
     out: list[dict[str, Any]] = []
     for m in messages:
         d: dict[str, Any] = {"role": m.role}
         if m.content is not None:
-            d["content"] = m.content
+            if isinstance(m.content, list):
+                d["content"] = [b.model_dump() for b in m.content]
+            else:
+                d["content"] = m.content
         if m.tool_calls is not None:
             d["tool_calls"] = m.tool_calls
         if m.tool_call_id is not None:
@@ -167,8 +203,13 @@ def _extract_overrides(req: ChatCompletionRequest) -> dict[str, Any]:
 
     # Standard OpenAI parameters.
     for key in (
-        "temperature", "max_tokens", "top_p", "frequency_penalty",
-        "presence_penalty", "logprobs", "top_logprobs",
+        "temperature",
+        "max_tokens",
+        "top_p",
+        "frequency_penalty",
+        "presence_penalty",
+        "logprobs",
+        "top_logprobs",
     ):
         val = getattr(req, key, None)
         if val is not None:

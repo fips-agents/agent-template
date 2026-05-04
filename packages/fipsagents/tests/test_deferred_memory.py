@@ -831,3 +831,120 @@ async def test_build_memory_prefix_respects_config_loading_pattern() -> None:
     assert len(mem.search_calls) == 0, (
         "build_memory_prefix() must not call search() when pattern is deferred"
     )
+
+
+# ---------------------------------------------------------------------------
+# Multimodal user_turn injection (#101) — content as a list of blocks
+# ---------------------------------------------------------------------------
+
+
+def _seeded_messages_with_content_blocks() -> list[dict[str, Any]]:
+    """User turn with mixed text + image content blocks."""
+    return [
+        {"role": "system", "content": "You are a test agent."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the weather?"},
+                {"type": "image_url", "image_url": {"url": "file_id:file_abc"}},
+            ],
+        },
+    ]
+
+
+def _seeded_messages_image_only() -> list[dict[str, Any]]:
+    """User turn with only image content (no text block)."""
+    return [
+        {"role": "system", "content": "You are a test agent."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "file_id:file_xyz"}},
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_user_turn_appends_text_block_when_content_is_list() -> None:
+    """For list content, memory is appended as a new trailing text block."""
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "Mixed-content memory"}],
+        project_config=_FakeProjectConfig(pattern="lazy"),
+    )
+    agent = _make_agent(memory=mem, injection_mode="user_turn")
+    agent.messages = _seeded_messages_with_content_blocks()
+
+    await agent._inject_deferred_memory()
+
+    user_content = agent.messages[1]["content"]
+    assert isinstance(user_content, list), (
+        f"List content must remain list-typed; got {type(user_content).__name__}"
+    )
+    # Original blocks preserved, new text block appended.
+    assert len(user_content) == 3
+    assert user_content[0] == {"type": "text", "text": "What is the weather?"}
+    assert user_content[1]["type"] == "image_url"
+    assert user_content[2]["type"] == "text"
+    assert "<user_memories>" in user_content[2]["text"]
+    assert "Mixed-content memory" in user_content[2]["text"]
+    assert "</user_memories>" in user_content[2]["text"]
+
+
+@pytest.mark.asyncio
+async def test_user_turn_search_query_built_from_text_blocks_only() -> None:
+    """Search query joins only text-typed blocks; image blocks contribute nothing."""
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "irrelevant"}],
+        project_config=_FakeProjectConfig(pattern="lazy"),
+    )
+    agent = _make_agent(memory=mem, injection_mode="user_turn")
+    agent.messages = _seeded_messages_with_content_blocks()
+
+    await agent._inject_deferred_memory()
+
+    assert len(mem.search_calls) == 1
+    query, _ = mem.search_calls[0]
+    assert query == "What is the weather?"
+
+
+@pytest.mark.asyncio
+async def test_user_turn_image_only_message_appends_text_block() -> None:
+    """Image-only message survives memory injection; new text block holds the tag."""
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "Image context"}],
+        project_config=_FakeProjectConfig(pattern="lazy"),
+    )
+    agent = _make_agent(memory=mem, injection_mode="user_turn")
+    agent.messages = _seeded_messages_image_only()
+
+    await agent._inject_deferred_memory()
+
+    user_content = agent.messages[1]["content"]
+    assert isinstance(user_content, list)
+    # The original image block is preserved; the new text block is appended.
+    assert len(user_content) == 2
+    assert user_content[0]["type"] == "image_url"
+    assert user_content[0]["image_url"]["url"] == "file_id:file_xyz"
+    assert user_content[1]["type"] == "text"
+    assert "<user_memories>" in user_content[1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_user_turn_string_content_path_unchanged() -> None:
+    """Regression guard: string-content path still uses string concatenation."""
+    mem = FakeMemoryHubClient(
+        [{"id": "a", "content": "String memory"}],
+        project_config=_FakeProjectConfig(pattern="lazy"),
+    )
+    agent = _make_agent(memory=mem, injection_mode="user_turn")
+    agent.messages = _seeded_messages()
+
+    await agent._inject_deferred_memory()
+
+    user_content = agent.messages[1]["content"]
+    assert isinstance(user_content, str), (
+        f"String content must remain str-typed; got {type(user_content).__name__}"
+    )
+    assert user_content.startswith("What is the weather?")
+    assert "<user_memories>" in user_content

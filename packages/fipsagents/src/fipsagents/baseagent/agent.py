@@ -347,8 +347,14 @@ class BaseAgent(abc.ABC):
 
     # -- Conversation state --------------------------------------------------
 
-    def add_message(self, role: str, content: str) -> None:
-        """Append a message to the conversation history."""
+    def add_message(self, role: str, content: str | list[dict[str, Any]]) -> None:
+        """Append a message to the conversation history.
+
+        ``content`` accepts either a plain string or a list of OpenAI-shaped
+        content blocks (e.g. ``{"type": "text", "text": ...}`` /
+        ``{"type": "image_url", "image_url": {...}}``) so multimodal callers
+        can append image-bearing turns without going through the HTTP layer.
+        """
         self.messages.append({"role": role, "content": content})
 
     def get_messages(self) -> list[dict[str, Any]]:
@@ -1156,7 +1162,19 @@ class BaseAgent(abc.ABC):
             if user_msg is None:
                 return
 
-            query = user_msg.get("content", "") or ""
+            # ``content`` may be a plain string or, for multimodal turns,
+            # a list of OpenAI-shaped content blocks. Build the search
+            # query by joining text from text-typed blocks; image blocks
+            # contribute nothing to retrieval.
+            original_content = user_msg.get("content", "") or ""
+            if isinstance(original_content, list):
+                query = "\n".join(
+                    b.get("text", "")
+                    for b in original_content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+            else:
+                query = original_content
             tag = self.config.memory.injection_tag
             injection_mode = self.config.memory.injection_mode
 
@@ -1192,9 +1210,17 @@ class BaseAgent(abc.ABC):
                 joined = joined[:limit] + "\n\n… [truncated]"
 
             if injection_mode == "user_turn":
-                self.messages[user_msg_idx]["content"] = (
-                    query + f"\n\n<{tag}>\n{joined}\n</{tag}>"
-                )
+                if isinstance(original_content, list):
+                    # Append a new trailing text block so image-only
+                    # messages survive (concatenating onto an empty
+                    # string would drop the image references).
+                    self.messages[user_msg_idx]["content"] = list(original_content) + [
+                        {"type": "text", "text": f"<{tag}>\n{joined}\n</{tag}>"}
+                    ]
+                else:
+                    self.messages[user_msg_idx]["content"] = (
+                        original_content + f"\n\n<{tag}>\n{joined}\n</{tag}>"
+                    )
                 logger.debug(
                     "Deferred memory injected into user turn (%d chars, pattern=%r)",
                     len(joined), pattern,

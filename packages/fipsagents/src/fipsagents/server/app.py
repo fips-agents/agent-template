@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import random
 import re
@@ -1091,6 +1092,89 @@ class OpenAIChatServer:
                 })
         return messages
 
+    async def _resolve_image_file_ids(
+        self, messages: list[dict[str, Any]]
+    ) -> None:
+        """Rewrite ``file_id:<id>`` image URLs to inline ``data:`` URIs.
+
+        Walks user messages whose ``content`` is a list of OpenAI-shaped
+        content blocks; for each ``image_url`` block whose ``url`` matches
+        ``file_id:<id>``, fetches the bytes from the configured
+        :class:`BytesStore`, sniffs the MIME type, and rewrites the URL in
+        place to ``data:{mime};base64,{...}`` before the request reaches
+        the model.
+
+        Mutates *messages* in place. No-op when no list-content user
+        messages reference ``file_id:`` URLs. Raises HTTP 400 if a
+        referenced file is missing or its MIME type cannot be detected,
+        and 503 if the server has no BytesStore configured.
+        """
+        # Cheap pre-scan: avoid a 503 / lookup when no message references
+        # a file_id. Most requests do not.
+        has_ref = False
+        for msg in messages:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") != "image_url":
+                    continue
+                url = (block.get("image_url") or {}).get("url", "")
+                if isinstance(url, str) and url.startswith("file_id:"):
+                    has_ref = True
+                    break
+            if has_ref:
+                break
+        if not has_ref:
+            return
+
+        if self._bytes_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "image_url references a file_id but no BytesStore is "
+                    "configured (server.files.enabled=false)"
+                ),
+            )
+
+        for msg in messages:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") != "image_url":
+                    continue
+                image_url = block.get("image_url") or {}
+                url = image_url.get("url", "")
+                if not (isinstance(url, str) and url.startswith("file_id:")):
+                    continue
+                file_id = url[len("file_id:") :]
+                data = await self._bytes_store.get(file_id)
+                if data is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"file_id {file_id} not found",
+                    )
+                mime = detect_mime(data)
+                if not mime:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"could not detect MIME type for file_id {file_id}; "
+                            "image_url requires a recognisable image format"
+                        ),
+                    )
+                encoded = base64.b64encode(data).decode("ascii")
+                image_url["url"] = f"data:{mime};base64,{encoded}"
+
     def _should_trace(self) -> bool:
         """Decide whether to trace this request based on sampling rate."""
         if self._trace_store is None or self._agent is None:
@@ -1169,6 +1253,15 @@ class OpenAIChatServer:
                     content = msg.get("content")
                     if isinstance(content, str):
                         last_user = content
+                    elif isinstance(content, list):
+                        # Multimodal turn: join text from text-typed
+                        # blocks. Image blocks contribute nothing to
+                        # chunk retrieval.
+                        last_user = "\n".join(
+                            b.get("text", "")
+                            for b in content
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
                     break
             file_msgs = await self._resolve_file_attachments(
                 req.file_ids, last_user_message=last_user,
@@ -1182,6 +1275,12 @@ class OpenAIChatServer:
                     incoming = incoming[:-1] + file_msgs + incoming[-1:]
                 else:
                     incoming = file_msgs + incoming
+
+        # Multimodal: resolve any ``file_id:<id>`` image URLs to inline
+        # ``data:`` URIs. Runs after file_ids extraction so the existing
+        # text-RAG path is unaffected, and the rewrite is the last
+        # mutation of the message list before the model call.
+        await self._resolve_image_file_ids(incoming)
 
         # Trace ID: always generated so clients can correlate this
         # completion with feedback/observability data, even when tracing

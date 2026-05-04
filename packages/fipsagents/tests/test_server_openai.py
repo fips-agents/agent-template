@@ -28,7 +28,6 @@ from fipsagents.baseagent.events import (  # noqa: E402
 from fipsagents.baseagent.tools import ToolRegistry  # noqa: E402
 from fipsagents.server import OpenAIChatServer  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Stub agent helpers
 # ---------------------------------------------------------------------------
@@ -45,13 +44,16 @@ class _StubAgent(BaseAgent):
     def __init__(self, events=None, *, model_name: str = "stub-model", **kwargs):
         # Bypass BaseAgent.__init__ — we own everything the server touches.
         from fipsagents.baseagent.config import BudgetConfig, PricingConfig
+
         self._events = events or []
         self._system_prompt: str = ""
         self.messages: list[dict] = []
         self.tools = ToolRegistry()
         self.config = types.SimpleNamespace(
             model=types.SimpleNamespace(
-                name=model_name, temperature=0.7, max_tokens=4096,
+                name=model_name,
+                temperature=0.7,
+                max_tokens=4096,
             ),
             memory=types.SimpleNamespace(
                 injection_mode="prefix",
@@ -148,9 +150,7 @@ class _StubAgent(BaseAgent):
     async def shutdown(self) -> None:
         pass
 
-    async def astep_stream(
-        self, *, max_iterations: int = 10
-    ) -> AsyncIterator:
+    async def astep_stream(self, *, max_iterations: int = 10) -> AsyncIterator:
         for ev in self._events:
             yield ev
 
@@ -165,6 +165,7 @@ class _StubAgent(BaseAgent):
     # must be defined to satisfy the ABC.
     async def step(self):  # type: ignore[override]
         from fipsagents.baseagent import StepResult
+
         return StepResult.done()
 
 
@@ -189,7 +190,7 @@ def _parse_sse_body(body: str) -> list[dict | str]:
     for line in body.splitlines():
         if not line.startswith("data: "):
             continue
-        payload = line[len("data: "):]
+        payload = line[len("data: ") :]
         if payload == "[DONE]":
             frames.append("[DONE]")
         else:
@@ -343,14 +344,15 @@ def test_streaming_chat_completions_emits_sse_frames():
     assert _delta(frames[0]) == {"role": "assistant"}
 
     # At least one content chunk.
-    content_chunks = [f for f in frames if isinstance(f, dict) and "content" in _delta(f)]
+    content_chunks = [
+        f for f in frames if isinstance(f, dict) and "content" in _delta(f)
+    ]
     assert len(content_chunks) >= 1
     assert content_chunks[0]["choices"][0]["delta"]["content"] == "hi"
 
     # A finish_reason == "stop" chunk exists.
     stop_chunks = [
-        f for f in frames
-        if isinstance(f, dict) and _finish_reason(f) == "stop"
+        f for f in frames if isinstance(f, dict) and _finish_reason(f) == "stop"
     ]
     assert len(stop_chunks) == 1
 
@@ -390,7 +392,9 @@ def test_streaming_response_ends_with_usage_chunk_then_done():
 
 def test_streaming_tool_call_events_pass_through():
     events = [
-        ToolCallDelta(index=0, call_id="call_abc", name="search", arguments_delta='{"q":"x"}'),
+        ToolCallDelta(
+            index=0, call_id="call_abc", name="search", arguments_delta='{"q":"x"}'
+        ),
         ToolResultEvent(call_id="call_abc", name="search", content="the result"),
         ContentDelta(content="found it"),
         StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
@@ -408,10 +412,7 @@ def test_streaming_tool_call_events_pass_through():
     frames = _parse_sse_body(resp.text)
 
     # tool_calls chunk
-    tc_chunks = [
-        f for f in frames
-        if isinstance(f, dict) and "tool_calls" in _delta(f)
-    ]
+    tc_chunks = [f for f in frames if isinstance(f, dict) and "tool_calls" in _delta(f)]
     assert len(tc_chunks) >= 1
     tc = _delta(tc_chunks[0])["tool_calls"][0]
     assert tc["id"] == "call_abc"
@@ -419,8 +420,7 @@ def test_streaming_tool_call_events_pass_through():
 
     # tool result chunk (role == "tool")
     tool_result_chunks = [
-        f for f in frames
-        if isinstance(f, dict) and _delta(f).get("role") == "tool"
+        f for f in frames if isinstance(f, dict) and _delta(f).get("role") == "tool"
     ]
     assert len(tool_result_chunks) == 1
     assert _delta(tool_result_chunks[0])["tool_call_id"] == "call_abc"
@@ -428,7 +428,8 @@ def test_streaming_tool_call_events_pass_through():
 
     # content chunk (exclude tool-role chunks which also carry "content")
     content_chunks = [
-        f for f in frames
+        f
+        for f in frames
         if isinstance(f, dict)
         and "content" in _delta(f)
         and _delta(f).get("role") != "tool"
@@ -447,23 +448,31 @@ def test_streaming_sequential_tool_calls_across_iterations():
     """
     events = [
         # -- First model iteration: tool call A --
-        ToolCallDelta(index=0, call_id="call_aaa", name="get_weather", arguments_delta='{"city":'),
+        ToolCallDelta(
+            index=0, call_id="call_aaa", name="get_weather", arguments_delta='{"city":'
+        ),
         ToolCallDelta(index=0, arguments_delta='"Miami"}'),
         ToolResultEvent(call_id="call_aaa", name="get_weather", content="75°F sunny"),
         # -- Second model iteration: tool call B (same index, new call_id) --
-        ToolCallDelta(index=0, call_id="call_bbb", name="get_weather", arguments_delta='{"city":'),
+        ToolCallDelta(
+            index=0, call_id="call_bbb", name="get_weather", arguments_delta='{"city":'
+        ),
         ToolCallDelta(index=0, arguments_delta='"Seattle"}'),
         ToolResultEvent(call_id="call_bbb", name="get_weather", content="58°F cloudy"),
         # -- Final content --
         ContentDelta(content="Miami is 75°F, Seattle is 58°F."),
-        StreamComplete(finish_reason="stop", metrics=StreamMetrics(model_calls=2, tool_calls=2)),
+        StreamComplete(
+            finish_reason="stop", metrics=StreamMetrics(model_calls=2, tool_calls=2)
+        ),
     ]
     server = _build_server(events)
     with TestClient(server.app) as client:
         resp = client.post(
             "/v1/chat/completions",
             json={
-                "messages": [{"role": "user", "content": "weather in Miami and Seattle"}],
+                "messages": [
+                    {"role": "user", "content": "weather in Miami and Seattle"}
+                ],
                 "stream": True,
             },
         )
@@ -482,9 +491,9 @@ def test_streaming_sequential_tool_calls_across_iterations():
                 tc_open_chunks.append(tc)
 
     # Both tool calls must have received opening chunks with id + name.
-    assert len(tc_open_chunks) == 2, (
-        f"Expected 2 tool-call opening chunks, got {len(tc_open_chunks)}: {tc_open_chunks}"
-    )
+    assert (
+        len(tc_open_chunks) == 2
+    ), f"Expected 2 tool-call opening chunks, got {len(tc_open_chunks)}: {tc_open_chunks}"
     assert tc_open_chunks[0]["id"] == "call_aaa"
     assert tc_open_chunks[0]["function"]["name"] == "get_weather"
     assert tc_open_chunks[1]["id"] == "call_bbb"
@@ -509,9 +518,9 @@ def test_model_field_in_request_overrides_config_model():
         )
     frames = _parse_sse_body(resp.text)
     json_frames = [f for f in frames if isinstance(f, dict)]
-    assert all(f["model"] == "custom-model" for f in json_frames), (
-        f"Expected all frames to use 'custom-model', got: {[f['model'] for f in json_frames]}"
-    )
+    assert all(
+        f["model"] == "custom-model" for f in json_frames
+    ), f"Expected all frames to use 'custom-model', got: {[f['model'] for f in json_frames]}"
 
 
 def test_per_request_lock_serializes_streams():
@@ -692,6 +701,237 @@ def test_chat_request_accepts_valid_session_id():
 
 
 # ---------------------------------------------------------------------------
+# Multimodal content blocks (#101)
+# ---------------------------------------------------------------------------
+
+
+def test_chat_message_accepts_text_only_content_blocks():
+    from fipsagents.server.models import ChatMessage
+
+    msg = ChatMessage.model_validate(
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]}
+    )
+    assert isinstance(msg.content, list)
+    assert msg.content[0].type == "text"
+    assert msg.content[0].text == "hello"
+
+
+def test_chat_message_accepts_image_only_content_blocks():
+    from fipsagents.server.models import ChatMessage
+
+    msg = ChatMessage.model_validate(
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "file_id:file_abc"}},
+            ],
+        }
+    )
+    assert isinstance(msg.content, list)
+    assert msg.content[0].type == "image_url"
+    assert msg.content[0].image_url.url == "file_id:file_abc"
+
+
+def test_chat_message_accepts_mixed_content_blocks():
+    from fipsagents.server.models import ChatMessage
+
+    msg = ChatMessage.model_validate(
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/cat.jpg",
+                        "detail": "high",
+                    },
+                },
+            ],
+        }
+    )
+    assert isinstance(msg.content, list)
+    assert len(msg.content) == 2
+    assert msg.content[1].image_url.detail == "high"
+
+
+def test_chat_message_rejects_unknown_content_block_type():
+    from pydantic import ValidationError
+
+    from fipsagents.server.models import ChatMessage
+
+    with pytest.raises(ValidationError):
+        ChatMessage.model_validate(
+            {
+                "role": "user",
+                "content": [{"type": "audio_url", "audio_url": {"url": "x"}}],
+            }
+        )
+
+
+def test_messages_to_dicts_preserves_string_content():
+    from fipsagents.server.models import ChatMessage, _messages_to_dicts
+
+    out = _messages_to_dicts([ChatMessage(role="user", content="hi")])
+    assert out == [{"role": "user", "content": "hi"}]
+
+
+def test_messages_to_dicts_dumps_content_blocks_to_plain_dicts():
+    from fipsagents.server.models import ChatMessage, _messages_to_dicts
+
+    msg = ChatMessage.model_validate(
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this"},
+                {"type": "image_url", "image_url": {"url": "file_id:file_xyz"}},
+            ],
+        }
+    )
+    out = _messages_to_dicts([msg])
+    assert out[0]["role"] == "user"
+    blocks = out[0]["content"]
+    assert isinstance(blocks, list)
+    # Each block must be a plain dict so the OpenAI SDK can serialise it.
+    assert all(isinstance(b, dict) for b in blocks)
+    assert blocks[0] == {"type": "text", "text": "what is this"}
+    assert blocks[1]["type"] == "image_url"
+    assert blocks[1]["image_url"]["url"] == "file_id:file_xyz"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_image_file_ids — file_id:<id> URL rewrite (#101)
+# ---------------------------------------------------------------------------
+
+
+class _FakeBytesStore:
+    """Minimal BytesStore stub that returns canned payloads keyed by file_id."""
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self._payloads = payloads
+        self.gets: list[str] = []
+
+    async def get(self, file_id: str) -> bytes | None:
+        self.gets.append(file_id)
+        return self._payloads.get(file_id)
+
+
+# 1×1 transparent PNG — small enough for inline test payloads, libmagic
+# recognises the PNG signature reliably.
+_PNG_BYTES = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000d49444154789c63000100000005000100200d0a2db40000000049"
+    "454e44ae426082"
+)
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_rewrites_file_id_to_data_uri():
+    """file_id:<id> URLs become inline data: URIs after resolution."""
+    server = _build_server()
+    server._bytes_store = _FakeBytesStore({"file_abc": _PNG_BYTES})
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this"},
+                {"type": "image_url", "image_url": {"url": "file_id:file_abc"}},
+            ],
+        }
+    ]
+    await server._resolve_image_file_ids(messages)
+
+    rewritten = messages[0]["content"][1]["image_url"]["url"]
+    assert rewritten.startswith("data:image/png;base64,")
+    # Verify the BytesStore was actually consulted.
+    assert server._bytes_store.gets == ["file_abc"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_noop_for_string_content():
+    """String-content user messages are untouched."""
+    server = _build_server()
+    server._bytes_store = _FakeBytesStore({})
+
+    messages = [{"role": "user", "content": "hello, no images here"}]
+    await server._resolve_image_file_ids(messages)
+
+    assert messages[0]["content"] == "hello, no images here"
+    # No lookup performed — pre-scan should short-circuit.
+    assert server._bytes_store.gets == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_noop_for_remote_urls():
+    """Remote https URLs and inline data: URIs pass through unchanged."""
+    server = _build_server()
+    server._bytes_store = _FakeBytesStore({})
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/cat.jpg"},
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                },
+            ],
+        }
+    ]
+    await server._resolve_image_file_ids(messages)
+
+    urls = [b["image_url"]["url"] for b in messages[0]["content"]]
+    assert urls == [
+        "https://example.com/cat.jpg",
+        "data:image/png;base64,iVBORw0KGgo=",
+    ]
+    assert server._bytes_store.gets == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_unknown_id_raises_400():
+    server = _build_server()
+    server._bytes_store = _FakeBytesStore({})
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "file_id:missing"}},
+            ],
+        }
+    ]
+    with pytest.raises(fastapi.HTTPException) as ei:
+        await server._resolve_image_file_ids(messages)
+    assert ei.value.status_code == 400
+    assert "missing" in ei.value.detail
+
+
+@pytest.mark.asyncio
+async def test_resolve_image_file_ids_no_bytes_store_raises_503():
+    """When files are disabled, a file_id reference must surface a 503."""
+    server = _build_server()
+    server._bytes_store = None
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "file_id:abc"}},
+            ],
+        }
+    ]
+    with pytest.raises(fastapi.HTTPException) as ei:
+        await server._resolve_image_file_ids(messages)
+    assert ei.value.status_code == 503
+
+
+# ---------------------------------------------------------------------------
 # /v1/agent-info
 # ---------------------------------------------------------------------------
 
@@ -859,9 +1099,7 @@ def test_streaming_response_includes_x_trace_id_header_and_chunk_field():
     assert _TRACE_ID_RE.match(header_trace_id)
 
     frames = _parse_sse_body(resp.text)
-    usage_chunks = [
-        f for f in frames if isinstance(f, dict) and f.get("choices") == []
-    ]
+    usage_chunks = [f for f in frames if isinstance(f, dict) and f.get("choices") == []]
     assert len(usage_chunks) == 1
     assert usage_chunks[0]["trace_id"] == header_trace_id
 
@@ -937,14 +1175,18 @@ def _build_server_with_sqlite_sessions(tmp_path, events, *, model_name="stub"):
 def test_cost_data_persisted_across_turns(tmp_path):
     """Two completions on the same session_id accumulate cumulative totals."""
     metrics = StreamMetrics(
-        prompt_tokens=10, completion_tokens=4, total_tokens=14,
+        prompt_tokens=10,
+        completion_tokens=4,
+        total_tokens=14,
     )
     events = [
         ContentDelta(content="ok"),
         StreamComplete(finish_reason="stop", metrics=metrics),
     ]
     server = _build_server_with_sqlite_sessions(
-        tmp_path, events, model_name="stub-model",
+        tmp_path,
+        events,
+        model_name="stub-model",
     )
     with TestClient(server.app) as client:
         # Pre-create the session so the first save's upsert finds it.
@@ -1020,7 +1262,8 @@ def test_cost_data_persist_failure_does_not_break_response(tmp_path):
 
     with TestClient(server.app) as client:
         resp = client.post(
-            "/v1/sessions", json={"session_id": "sess_boom"},
+            "/v1/sessions",
+            json={"session_id": "sess_boom"},
         )
         assert resp.status_code == 201
 
@@ -1079,18 +1322,23 @@ def test_cost_data_null_session_store_is_noop():
 def test_cost_data_persisted_across_streaming_turns(tmp_path):
     """The streaming path also accumulates per-turn token usage."""
     metrics = StreamMetrics(
-        prompt_tokens=7, completion_tokens=3, total_tokens=10,
+        prompt_tokens=7,
+        completion_tokens=3,
+        total_tokens=10,
     )
     events = [
         ContentDelta(content="hi"),
         StreamComplete(finish_reason="stop", metrics=metrics),
     ]
     server = _build_server_with_sqlite_sessions(
-        tmp_path, events, model_name="stream-stub",
+        tmp_path,
+        events,
+        model_name="stream-stub",
     )
     with TestClient(server.app) as client:
         resp = client.post(
-            "/v1/sessions", json={"session_id": "sess_stream"},
+            "/v1/sessions",
+            json={"session_id": "sess_stream"},
         )
         assert resp.status_code == 201
 
@@ -1129,7 +1377,8 @@ def test_cost_data_no_usage_no_persist(tmp_path):
 
     with TestClient(server.app) as client:
         resp = client.post(
-            "/v1/sessions", json={"session_id": "sess_nousage"},
+            "/v1/sessions",
+            json={"session_id": "sess_nousage"},
         )
         assert resp.status_code == 201
 
@@ -1172,7 +1421,8 @@ def test_cost_data_http_get_not_implemented_falls_back_to_delta(tmp_path):
 
     with TestClient(server.app) as client:
         resp = client.post(
-            "/v1/sessions", json={"session_id": "sess_http_like"},
+            "/v1/sessions",
+            json={"session_id": "sess_http_like"},
         )
         assert resp.status_code == 201
 
@@ -1249,7 +1499,10 @@ def test_session_usage_404_when_session_missing(tmp_path):
         StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
     ]
     server = _build_server_with_pricing(
-        tmp_path, events, model_name="stub", pricing=PricingConfig(),
+        tmp_path,
+        events,
+        model_name="stub",
+        pricing=PricingConfig(),
     )
     with TestClient(server.app) as client:
         resp = client.get("/v1/sessions/sess_nope/usage")
@@ -1266,7 +1519,10 @@ def test_session_usage_zero_for_new_session(tmp_path):
     ]
     pricing = PricingConfig(default=PricingRate(input_per_1k=0.01))
     server = _build_server_with_pricing(
-        tmp_path, events, model_name="stub", pricing=pricing,
+        tmp_path,
+        events,
+        model_name="stub",
+        pricing=pricing,
     )
     with TestClient(server.app) as client:
         client.post("/v1/sessions", json={"session_id": "sess_empty"})
@@ -1288,7 +1544,9 @@ def test_session_usage_computes_cumulative_dollars(tmp_path):
     from fipsagents.baseagent.config import PricingConfig, PricingRate
 
     metrics = StreamMetrics(
-        prompt_tokens=1000, completion_tokens=500, total_tokens=1500,
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
     )
     events = [
         ContentDelta(content="ok"),
@@ -1298,12 +1556,16 @@ def test_session_usage_computes_cumulative_dollars(tmp_path):
         default=PricingRate(input_per_1k=0.001, output_per_1k=0.002),
         models={
             "billed-model": PricingRate(
-                input_per_1k=0.01, output_per_1k=0.02,
+                input_per_1k=0.01,
+                output_per_1k=0.02,
             ),
         },
     )
     server = _build_server_with_pricing(
-        tmp_path, events, model_name="billed-model", pricing=pricing,
+        tmp_path,
+        events,
+        model_name="billed-model",
+        pricing=pricing,
     )
     with TestClient(server.app) as client:
         client.post("/v1/sessions", json={"session_id": "sess_paid"})
@@ -1347,7 +1609,8 @@ def test_tenant_label_flows_from_x_tenant_header(tmp_path):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.config.server.metrics = types.SimpleNamespace(
-                enabled=True, token_label_mode="tenant",
+                enabled=True,
+                token_label_mode="tenant",
             )
 
     server = OpenAIChatServer(_A)
@@ -1366,7 +1629,7 @@ def test_tenant_label_flows_from_x_tenant_header(tmp_path):
 
     body = metrics_resp.text
     assert 'tenant_id="acme-corp"' in body
-    assert 'agent_tokens_total{' in body
+    assert "agent_tokens_total{" in body
 
 
 def test_tenant_label_defaults_when_header_absent(tmp_path):
@@ -1384,7 +1647,8 @@ def test_tenant_label_defaults_when_header_absent(tmp_path):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.config.server.metrics = types.SimpleNamespace(
-                enabled=True, token_label_mode="tenant",
+                enabled=True,
+                token_label_mode="tenant",
             )
 
     server = OpenAIChatServer(_A)
@@ -1423,7 +1687,10 @@ def test_session_usage_uses_cost_data_model_over_default(tmp_path):
         },
     )
     server = _build_server_with_pricing(
-        tmp_path, events, model_name="billed-model", pricing=pricing,
+        tmp_path,
+        events,
+        model_name="billed-model",
+        pricing=pricing,
     )
     with TestClient(server.app) as client:
         client.post("/v1/sessions", json={"session_id": "sess_route"})
