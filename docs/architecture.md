@@ -526,7 +526,12 @@ For multi-agent deployments with MemoryHub, multiple agents can connect to the s
 
 ## File Uploads
 
-`POST /v1/files` accepts multipart uploads, persists each file via the configured `FileStore`, and lets subsequent `/v1/chat/completions` requests reference them by passing `file_ids: ["file_..."]`. The framework injects each file's content into the conversation before the LLM sees the user's prompt. Uploads are an opt-in feature — set `server.files.enabled: true` and install the `[files]` extra to pull in Docling (text extraction) and `python-magic` (content-based MIME sniffing).
+`POST /v1/files` accepts multipart uploads, persists each file via the configured `FileStore`, and exposes them to subsequent `/v1/chat/completions` requests via two distinct paths depending on what the caller wants the model to see:
+
+- **Extracted text** — pass `file_ids: ["file_..."]` on the request body. The framework reads each file's extracted text (Docling for PDFs, native UTF-8 for plain text) and injects it as a system message just before the user's turn, or runs chunked retrieval against pgvector when chunking is enabled (see ADR-0002).
+- **Image bytes** — reference `file_id:<id>` from an `image_url` content block on the user message (`{"type": "image_url", "image_url": {"url": "file_id:..."}}`). `OpenAIChatServer._resolve_image_file_ids` walks user messages, fetches bytes from the configured `BytesStore`, sniffs the MIME type via libmagic, and rewrites the URL in place to `data:{mime};base64,…` before forwarding to the model. The same upload can be referenced via `file_ids` (text) and via `file_id:` (image bytes) on different requests; they are independent paths and never overlap.
+
+Uploads are an opt-in feature — set `server.files.enabled: true` and install the `[files]` extra to pull in Docling (text extraction) and `python-magic` (content-based MIME sniffing).
 
 ### Storage layout (per ADR-0001)
 

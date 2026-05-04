@@ -61,7 +61,8 @@ if __name__ == "__main__":
 - **Configuration** — YAML with `${VAR:-default}` env var substitution
 - **Pluggable memory** — memoryhub, markdown, sqlite, pgvector, llamastack, custom, or null. Budget presets (`small`/`medium`/`large`) auto-tune for model context size. Deferred loading, user-turn injection for small models, and per-turn recall patterns
 - **Protective patterns** — max iterations, exponential backoff, rate limiting
-- **HTTP server** — OpenAI-compatible `/v1/chat/completions` endpoint with streaming and extended sampling parameters (top_p, top_k, repetition_penalty, reasoning_effort)
+- **HTTP server** — OpenAI-compatible `/v1/chat/completions` endpoint with streaming, extended sampling parameters (top_p, top_k, repetition_penalty, reasoning_effort), and multimodal content blocks (text + `image_url`). Image bytes can be referenced inline as `data:` URIs, by URL, or by the internal `file_id:<id>` scheme — uploads via `POST /v1/files` are resolved server-side from the configured `BytesStore` before the model call
+- **File uploads** — `POST /v1/files` accepts multipart uploads, persists each file via the configured `FileStore`, and exposes them either as extracted-text context (pass `file_ids: [...]` on a chat completion) or as image bytes (reference `file_id:<id>` from an `image_url` content block). Opt-in via the `[files]` extra
 - **`run_tool_calls()`** — one-line tool dispatch loop for non-streaming agents
 - **Agent identity** — name, description, version exposed via `/v1/agent-info`
 
