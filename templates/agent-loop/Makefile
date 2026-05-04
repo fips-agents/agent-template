@@ -99,16 +99,21 @@ clean: ## Remove agent resources from OpenShift (make clean PROJECT=<name>)
 	@echo "Done."
 
 # ---------------------------------------------------------------------------
-# Framework vendoring
+# fipsagents vendoring
 # ---------------------------------------------------------------------------
 
 .PHONY: vendor
 vendor: ## Vendor fipsagents source into this project (replaces PyPI dependency)
 	fips-agents vendor
 
-.PHONY: update-framework
-update-framework: ## Update vendored fipsagents to latest upstream version
+.PHONY: update-fipsagents
+update-fipsagents: ## Update vendored fipsagents to latest upstream version
 	fips-agents vendor --update
+
+.PHONY: update-framework
+update-framework: ## Deprecated alias for update-fipsagents (will be removed in a future release)
+	@echo "warning: 'make update-framework' is deprecated; use 'make update-fipsagents' instead." >&2
+	@$(MAKE) update-fipsagents
 
 # ---------------------------------------------------------------------------
 # Help
@@ -121,7 +126,7 @@ help: ## Show this help message
 	@echo "=================================="
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Variables (override on CLI):"
 	@echo "  PROJECT     OpenShift project/namespace  (default: $(PROJECT))"
