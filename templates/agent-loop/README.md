@@ -196,7 +196,7 @@ make test-cov      # Run pytest with coverage
 make eval          # Run eval cases (mock LLM)
 make lint          # Run ruff linter
 make vendor        # Vendor fipsagents source (replaces PyPI dep)
-make update-framework  # Update vendored source from upstream
+make update-fipsagents # Update vendored source from upstream
 make help          # Show all targets
 ```
 
