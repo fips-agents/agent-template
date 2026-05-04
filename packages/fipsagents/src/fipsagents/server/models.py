@@ -174,13 +174,18 @@ def _messages_to_dicts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
 
     Multimodal content (a list of :class:`TextBlock` / :class:`ImageUrlBlock`)
     is dumped block-by-block so the OpenAI SDK receives plain dicts.
+    ``exclude_none=True`` so optional fields the caller omitted (notably
+    ``image_url.detail``) stay absent rather than being serialised as
+    explicit ``null`` — the OpenAI SDK's
+    ``ChatCompletionContentPartImageParam`` rejects ``null`` for
+    ``detail`` even though the field itself is optional.
     """
     out: list[dict[str, Any]] = []
     for m in messages:
         d: dict[str, Any] = {"role": m.role}
         if m.content is not None:
             if isinstance(m.content, list):
-                d["content"] = [b.model_dump() for b in m.content]
+                d["content"] = [b.model_dump(exclude_none=True) for b in m.content]
             else:
                 d["content"] = m.content
         if m.tool_calls is not None:
