@@ -799,6 +799,46 @@ def test_messages_to_dicts_dumps_content_blocks_to_plain_dicts():
     assert blocks[1]["image_url"]["url"] == "file_id:file_xyz"
 
 
+def test_messages_to_dicts_omits_unset_image_url_detail():
+    """Regression: ``detail`` defaults to None on ImageUrl, but the OpenAI SDK
+    rejects ``"detail": null`` even though the field is optional. The dump
+    must omit the key entirely when the caller didn't set it."""
+    from fipsagents.server.models import ChatMessage, _messages_to_dicts
+
+    msg = ChatMessage.model_validate(
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+            ],
+        }
+    )
+    out = _messages_to_dicts([msg])
+    image_url = out[0]["content"][0]["image_url"]
+    assert "detail" not in image_url, (
+        f"detail must be omitted when unset; got {image_url!r}"
+    )
+
+
+def test_messages_to_dicts_preserves_set_image_url_detail():
+    """When the caller does pass ``detail``, it round-trips through the dump."""
+    from fipsagents.server.models import ChatMessage, _messages_to_dicts
+
+    msg = ChatMessage.model_validate(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/a.png", "detail": "high"},
+                },
+            ],
+        }
+    )
+    out = _messages_to_dicts([msg])
+    assert out[0]["content"][0]["image_url"]["detail"] == "high"
+
+
 # ---------------------------------------------------------------------------
 # _resolve_image_file_ids — file_id:<id> URL rewrite (#101)
 # ---------------------------------------------------------------------------
