@@ -4,6 +4,33 @@ All notable changes to the `fipsagents` package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.20.0] - 2026-05-04
+
+Image input via OpenAI content blocks. Closes [#101](https://github.com/fips-agents/agent-template/issues/101).
+
+### Added
+
+- **`ChatMessage.content` accepts a list of content blocks** ([#151](https://github.com/fips-agents/agent-template/pull/151)). New Pydantic discriminated union over `TextBlock` and `ImageUrlBlock` mirrors the OpenAI multimodal request shape. Plain-string content is unchanged — the union is additive.
+- **`file_id:<id>` URL scheme for `image_url`** ([#151](https://github.com/fips-agents/agent-template/pull/151)). New `OpenAIChatServer._resolve_image_file_ids` walks user messages, fetches bytes from the configured `BytesStore`, sniffs the MIME type via libmagic, and rewrites the URL in place to `data:{mime};base64,…` before forwarding to the model. Internal scheme — no URL-format coupling, greppable, distinct from the existing `file_ids` text-RAG path. Runs *after* `file_ids` resolution so the extracted-text path is untouched.
+- **`BaseAgent.add_message` widened to accept content blocks** ([#151](https://github.com/fips-agents/agent-template/pull/151)). `content: str | list[dict[str, Any]]` lets multimodal callers append image-bearing turns directly.
+
+### Changed
+
+- **Deferred memory `user_turn` injection is dual-pathed** ([#151](https://github.com/fips-agents/agent-template/pull/151)). With list content, the search query is built by joining text from text-typed blocks (image blocks contribute nothing to retrieval) and the rewrite appends a *new trailing text block* with the `<tag>…</tag>` payload — survives image-only messages where string concatenation would have dropped image references. The string-content path is unchanged.
+- **`_resolve_file_attachments` last-user extraction tolerates list content** ([#151](https://github.com/fips-agents/agent-template/pull/151)). The chunk-retrieval seed query is now derived from joined text-block text when the user turn is multimodal, so image-bearing turns still flow through the chunk RAG path for any accompanying `file_ids`.
+
+### Fixed
+
+- **Unset `image_url.detail` no longer serialises as `null`** ([#152](https://github.com/fips-agents/agent-template/pull/152)). `ImageUrl.detail` defaults to `None`; `model_dump()` was emitting `"detail": null`, which the OpenAI SDK's `ChatCompletionContentPartImageParam` rejects (the field is optional but the key cannot be `null`). One-line fix: `model_dump(exclude_none=True)` in `_messages_to_dicts`. Surfaced during cluster smoke against Granite Vision 3.2-2B and would have hit any caller who omitted `detail`.
+
+### Notes
+
+- **Backward-compatible.** Existing string-content callers see no behavior change. The HTTP server, session store, and trace collector all round-trip list-content messages without modification (sessions JSON-encode `list[dict]`; the OpenAI SDK accepts content blocks unchanged).
+- **Vision endpoint shape.** Single multimodal endpoint via the existing `model.endpoint` — no separate `model.vision_endpoint` split. Add the split when a real driver shows up that needs separate text/vision routing.
+- **Token accounting.** Image-aware token counting trusts the model's `usage` response; vLLM reports image-expanded prompt tokens (e.g. ~1500 prompt tokens for a small PNG against Granite Vision 3.2-2B).
+- **Cluster-smoked.** End-to-end against Granite Vision 3.2-2B on cluster-n7pd5: agent received `{"type": "image_url", "image_url": {"url": "file_id:<id>"}}`, BytesStore lookup + libmagic MIME sniff + base64 rewrite, model returned a one-word answer about the image in 0.39s.
+- **Out of scope this release** (intentional): voice ([#102](https://github.com/fips-agents/agent-template/issues/102)), video ([#103](https://github.com/fips-agents/agent-template/issues/103)), tool calling on the vision path (Granite Vision uses a different chat template; the `granite` tool-call parser does not apply cleanly).
+
 ## [0.19.0] - 2026-04-30
 
 Docling PDF pipeline knobs on `FilesConfig`. Closes [#146](https://github.com/fips-agents/agent-template/issues/146).
