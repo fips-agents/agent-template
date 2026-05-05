@@ -4,6 +4,13 @@ All notable changes to the `fipsagents` package will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- **`tools.enabled` toggle on `ToolsConfig`** ([#155](https://github.com/fips-agents/agent-template/pull/155)). New boolean field (default `True`) that suppresses LLM-visible tool emission for an entire agent.  Set `tools.enabled: false` in `agent.yaml` for vision-only / voice-only deployments where the upstream vLLM checkpoint is served without a tool-calling chat template and 400s on `tools=[...]`.  The agent still discovers and registers local tools (so subclasses can call them programmatically) — only the schemas sent to the model are suppressed.
+- **`include_tools` per-call override on `astep_stream`** ([#155](https://github.com/fips-agents/agent-template/pull/155)). New keyword-only parameter (`bool | None = None`) mirroring the existing `include_tools` flag on `call_model`.  Resolution rule: explicit kwarg wins, else honor `config.tools.enabled`, else default `True` (backward-compatible for stubs that bypass `setup()`).  Closes the gap where `call_model(include_tools=False)` had no effect on the streaming HTTP path because the server uses `astep_stream`, not `call_model`.
+
 ## [0.20.0] - 2026-05-04
 
 Image input via OpenAI content blocks. Closes [#101](https://github.com/fips-agents/agent-template/issues/101).

@@ -152,10 +152,19 @@ class McpServerConfig(BaseModel):
 
 
 class ToolsConfig(BaseModel):
-    """Settings for local tool discovery."""
+    """Settings for local tool discovery and LLM-visible tool emission.
+
+    ``enabled`` controls whether tool schemas are emitted to the upstream
+    model.  When ``False``, the agent still discovers and registers tools
+    (so subclasses can call them programmatically) but the streaming agent
+    loop sends ``tools=None`` to the model.  Useful for vision-only or
+    voice-only checkpoints served by vLLM that 400 when tool schemas are
+    present.
+    """
 
     local_dir: str = "./tools"
     visibility_default: Literal["agent_only", "llm_only", "both"] = "agent_only"
+    enabled: bool = True
 
 
 class PromptsConfig(BaseModel):
