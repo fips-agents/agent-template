@@ -14,7 +14,13 @@ from fipsagents.baseagent.events import (
     ToolCallDelta,
     ToolResultEvent,
 )
-from fipsagents.baseagent.llm import LLMClient, LLMError, ModelResponse
+from fipsagents.baseagent.llm import (
+    LLMClient,
+    LLMError,
+    ModelResponse,
+    ModerationResult,
+    PlatformResponse,
+)
 from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, create_memory_client
 from fipsagents.baseagent.prompts import Prompt, PromptLoader
 from fipsagents.baseagent.rules import Rule, RuleLoader
@@ -50,6 +56,8 @@ __all__ = [
     "LLMClient",
     "LLMError",
     "ModelResponse",
+    "ModerationResult",
+    "PlatformResponse",
     # memory
     "MemoryClientBase",
     "NullMemoryClient",
