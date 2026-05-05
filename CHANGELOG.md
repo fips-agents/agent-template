@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-05-05
+
 ### Fixed
 
 - **Stub `.memoryhub.yaml` no longer logs a startup traceback** ([#158](https://github.com/fips-agents/agent-template/issues/158)). `_create_memoryhub_client` now short-circuits to `NullMemoryClient` with a single `INFO` line when the parsed config has no `server_url` / `url` field, instead of letting the SDK raise `MemoryHubError("url is required")` and tripping the generic `except` branch (which logged `exc_info=True`). The scaffolded comment-only `.memoryhub.yaml` was the most common trigger — first-time `make run-local` readers now see a clean fallback message instead of a stack trace.
