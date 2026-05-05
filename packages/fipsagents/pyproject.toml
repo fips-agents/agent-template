@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fipsagents"
-version = "0.20.0"
+version = "0.21.0"
 description = "Production-ready AI agent framework for FIPS/OpenShift environments"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -137,4 +137,5 @@ markers = [
     "kagenti: Tests using Kagenti Gateway dispatch",
     "minio: Tests against a live MinIO/S3 endpoint (skipped when unreachable)",
     "chunking_live: Tests against a live Postgres+pgvector and embedding endpoint (skipped when env unset)",
+    "platform_live: Tests against a live OGX (LlamaStack) endpoint (skipped when OGX_ENDPOINT unset)",
 ]
