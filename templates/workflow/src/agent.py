@@ -1,111 +1,74 @@
-"""Example workflow: Research + Summarize pipeline.
+"""Workflow definition — typed state, nodes, and graph wiring.
 
-Demonstrates a workflow with BaseNode (routing) and AgentNode (LLM) nodes:
-  classify -> (if complex) research -> summarize
-           -> (if simple) summarize
+This is a minimal two-node skeleton: one ``BaseNode`` for routing /
+transformation (no LLM), one ``AgentNode`` for an LLM-backed step. Wire
+them with ``Graph`` and run via ``WorkflowRunner``.
+
+Replace the node and state names with your domain — ``/create-agent``
+does this from ``AGENT_PLAN.md``. See CLAUDE.md for the full BaseNode /
+AgentNode / Graph reference.
 """
 
+from __future__ import annotations
+
 import asyncio
-import json
 import logging
 
-from fipsagents.workflow import WorkflowState, BaseNode, Graph, WorkflowRunner, END, node, AgentNode
+from fipsagents.workflow import (
+    END,
+    AgentNode,
+    BaseNode,
+    Graph,
+    WorkflowRunner,
+    WorkflowState,
+    node,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # -- State -------------------------------------------------------------------
 
-class ResearchState(WorkflowState):
-    """Typed state flowing through the research workflow."""
+class MyState(WorkflowState):
+    """Typed state flowing through the workflow."""
+
     query: str
-    complexity: str = ""
-    research_results: str = ""
-    summary: str = ""
+    result: str = ""
 
 
 # -- Nodes -------------------------------------------------------------------
 
 @node()
-class ClassifyNode(BaseNode):
-    """Route based on query complexity. No LLM needed."""
+class PrepareNode(BaseNode):
+    """Lightweight routing / transformation node. No LLM."""
 
-    async def process(self, state: ResearchState) -> ResearchState:
-        complexity = "complex" if len(state.query.split()) > 10 else "simple"
-        self.logger.info("Classified query as %s", complexity)
-        return state.model_copy(update={"complexity": complexity})
-
-
-@node()
-class ResearchNode(AgentNode):
-    """Deep research using LLM and tools."""
-
-    async def process(self, state: ResearchState) -> ResearchState:
-        self.add_message("user", f"Research the following topic thoroughly: {state.query}")
-        response = await self.call_model()
-
-        # Handle tool calls if the LLM wants to use tools
-        while response.tool_calls:
-            self.messages.append({
-                "role": "assistant",
-                "content": response.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in response.tool_calls
-                ],
-            })
-            for tc in response.tool_calls:
-                args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                result = await self.tools.execute(tc.function.name, **args)
-                self.messages.append({
-                    "role": "tool",
-                    "content": result.result,
-                    "tool_call_id": tc.id,
-                })
-            response = await self.call_model()
-
-        return state.model_copy(update={
-            "research_results": response.content or "",
-        })
+    async def process(self, state: MyState) -> MyState:
+        # Replace this with your routing or transformation logic.
+        return state
 
 
 @node()
-class SummarizeNode(AgentNode):
-    """Summarize research results or raw query."""
+class RespondNode(AgentNode):
+    """Full-agent node — calls the model and writes to state."""
 
-    async def process(self, state: ResearchState) -> ResearchState:
-        context = state.research_results or state.query
-        self.add_message("user", f"Summarize the following concisely:\n\n{context}")
+    async def process(self, state: MyState) -> MyState:
+        self.add_message("user", state.query)
         response = await self.call_model(include_tools=False)
-        return state.model_copy(update={
-            "summary": response.content or "",
-        })
+        return state.model_copy(update={"result": response.content or ""})
 
 
 # -- Graph -------------------------------------------------------------------
 
 def build_graph() -> Graph:
-    """Wire the research workflow graph."""
-    graph = Graph(state_type=ResearchState)
+    """Wire the workflow graph."""
+    graph = Graph(state_type=MyState)
 
-    graph.add_node("classify", ClassifyNode())
-    graph.add_node("research", ResearchNode())
-    graph.add_node("summarize", SummarizeNode())
+    graph.add_node("prepare", PrepareNode())
+    graph.add_node("respond", RespondNode())
 
-    graph.set_entry_point("classify")
-    graph.add_conditional_edge(
-        "classify",
-        lambda s: "research" if s.complexity == "complex" else "summarize",
-    )
-    graph.add_edge("research", "summarize")
-    graph.add_edge("summarize", END)
+    graph.set_entry_point("prepare")
+    graph.add_edge("prepare", "respond")
+    graph.add_edge("respond", END)
 
     return graph
 
@@ -113,18 +76,17 @@ def build_graph() -> Graph:
 # -- Entry point -------------------------------------------------------------
 
 async def main() -> None:
-    """Run the example workflow."""
+    """Run the workflow from the command line."""
     logging.basicConfig(level=logging.INFO, format="%(name)s — %(message)s")
 
     graph = build_graph()
     runner = WorkflowRunner(graph, max_steps=10)
 
-    state = ResearchState(query="Explain quantum computing applications in cryptography")
+    state = MyState(query="Hello, world.")
     result = await runner.start(state)
 
-    print(f"\nQuery: {result.query}")
-    print(f"Complexity: {result.complexity}")
-    print(f"Summary: {result.summary}")
+    print(f"\nQuery:  {result.query}")
+    print(f"Result: {result.result}")
 
 
 if __name__ == "__main__":

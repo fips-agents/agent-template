@@ -1,91 +1,26 @@
-"""Research Assistant — agent subclass demonstrating BaseAgent patterns.
+"""Agent subclass — implement step() to define a single agent turn.
 
-Takes a research query, searches the web, validates relevance, and produces
-a structured report with citations.  Shows all three model-calling patterns:
-``call_model``, ``call_model_json``, and ``call_model_validated``.
+This is the minimal shape: one model call, optional tool dispatch, return.
+See CLAUDE.md ("Calling Patterns") for richer patterns — structured output
+via ``call_model_json``, validation-with-retry via ``call_model_validated``,
+and agent-code tool dispatch via ``self.use_tool()``.
+
+Replace ``MyAgent`` with your agent class name (``/create-agent`` does this
+automatically from your ``AGENT_PLAN.md``).
 """
 
 from __future__ import annotations
 
-import logging
-
-from pydantic import BaseModel, Field
-
-from fipsagents.baseagent import BaseAgent, ModelResponse, StepResult
-
-logger = logging.getLogger(__name__)
+from fipsagents.baseagent import BaseAgent, StepResult
 
 
-class ResearchReport(BaseModel):
-    """Structured output schema for the final research report."""
-
-    answer: str = Field(description="The research answer in Markdown")
-    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score")
-    citations: list[str] = Field(default_factory=list, description="Source URLs")
-
-
-class ResearchAssistant(BaseAgent):
-    """A research assistant that searches, evaluates, and reports."""
+class MyAgent(BaseAgent):
+    """Single-turn agent — calls the model, runs any tool calls, returns."""
 
     async def step(self) -> StepResult:
-        # 1. Call the model with LLM-visible tools (e.g. web_search).
-        #    The LLM decides whether to search.  run_tool_calls() handles
-        #    the dispatch loop: execute tools, append results, re-call model.
         response = await self.call_model()
         response = await self.run_tool_calls(response)
-
-        # 2. Produce structured output via call_model_json
-        report_messages = self.messages + [
-            {
-                "role": "user",
-                "content": (
-                    "Based on the research above, produce a structured "
-                    "research report as JSON."
-                ),
-            },
-        ]
-        report = await self.call_model_json(
-            ResearchReport, messages=report_messages
-        )
-
-        # 3. Validate relevance via call_model_validated
-        query = next(
-            (m["content"] for m in self.messages if m["role"] == "user"),
-            "",
-        )
-
-        def validate_relevance(resp: ModelResponse) -> str:
-            """Check the model confirms the report addresses the query."""
-            text = (resp.content or "").lower()
-            if "not relevant" in text or "does not address" in text:
-                raise ValueError("Report does not address the original query")
-            return resp.content or ""
-
-        relevance_check = await self.call_model_validated(
-            validate_relevance,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Does this report address the query '{query}'? "
-                        f"Answer: {report.answer[:200]}"
-                    ),
-                },
-            ],
-        )
-        logger.debug("Relevance validation passed: %s", relevance_check[:80])
-
-        # 4. Format citations using the agent-only tool (plane 1)
-        if report.citations:
-            cite_result = await self.use_tool(
-                "format_citations",
-                urls=report.citations,
-                titles=["Source"] * len(report.citations),
-            )
-            if not cite_result.is_error:
-                report.citations = cite_result.result.splitlines()
-
-        return StepResult.done(result=report)
+        return StepResult.done(result=response.content)
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +36,7 @@ class ResearchAssistant(BaseAgent):
 #        from fipsagents.baseagent import load_config
 #        async def main():
 #            config = load_config()
-#            agent = ResearchAssistant(config=config)
+#            agent = MyAgent(config=config)
 #            await agent.start()
 #        asyncio.run(main())
 #   2. Comment out EXPOSE 8080 in the Containerfile
@@ -114,7 +49,7 @@ if __name__ == "__main__":
 
     config = load_config("agent.yaml")
     server = OpenAIChatServer(
-        agent_class=ResearchAssistant,
+        agent_class=MyAgent,
         config_path="agent.yaml",
         title=config.agent.name,
         version=config.agent.version,

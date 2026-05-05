@@ -14,7 +14,7 @@ python -m evals.run_evals --dry-run
 python -m evals.run_evals
 
 # Run a single case
-python -m evals.run_evals --case basic_research_query
+python -m evals.run_evals --case basic_happy_path
 
 # Run cases matching a tag
 python -m evals.run_evals --tag smoke
@@ -47,23 +47,23 @@ Example:
 ```yaml
 cases:
   - name: my_eval_case
-    description: Verify the agent produces a cited answer for a factual query.
-    input: "What is the CAP theorem?"
+    description: Verify the agent produces a useful response for a typical query.
+    input: "Example user query for your agent"
     expected_behavior: >
-      The agent should search, find reliable sources, and produce a report
-      with at least one citation.
-    tags: [smoke, distributed-systems]
+      The agent should call its primary tool and produce a structured
+      response with the expected fields populated.
+    tags: [smoke]
     assertions:
       - type: field_exists
         field: answer
       - type: contains
         field: answer
-        value: consistency
+        value: expected-keyword
       - type: field_gte
         field: confidence
         value: 0.6
       - type: tool_called
-        tool: web_search
+        tool: example_tool
 ```
 
 ## Assertion types
@@ -86,7 +86,7 @@ Case-insensitive substring check on a field's string value.
 ```yaml
 - type: contains
   field: answer
-  value: quantum
+  value: expected-keyword
 ```
 
 ### `not_contains`
@@ -126,7 +126,7 @@ Checks that a specific tool was invoked during the eval. Optional
 
 ```yaml
 - type: tool_called
-  tool: web_search
+  tool: example_tool
   min_calls: 2
 ```
 
@@ -155,12 +155,17 @@ data = load_fixture("sample_search_results.json")
 ## How the mock LLM works
 
 By default the runner replaces the agent's LLM client with mocks so evals
-run without a live model endpoint. The mock produces:
+run without a live model endpoint. `evals/discovery.py` walks the agent
+module to find the agent class, an LLM-visible tool name, and any
+Pydantic output model — the mock factory then produces:
 
-1. A first `call_model` response containing a `web_search` tool call.
+1. A first `call_model` response containing a tool call against the
+   discovered LLM-visible tool (skipped when no LLM tools are
+   registered, in which case the runner returns text directly).
 2. A second `call_model` response with text content (no tool calls).
-3. A `call_model_json` response returning a `ResearchReport` with fields
-   calibrated to the query (lower confidence for off-topic queries).
+3. A `call_model_json` response returning a mock instance of the
+   discovered Pydantic output model (skipped when the agent does not
+   define one).
 4. A `call_model_validated` response that passes validation.
 
 To run against a real LLM, pass `--real-llm`. This requires a configured

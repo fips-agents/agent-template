@@ -55,43 +55,17 @@ model:
 #
 # Opt in to OGX's /v1/responses endpoint instead of /v1/chat/completions.
 # OGX (the rebrand of LlamaStack) orchestrates MCP tool calls, shield
-# enforcement, and the inference loop server-side -- the agent makes a
-# single call_model_responses() per turn instead of running its own
-# tool-call loop.
+# enforcement, and the inference loop server-side; the agent makes a
+# single call_model_responses() per turn and skips its own tool-call loop.
 #
-# When platform.enabled is true:
-#   - the framework skips its own connect_mcp() startup loop; the entries
-#     under platform.mcp are passed to OGX on every Responses request
-#   - shields listed in platform.guardrails are enforced server-side
-#   - mcp_servers: below is ignored (logged at startup so misconfig is visible)
-#
-# Each MCP entry needs `name` (becomes server_label in logs/traces) plus
-# exactly one of:
-#   - connector_id: references a connector pre-registered in OGX's
-#     stack YAML (right when the platform team controls MCP wiring)
-#   - url: inline server URL passed on every request
-# Optional `authorization` is a bearer token (without the "Bearer " prefix)
-# for OAuth-protected MCP servers.
+# Default is off. Set PLATFORM_MODE=true and point OGX_ENDPOINT at your
+# OGX base URL to enable. To pass MCP servers, guardrails, or moderation
+# config, expand this block — see CLAUDE.md ("Platform Mode") and
+# docs/architecture.md for the full schema.
 #
 # Production env vars:
-#   PLATFORM_MODE         -- "true" to opt in
-#   OGX_ENDPOINT          -- OGX base URL (typically ending in /v1)
-#   PLATFORM_GUARDRAILS   -- comma-separated shield IDs (manual list below
-#                            if more than one)
-#
-# platform:
-#   enabled: ${PLATFORM_MODE:-false}
-#   endpoint: ${OGX_ENDPOINT:-http://ogx:8321/v1}
-#   mcp:
-#     - name: weather
-#       connector_id: mcp::weather
-#     - name: search
-#       url: ${MCP_SEARCH_URL:-http://search-mcp:8080/mcp/}
-#   guardrails:
-#     - code-scanner
-#   moderation:
-#     enabled: false
-#     categories: []
+#   PLATFORM_MODE  -- "true" to opt in
+#   OGX_ENDPOINT   -- OGX base URL (typically ending in /v1)
 platform:
   enabled: ${PLATFORM_MODE:-false}
   endpoint: ${OGX_ENDPOINT:-}
@@ -559,10 +533,9 @@ nodes: {}
 #       tag: latest
 #
 # The tool reads SANDBOX_URL from the environment (set automatically by the
-# Helm chart when sandbox.enabled=true).  For local development, start the
-# sidecar manually:
-#
-#   cd sandbox && uvicorn sandbox.app:app --port 8000
+# Helm chart when sandbox.enabled=true).  For local development, run the
+# sandbox manually from https://github.com/fips-agents/code-sandbox or
+# scaffold a standalone instance with `fips-agents create sandbox <name>`.
 #
 # Available modules in the sandbox:
 #   math, statistics, itertools, functools, re, datetime, collections,
