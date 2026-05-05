@@ -65,16 +65,31 @@ platform-client = [
     # sibling fipsagents-platform service.
     "httpx",
 ]
-files = [
+files-image = [
+    # MIME sniffing only — for agents that handle images via /v1/files
+    # but never parse binary documents.  Tens of MB instead of the ~500 MB
+    # docling pulls in via torch + transformers.  Requires libmagic at
+    # the OS level (``brew install libmagic`` on macOS, ``dnf install
+    # file-libs`` on UBI/RHEL). Falls back gracefully when libmagic is
+    # absent: server logs a warning and uses the client-supplied type.
+    "python-magic>=0.4.27",
+]
+files-text = [
     # Document parsing for /v1/files uploads. Docling covers PDF, DOCX,
     # PPTX, XLSX, HTML, and images. Plaintext parsing is built-in and
     # works without docling; this extra adds binary-format support.
+    # Pulls torch + transformers transitively (~500 MB).
     "docling>=2.30",
-    # MIME sniffing — detect actual file content rather than trusting
-    # the client-supplied Content-Type header. Requires libmagic at the
-    # OS level (``brew install libmagic`` on macOS, ``dnf install
-    # file-libs`` on UBI/RHEL). Falls back gracefully when libmagic is
-    # absent: server logs a warning and uses the client-supplied type.
+    # python-magic is needed to sniff the MIME type before dispatching
+    # to docling, so it lives in this extra too.
+    "python-magic>=0.4.27",
+]
+files = [
+    # Meta-extra: the union of files-image and files-text, preserved for
+    # backward compatibility with anything pinning ``fipsagents[files]``.
+    # New deployments that only handle images should prefer
+    # ``fipsagents[files-image]`` to avoid the docling footprint.
+    "docling>=2.30",
     "python-magic>=0.4.27",
 ]
 s3 = [

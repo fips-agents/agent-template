@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **`tools.enabled` toggle on `ToolsConfig`** ([#155](https://github.com/fips-agents/agent-template/pull/155)). New boolean field (default `True`) that suppresses LLM-visible tool emission for an entire agent.  Set `tools.enabled: false` in `agent.yaml` for vision-only / voice-only deployments where the upstream vLLM checkpoint is served without a tool-calling chat template and 400s on `tools=[...]`.  The agent still discovers and registers local tools (so subclasses can call them programmatically) — only the schemas sent to the model are suppressed.
 - **`include_tools` per-call override on `astep_stream`** ([#155](https://github.com/fips-agents/agent-template/pull/155)). New keyword-only parameter (`bool | None = None`) mirroring the existing `include_tools` flag on `call_model`.  Resolution rule: explicit kwarg wins, else honor `config.tools.enabled`, else default `True` (backward-compatible for stubs that bypass `setup()`).  Closes the gap where `call_model(include_tools=False)` had no effect on the streaming HTTP path because the server uses `astep_stream`, not `call_model`.
 
+### Changed
+
+- **`[files]` extra split into `[files-image]` and `[files-text]`** ([#156](https://github.com/fips-agents/agent-template/pull/156)). Image-only agents that only need libmagic-based MIME sniffing can now install `fipsagents[files-image]` (~few MB) instead of dragging in docling + torch + transformers (~500 MB) via the meta extra. `[files-text]` retains the heavy docling toolchain for PDF/DOCX/PPTX/XLSX parsing. `[files]` is preserved as a meta-extra equal to the union, so existing pins like `pip install fipsagents[files]` and the agent-loop template's dependency resolve identically. No code-path changes — the lazy docling import in `parser.py` already gracefully degrades to `parse_status="skipped"` when docling is absent, which is exactly what an image-only deployment now sees.
+
 ## [0.20.0] - 2026-05-04
 
 Image input via OpenAI content blocks. Closes [#101](https://github.com/fips-agents/agent-template/issues/101).
