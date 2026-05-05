@@ -250,6 +250,32 @@ class TestAgentConfigDefaults:
 
 
 # ---------------------------------------------------------------------------
+# ToolsConfig
+# ---------------------------------------------------------------------------
+
+
+class TestToolsConfig:
+    def test_enabled_defaults_to_true(self):
+        config = AgentConfig()
+        assert config.tools.enabled is True
+
+    def test_enabled_false_parses_from_yaml(self):
+        config = load_config_from_string(
+            "tools:\n  enabled: false\n",
+        )
+        assert config.tools.enabled is False
+        # Other defaults remain intact.
+        assert config.tools.local_dir == "./tools"
+
+    def test_enabled_true_parses_from_yaml(self):
+        config = load_config_from_string(
+            "tools:\n  enabled: true\n  local_dir: ./custom\n",
+        )
+        assert config.tools.enabled is True
+        assert config.tools.local_dir == "./custom"
+
+
+# ---------------------------------------------------------------------------
 # LLMConfig
 # ---------------------------------------------------------------------------
 
