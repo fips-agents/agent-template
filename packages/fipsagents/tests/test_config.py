@@ -502,15 +502,26 @@ model:
 
 
 class TestPlatformMcpServer:
-    def test_name_only_is_tool_group_reference(self):
-        srv = PlatformMcpServer(name="calculus")
+    def test_connector_id_reference(self):
+        srv = PlatformMcpServer(name="calculus", connector_id="mcp::calculus")
         assert srv.name == "calculus"
+        assert srv.connector_id == "mcp::calculus"
         assert srv.url is None
+        assert srv.authorization is None
 
-    def test_name_and_url_is_inline(self):
+    def test_inline_url(self):
         srv = PlatformMcpServer(name="calculus", url="http://mcp:8080/mcp/")
         assert srv.name == "calculus"
         assert srv.url == "http://mcp:8080/mcp/"
+        assert srv.connector_id is None
+
+    def test_authorization_token(self):
+        srv = PlatformMcpServer(
+            name="deepwiki",
+            url="https://mcp.deepwiki.com/sse",
+            authorization="abc123",
+        )
+        assert srv.authorization == "abc123"
 
     def test_name_required(self):
         with pytest.raises(ValidationError):
@@ -518,7 +529,19 @@ class TestPlatformMcpServer:
 
     def test_empty_name_rejected(self):
         with pytest.raises(ValidationError, match="must not be empty"):
-            PlatformMcpServer(name="   ")
+            PlatformMcpServer(name="   ", connector_id="mcp::x")
+
+    def test_neither_reference_rejected(self):
+        with pytest.raises(ValidationError, match="connector_id.*url.*neither"):
+            PlatformMcpServer(name="calculus")
+
+    def test_both_references_rejected(self):
+        with pytest.raises(ValidationError, match="cannot have both"):
+            PlatformMcpServer(
+                name="calculus",
+                connector_id="mcp::calculus",
+                url="http://mcp:8080/mcp/",
+            )
 
 
 class TestModerationConfig:
@@ -588,6 +611,7 @@ platform:
     - name: calculus
       url: http://calculus.svc.cluster.local:8080/mcp/
     - name: weather
+      connector_id: mcp::weather
   guardrails:
     - content_safety
     - prompt_guard
@@ -602,7 +626,9 @@ platform:
         assert len(cfg.platform.mcp) == 2
         assert cfg.platform.mcp[0].name == "calculus"
         assert cfg.platform.mcp[0].url == "http://calculus.svc.cluster.local:8080/mcp/"
+        assert cfg.platform.mcp[0].connector_id is None
         assert cfg.platform.mcp[1].name == "weather"
+        assert cfg.platform.mcp[1].connector_id == "mcp::weather"
         assert cfg.platform.mcp[1].url is None
         assert cfg.platform.guardrails == ["content_safety", "prompt_guard"]
         assert cfg.platform.moderation.enabled is True

@@ -155,23 +155,30 @@ class PlatformMcpServer(BaseModel):
     """A single MCP server registered with OGX (LlamaStack) for server-side
     orchestration.
 
-    Two reference modes are supported:
+    Two reference modes are supported, matching the OGX Responses API
+    ``tools`` array shape:
 
-    - **Tool-group reference**: only ``name`` set.  The name must match a
-      ``tool_group`` registered in OGX's ``config.yaml``.  The agent
-      passes the name to ``client.responses.create`` and OGX routes the
-      tool calls server-side — the URL never needs to live in
-      ``agent.yaml``.
-    - **Inline URL**: ``name`` plus ``url``.  The URL is passed to OGX as
-      ``{"type":"mcp","server_url":...}`` on every Responses request.
-      Right when the platform team has not pre-registered the server.
+    - **Connector reference**: ``name`` plus ``connector_id``.  Serialized
+      as ``{"type":"mcp","server_label":<name>,"connector_id":<id>}``.
+      The connector must be pre-registered in OGX's stack YAML
+      (``connectors:`` block).  Right when the platform team controls
+      MCP wiring centrally.
+    - **Inline URL**: ``name`` plus ``url``.  Serialized as
+      ``{"type":"mcp","server_label":<name>,"server_url":<url>}``.  Right
+      when the platform team has not pre-registered the server.
 
-    ``name`` is always required so logs/traces have a stable identifier
-    regardless of which mode is in use.
+    ``name`` is always required and becomes ``server_label`` on the wire
+    — a human-readable identifier OGX surfaces in logs and traces.
+    ``authorization`` is an optional bearer token (sent without the
+    ``Bearer `` prefix) for OAuth-protected MCP servers.
+
+    Exactly one of ``connector_id`` / ``url`` must be set.
     """
 
     name: str
+    connector_id: str | None = None
     url: str | None = None
+    authorization: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -179,6 +186,22 @@ class PlatformMcpServer(BaseModel):
         if not v.strip():
             raise ValueError("PlatformMcpServer.name must not be empty")
         return v
+
+    @model_validator(mode="after")
+    def _require_one_reference(self) -> "PlatformMcpServer":
+        has_connector = bool(self.connector_id and self.connector_id.strip())
+        has_url = bool(self.url and self.url.strip())
+        if not has_connector and not has_url:
+            raise ValueError(
+                "PlatformMcpServer requires either 'connector_id' (registered "
+                "connector) or 'url' (inline server URL), got neither"
+            )
+        if has_connector and has_url:
+            raise ValueError(
+                "PlatformMcpServer cannot have both 'connector_id' and 'url' "
+                "— pick one reference mode"
+            )
+        return self
 
 
 class ModerationConfig(BaseModel):
