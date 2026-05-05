@@ -241,6 +241,30 @@ class TestCreateMemoryClientFactory:
         assert isinstance(client, NullMemoryClient)
 
     @pytest.mark.asyncio
+    async def test_returns_null_when_config_has_no_server_url(self, tmp_path, caplog):
+        """A stub `.memoryhub.yaml` (comment-only or missing server_url) must
+        short-circuit to NullMemoryClient with a single info log — no
+        traceback. Regression: the SDK raises MemoryHubError("url is
+        required") and the generic except path logs exc_info=True, which
+        spooks first-time readers of `make run-local`."""
+        config_file = tmp_path / ".memoryhub.yaml"
+        config_file.write_text("# MemoryHub configuration — see docs for details\n")
+
+        mock_memoryhub = MagicMock()
+
+        with caplog.at_level("DEBUG", logger="fipsagents.baseagent.memory"):
+            with patch.dict(sys.modules, {"memoryhub": mock_memoryhub}):
+                client = await create_memory_client(config_file)
+
+        assert isinstance(client, NullMemoryClient)
+        # Did not attempt to construct the SDK — that's the whole point.
+        mock_memoryhub.MemoryHubClient.assert_not_called()
+        # Only the friendly info line — no traceback / warning.
+        records = [r for r in caplog.records if r.name == "fipsagents.baseagent.memory"]
+        assert any(r.levelname == "INFO" and "no server_url" in r.message for r in records)
+        assert not any(r.levelname == "WARNING" for r in records)
+
+    @pytest.mark.asyncio
     async def test_returns_memory_client_when_configured(self, tmp_path):
         config_file = tmp_path / ".memoryhub.yaml"
         config_file.write_text("server_url: http://localhost:8000\n")
