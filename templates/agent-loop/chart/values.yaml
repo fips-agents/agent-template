@@ -99,7 +99,8 @@ llm_adapter:
 #
 # Prerequisites:
 #   1. Add tools/code_executor.py to your agent (see /add-tool).
-#   2. Build and push the sandbox image from sandbox/ at the repo root.
+#   2. Build the sandbox image from https://github.com/fips-agents/code-sandbox
+#      and push it to your registry.
 sandbox:
   enabled: false
   # Sandbox profile: minimal, data-science, financial, code-analysis.

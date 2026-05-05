@@ -69,7 +69,7 @@ agent-template/
   planning/                # In-flight: requirements, scope, constraints
   packages/
     fipsagents/            # Shared BaseAgent package (pip-installable)
-  sandbox/                 # EXTRACTED to fips-agents/code-sandbox (pointer README remains)
+  # sandbox/ extracted to https://github.com/fips-agents/code-sandbox
   # examples moved to fips-agents/examples repo (calculus-agent, calculus-helper)
   templates/
     agent-loop/            # Single-agent loop template

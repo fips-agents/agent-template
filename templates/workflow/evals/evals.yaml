@@ -21,55 +21,17 @@
 #       min_calls:     Minimum invocation count (for tool_called type, optional).
 
 cases:
-  - name: simple_query_direct_summarize
+  - name: basic_happy_path
     description: >
-      A short query (10 words or fewer) should be classified as "simple"
-      and routed directly to the summarize node, skipping research.
-    input: "What is quantum computing?"
+      A typical request that flows from the entry node to END and writes
+      something to the output field. Replace with a real smoke-test
+      scenario for your workflow.
+    input: "Example input for the workflow"
     expected_behavior: >
-      The classify node marks complexity as "simple". The workflow skips
-      the research node and goes directly to summarize. The final state
-      has a non-empty summary and empty research_results.
+      The workflow runs through every node in the happy-path route and
+      ends with the output field populated.
     tags: [smoke]
     assertions:
-      - type: field_equals
-        field: complexity
-        value: "simple"
+      # Replace 'result' with the output field on your state model.
       - type: field_exists
-        field: summary
-
-  - name: complex_query_full_pipeline
-    description: >
-      A longer query (more than 10 words) should be classified as
-      "complex" and routed through research before summarization.
-    input: "Explain the applications of quantum computing in modern cryptography and how it affects current encryption standards"
-    expected_behavior: >
-      The classify node marks complexity as "complex". The workflow
-      routes through the research node (which may call tools) and then
-      to the summarize node. The final state has non-empty
-      research_results and summary.
-    tags: [smoke, multi-step]
-    assertions:
-      - type: field_equals
-        field: complexity
-        value: "complex"
-      - type: field_exists
-        field: research_results
-      - type: field_exists
-        field: summary
-
-  - name: minimal_input
-    description: >
-      A single-word query should still complete without errors,
-      classified as "simple" and summarized directly.
-    input: "Kubernetes"
-    expected_behavior: >
-      The workflow completes gracefully with a simple classification
-      and a summary produced from the raw query.
-    tags: [edge]
-    assertions:
-      - type: field_equals
-        field: complexity
-        value: "simple"
-      - type: field_exists
-        field: summary
+        field: result

@@ -69,7 +69,7 @@ evals/                 # Eval cases and runner
 
 ## Writing Your Agent Subclass
 
-Your agent is a subclass of `BaseAgent` that implements `step()`. Everything else is inherited.
+Your agent is a subclass of `BaseAgent` that implements `step()`. Everything else is inherited. The minimal shape — one model call, optional tool dispatch, return — is what `src/agent.py` ships:
 
 ```python
 from fipsagents.baseagent import BaseAgent, StepResult
@@ -77,38 +77,73 @@ from fipsagents.baseagent import BaseAgent, StepResult
 class MyAgent(BaseAgent):
     async def step(self) -> StepResult:
         response = await self.call_model()
+        response = await self.run_tool_calls(response)
+        return StepResult.done(result=response.content)
+```
 
-        # Process LLM-initiated tool calls (uses tools.execute directly —
-        # this is the LLM's dispatch path; for agent-code-initiated calls,
-        # use self.use_tool() instead)
-        while response.tool_calls:
-            # Append assistant message first -- tool_results must follow a tool_use.
-            self.messages.append({
-                "role": "assistant",
-                "content": response.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in response.tool_calls
-                ],
-            })
-            for tc in response.tool_calls:
-                args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                result = await self.tools.execute(tc.function.name, **args)
-                self.messages.append({
-                    "role": "tool",
-                    "content": result.result,
-                    "tool_call_id": tc.id,  # REQUIRED by OpenAI-compatible APIs
-                })
-            response = await self.call_model()
+`self.run_tool_calls(response)` handles the LLM's tool-call dispatch loop: appends the assistant turn, executes each requested tool, appends each `tool` result with its `tool_call_id`, and re-calls the model until the LLM stops asking for tools. You only need the manual loop (below) if you want to intercept tool calls or inject extra logic between rounds.
 
-        return StepResult.done(response.content)
+### Calling Patterns
+
+Beyond `call_model` / `run_tool_calls`, BaseAgent gives you three richer patterns. Mix them in `step()` as needed.
+
+**Structured output** — `call_model_json(schema, ...)` returns a Pydantic instance:
+
+```python
+from pydantic import BaseModel, Field
+
+class Report(BaseModel):
+    answer: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+report = await self.call_model_json(Report, messages=self.messages + [
+    {"role": "user", "content": "Produce a structured report as JSON."},
+])
+```
+
+**Validation with retry** — `call_model_validated(validator_fn, ...)` calls the model, validates with your function, and retries with backoff if the validator raises:
+
+```python
+def validate(resp):
+    if "not relevant" in (resp.content or "").lower():
+        raise ValueError("Off-topic response")
+    return resp.content
+
+text = await self.call_model_validated(validate, max_retries=3, messages=[
+    {"role": "user", "content": "Does this answer the question?"},
+])
+```
+
+**Agent-code tool dispatch** — `self.use_tool(name, **kwargs)` calls a tool from your code (plane 1, invisible to the LLM):
+
+```python
+result = await self.use_tool("my_validator", text=text)
+if not result.is_error:
+    cleaned = result.result
+```
+
+**Manual tool-call loop** — only when `run_tool_calls` isn't a fit (for example, when you want to log every round trip or stream intermediate state):
+
+```python
+while response.tool_calls:
+    self.messages.append({
+        "role": "assistant",
+        "content": response.content or "",
+        "tool_calls": [
+            {"id": tc.id, "type": "function",
+             "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+            for tc in response.tool_calls
+        ],
+    })
+    for tc in response.tool_calls:
+        args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+        result = await self.tools.execute(tc.function.name, **args)
+        self.messages.append({
+            "role": "tool",
+            "content": result.result,
+            "tool_call_id": tc.id,  # REQUIRED by OpenAI-compatible APIs
+        })
+    response = await self.call_model()
 ```
 
 ### Key BaseAgent Methods
@@ -218,6 +253,20 @@ The agent runs locally with zero external config using the defaults.
 - **Do not use `self.use_tool()` for LLM-originated tool calls.** Those go through `self.tools.execute()` in the tool-call loop. `self.use_tool()` is for agent-code-initiated calls (plane 1).
 - **Do not edit `src/fipsagents/baseagent/`.** It is the framework. Your code goes in `src/agent.py`, `tools/`, `prompts/`, `skills/`, and `rules/`.
 
+## Platform Mode
+
+`agent.yaml` ships with a `platform:` block that defaults to off:
+
+```yaml
+platform:
+  enabled: ${PLATFORM_MODE:-false}
+  endpoint: ${OGX_ENDPOINT:-}
+```
+
+When `enabled: true`, the framework calls OGX's `/v1/responses` endpoint instead of `/v1/chat/completions`. OGX (the rebrand of LlamaStack) orchestrates MCP tool calls, shield enforcement, and the inference loop server-side; the agent makes a single `call_model_responses()` per turn and skips its own tool-call loop. To pass MCP servers, guardrails, or moderation config, expand the block — see `docs/architecture.md` ("Platform Mode") for the full schema and `BaseAgent.call_model_responses()` / `BaseAgent.moderate()`.
+
+When `platform.enabled` is `true`, the legacy `mcp_servers:` block is ignored (logged at startup so misconfig is visible).
+
 ## Deployment
 
 1. `make test` -- tests must pass
@@ -242,7 +291,7 @@ For **multi-replica deployments or when MinIO/S3 is available**, set `files.byte
 
 To deploy a ClamAV sidecar for virus scanning, set `files.virusScanner.enabled=true` in `chart/values.yaml`. The Helm chart wires the agent's `FILES_SCANNER_URL` env var to `http://localhost:8088/scan` automatically — your sidecar image must expose an HTTP shim that translates the framework's `POST bytes → JSON {infected, viruses}` contract to clamd.
 
-To let the LLM deliberately re-read an upload (rather than relying on automatic injection), copy `tools/_attached_file.py.example` to `tools/attached_file.py` and rebuild. The example registers an `llm_only` tool that takes a `file_id` and returns the extracted text.
+To let the LLM deliberately re-read an upload (rather than relying on automatic injection), add a `tools/attached_file.py` with an `llm_only` `@tool` that takes a `file_id` and returns the extracted text. The framework's `FileStore.get_extracted_text(file_id)` is the canonical lookup; reach the configured store via `agent.config.server.files` (see [`fipsagents.server.files.create_file_store`](https://github.com/fips-agents/agent-template/blob/main/packages/fipsagents/src/fipsagents/server/files.py)).
 
 ## Dependencies
 
