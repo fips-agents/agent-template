@@ -67,6 +67,30 @@ class ContentDelta:
 
 
 @dataclass
+class GuardrailFiredEvent:
+    """A platform-side shield (Llama Guard, Prompt Guard, etc.) fired on
+    the current turn.
+
+    Emitted when ``platform.enabled`` is True and OGX reports a shield
+    activation in the Responses event stream. ``action`` distinguishes
+    advisory firings (``warned``) from terminal ones (``blocked``); a
+    ``blocked`` event will be followed by ``StreamComplete`` with
+    ``finish_reason="guardrail"``.
+
+    ``shield_id`` matches an entry in ``platform.guardrails``.
+    ``category`` is the classifier label OGX returned (e.g.
+    ``"hate"``, ``"jailbreak"``); ``None`` when the shield does not
+    expose categories. ``message`` is the optional human-readable
+    explanation from the shield.
+    """
+
+    shield_id: str
+    action: str  # "blocked" | "warned"
+    category: str | None = None
+    message: str | None = None
+
+
+@dataclass
 class StreamMetrics:
     """Per-stream timing and token counts.
 
@@ -101,5 +125,6 @@ StreamEvent = Union[
     ToolCallDelta,
     ToolResultEvent,
     ContentDelta,
+    GuardrailFiredEvent,
     StreamComplete,
 ]
