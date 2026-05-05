@@ -151,6 +151,138 @@ class McpServerConfig(BaseModel):
         return self
 
 
+class PlatformMcpServer(BaseModel):
+    """A single MCP server registered with OGX (LlamaStack) for server-side
+    orchestration.
+
+    Two reference modes are supported, matching the OGX Responses API
+    ``tools`` array shape:
+
+    - **Connector reference**: ``name`` plus ``connector_id``.  Serialized
+      as ``{"type":"mcp","server_label":<name>,"connector_id":<id>}``.
+      The connector must be pre-registered in OGX's stack YAML
+      (``connectors:`` block).  Right when the platform team controls
+      MCP wiring centrally.
+    - **Inline URL**: ``name`` plus ``url``.  Serialized as
+      ``{"type":"mcp","server_label":<name>,"server_url":<url>}``.  Right
+      when the platform team has not pre-registered the server.
+
+    ``name`` is always required and becomes ``server_label`` on the wire
+    — a human-readable identifier OGX surfaces in logs and traces.
+    ``authorization`` is an optional bearer token (sent without the
+    ``Bearer `` prefix) for OAuth-protected MCP servers.
+
+    Exactly one of ``connector_id`` / ``url`` must be set.
+    """
+
+    name: str
+    connector_id: str | None = None
+    url: str | None = None
+    authorization: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("PlatformMcpServer.name must not be empty")
+        return v
+
+    @model_validator(mode="after")
+    def _require_one_reference(self) -> "PlatformMcpServer":
+        has_connector = bool(self.connector_id and self.connector_id.strip())
+        has_url = bool(self.url and self.url.strip())
+        if not has_connector and not has_url:
+            raise ValueError(
+                "PlatformMcpServer requires either 'connector_id' (registered "
+                "connector) or 'url' (inline server URL), got neither"
+            )
+        if has_connector and has_url:
+            raise ValueError(
+                "PlatformMcpServer cannot have both 'connector_id' and 'url' "
+                "— pick one reference mode"
+            )
+        return self
+
+
+class ModerationConfig(BaseModel):
+    """Pre/post moderation classification via OGX's ``/v1/moderations``.
+
+    Separate from shield enforcement — this is observability-only.  When
+    ``enabled`` is True, the framework calls
+    ``client.moderations.create()`` on the user message before the
+    Responses call and on the assistant content after, emitting structured
+    log events.  No prompt is ever blocked here; that is what
+    ``platform.guardrails`` (shields) are for.
+
+    ``categories`` is the explicit list of classification categories to
+    request from OGX.  Empty list (the default) means "all default
+    categories the moderation model exposes".
+    """
+
+    enabled: bool = False
+    categories: list[str] = Field(default_factory=list)
+
+
+class PlatformConfig(BaseModel):
+    """Opt-in delegation of LLM orchestration to OGX (LlamaStack rebrand).
+
+    When ``enabled`` is True, the agent talks to OGX's ``/v1/responses``
+    endpoint via ``client.responses.create()`` instead of
+    ``chat.completions.create()``.  MCP tool calls, shield enforcement,
+    tool-result feeding, and the inference loop all happen server-side
+    inside OGX.
+
+    When ``enabled`` is False (the default), this block is inert and the
+    agent uses the standard chat-completions path with client-side MCP
+    orchestration via ``mcp_servers`` — fully backward-compatible.
+
+    ``endpoint`` is the OGX base URL (typically ending in ``/v1``).
+    Required when ``enabled`` is True.
+
+    ``mcp`` lists MCP servers OGX should orchestrate on the agent's
+    behalf.  Replaces the top-level ``mcp_servers:`` block when platform
+    mode is on; the framework skips its own ``connect_mcp()`` startup
+    loop in that case.
+
+    ``guardrails`` is a list of shield IDs registered in OGX's
+    ``config.yaml`` (Llama Guard, Prompt Guard, etc.).  Passed as the
+    ``guardrails`` array on every Responses request.  Empty list means
+    no enforcement.
+
+    ``moderation`` is the observability-only classifier — see
+    :class:`ModerationConfig`.
+    """
+
+    enabled: bool = False
+    endpoint: str | None = None
+    mcp: list[PlatformMcpServer] = Field(default_factory=list)
+    guardrails: list[str] = Field(default_factory=list)
+    moderation: ModerationConfig = Field(default_factory=ModerationConfig)
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _coerce_enabled(cls, v: Any) -> Any:
+        """Coerce string values from env-var substitution (``${PLATFORM_MODE:-false}``)."""
+        if isinstance(v, str):
+            lowered = v.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off", ""}:
+                return False
+            raise ValueError(
+                f"platform.enabled must be a boolean, got '{v}'"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _require_endpoint_when_enabled(self) -> "PlatformConfig":
+        if self.enabled and not (self.endpoint and self.endpoint.strip()):
+            raise ValueError(
+                "platform.endpoint is required when platform.enabled is true"
+            )
+        return self
+
+
 class ToolsConfig(BaseModel):
     """Settings for local tool discovery and LLM-visible tool emission.
 
@@ -780,6 +912,7 @@ class AgentConfig(BaseModel):
     agent: AgentIdentity = Field(default_factory=AgentIdentity)
     model: LLMConfig = Field(default_factory=LLMConfig)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
+    platform: PlatformConfig = Field(default_factory=PlatformConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
     loop: LoopConfig = Field(default_factory=LoopConfig)

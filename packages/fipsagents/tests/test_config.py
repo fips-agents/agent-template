@@ -12,7 +12,10 @@ from fipsagents.baseagent.config import (
     LLMConfig,
     LoggingConfig,
     LoopConfig,
+    ModerationConfig,
     NodeConfig,
+    PlatformConfig,
+    PlatformMcpServer,
     _substitute_recursive,
     load_config,
     load_config_from_string,
@@ -491,3 +494,172 @@ model:
   name: test-model
 """)
         assert cfg.nodes == {}
+
+
+# ---------------------------------------------------------------------------
+# PlatformConfig (issue #154)
+# ---------------------------------------------------------------------------
+
+
+class TestPlatformMcpServer:
+    def test_connector_id_reference(self):
+        srv = PlatformMcpServer(name="calculus", connector_id="mcp::calculus")
+        assert srv.name == "calculus"
+        assert srv.connector_id == "mcp::calculus"
+        assert srv.url is None
+        assert srv.authorization is None
+
+    def test_inline_url(self):
+        srv = PlatformMcpServer(name="calculus", url="http://mcp:8080/mcp/")
+        assert srv.name == "calculus"
+        assert srv.url == "http://mcp:8080/mcp/"
+        assert srv.connector_id is None
+
+    def test_authorization_token(self):
+        srv = PlatformMcpServer(
+            name="deepwiki",
+            url="https://mcp.deepwiki.com/sse",
+            authorization="abc123",
+        )
+        assert srv.authorization == "abc123"
+
+    def test_name_required(self):
+        with pytest.raises(ValidationError):
+            PlatformMcpServer()  # type: ignore[call-arg]
+
+    def test_empty_name_rejected(self):
+        with pytest.raises(ValidationError, match="must not be empty"):
+            PlatformMcpServer(name="   ", connector_id="mcp::x")
+
+    def test_neither_reference_rejected(self):
+        with pytest.raises(ValidationError, match="connector_id.*url.*neither"):
+            PlatformMcpServer(name="calculus")
+
+    def test_both_references_rejected(self):
+        with pytest.raises(ValidationError, match="cannot have both"):
+            PlatformMcpServer(
+                name="calculus",
+                connector_id="mcp::calculus",
+                url="http://mcp:8080/mcp/",
+            )
+
+
+class TestModerationConfig:
+    def test_defaults(self):
+        cfg = ModerationConfig()
+        assert cfg.enabled is False
+        assert cfg.categories == []
+
+    def test_with_categories(self):
+        cfg = ModerationConfig(enabled=True, categories=["hate", "violence"])
+        assert cfg.enabled is True
+        assert cfg.categories == ["hate", "violence"]
+
+
+class TestPlatformConfig:
+    def test_defaults_disabled(self):
+        cfg = PlatformConfig()
+        assert cfg.enabled is False
+        assert cfg.endpoint is None
+        assert cfg.mcp == []
+        assert cfg.guardrails == []
+        assert isinstance(cfg.moderation, ModerationConfig)
+
+    def test_enabled_requires_endpoint(self):
+        with pytest.raises(ValidationError, match="endpoint is required"):
+            PlatformConfig(enabled=True)
+
+    def test_enabled_with_endpoint(self):
+        cfg = PlatformConfig(enabled=True, endpoint="http://ogx:8321/v1")
+        assert cfg.enabled is True
+        assert cfg.endpoint == "http://ogx:8321/v1"
+
+    def test_enabled_with_blank_endpoint_rejected(self):
+        with pytest.raises(ValidationError, match="endpoint is required"):
+            PlatformConfig(enabled=True, endpoint="   ")
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("true", True),
+            ("True", True),
+            ("1", True),
+            ("yes", True),
+            ("on", True),
+            ("false", False),
+            ("False", False),
+            ("0", False),
+            ("no", False),
+            ("off", False),
+            ("", False),
+        ],
+    )
+    def test_enabled_string_coercion(self, raw, expected):
+        cfg = PlatformConfig(enabled=raw, endpoint="http://ogx:8321/v1")  # type: ignore[arg-type]
+        assert cfg.enabled is expected
+
+    def test_invalid_enabled_string_rejected(self):
+        with pytest.raises(ValidationError):
+            PlatformConfig(enabled="maybe")  # type: ignore[arg-type]
+
+    def test_full_config_from_yaml(self):
+        cfg = load_config_from_string("""
+platform:
+  enabled: true
+  endpoint: http://ogx:8321/v1
+  mcp:
+    - name: calculus
+      url: http://calculus.svc.cluster.local:8080/mcp/
+    - name: weather
+      connector_id: mcp::weather
+  guardrails:
+    - content_safety
+    - prompt_guard
+  moderation:
+    enabled: true
+    categories:
+      - hate
+      - violence
+""")
+        assert cfg.platform.enabled is True
+        assert cfg.platform.endpoint == "http://ogx:8321/v1"
+        assert len(cfg.platform.mcp) == 2
+        assert cfg.platform.mcp[0].name == "calculus"
+        assert cfg.platform.mcp[0].url == "http://calculus.svc.cluster.local:8080/mcp/"
+        assert cfg.platform.mcp[0].connector_id is None
+        assert cfg.platform.mcp[1].name == "weather"
+        assert cfg.platform.mcp[1].connector_id == "mcp::weather"
+        assert cfg.platform.mcp[1].url is None
+        assert cfg.platform.guardrails == ["content_safety", "prompt_guard"]
+        assert cfg.platform.moderation.enabled is True
+        assert cfg.platform.moderation.categories == ["hate", "violence"]
+
+    def test_env_var_substitution(self):
+        cfg = load_config_from_string(
+            """
+platform:
+  enabled: ${PLATFORM_MODE:-false}
+  endpoint: ${OGX_ENDPOINT:-http://ogx:8321/v1}
+  mcp:
+    - name: calculus
+      url: ${MCP_CALCULUS_URL:-http://calculus.svc.cluster.local:8080/mcp/}
+""",
+            env={"PLATFORM_MODE": "true"},
+        )
+        assert cfg.platform.enabled is True
+        assert cfg.platform.endpoint == "http://ogx:8321/v1"
+        assert cfg.platform.mcp[0].url == "http://calculus.svc.cluster.local:8080/mcp/"
+
+    def test_env_var_default_disables(self):
+        cfg = load_config_from_string(
+            """
+platform:
+  enabled: ${PLATFORM_MODE:-false}
+""",
+        )
+        assert cfg.platform.enabled is False
+
+    def test_default_in_agent_config(self):
+        cfg = AgentConfig()
+        assert isinstance(cfg.platform, PlatformConfig)
+        assert cfg.platform.enabled is False

@@ -33,7 +33,12 @@ from fipsagents.baseagent.events import (
     ToolCallDelta,
     ToolResultEvent,
 )
-from fipsagents.baseagent.llm import LLMClient, ModelResponse
+from fipsagents.baseagent.llm import (
+    LLMClient,
+    ModelResponse,
+    ModerationResult,
+    PlatformResponse,
+)
 from fipsagents.baseagent.reasoning import ThinkTagParser, create_reasoning_parser
 from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, create_memory_client
 from fipsagents.baseagent.prompts import PromptLoader, PromptNotFoundError
@@ -166,7 +171,7 @@ class BaseAgent(abc.ABC):
                 self.config.model.provider,
                 _ADAPTER_ENDPOINT,
             )
-        self.llm = LLMClient(effective_model_cfg)
+        self.llm = LLMClient(effective_model_cfg, platform=self.config.platform)
 
         # 4. Tool discovery
         tools_dir = base / self.config.tools.local_dir
@@ -218,8 +223,27 @@ class BaseAgent(abc.ABC):
         )
 
         # 9. MCP servers
-        for mcp_cfg in self.config.mcp_servers:
-            await self.connect_mcp(mcp_cfg)
+        if self.config.platform.enabled:
+            # In platform mode OGX orchestrates MCP server-side; the agent
+            # never opens its own FastMCP client connections. Surface the
+            # skip so deployments that misconfigure both blocks see it.
+            if self.config.mcp_servers:
+                logger.info(
+                    "platform.enabled=true — skipping client-side connect_mcp() "
+                    "for %d configured mcp_servers; OGX will orchestrate "
+                    "%d platform.mcp entries server-side",
+                    len(self.config.mcp_servers),
+                    len(self.config.platform.mcp),
+                )
+            else:
+                logger.info(
+                    "platform.enabled=true — OGX will orchestrate %d "
+                    "platform.mcp entries server-side",
+                    len(self.config.platform.mcp),
+                )
+        else:
+            for mcp_cfg in self.config.mcp_servers:
+                await self.connect_mcp(mcp_cfg)
 
         # 10. Seed messages with system prompt + optional memory prefix.
         self.messages.append(
@@ -709,6 +733,81 @@ class BaseAgent(abc.ABC):
                 "LLM client not initialised. Call setup() before making "
                 "model calls."
             )
+
+    # -- Platform mode (Responses API + moderations) -----------------------
+
+    async def call_model_responses(
+        self,
+        input: str | list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        guardrails: list[str] | None = None,
+        **kwargs: Any,
+    ) -> "PlatformResponse":
+        """Non-streaming OGX ``/v1/responses`` call.
+
+        Requires ``platform.enabled=true`` in ``agent.yaml``.  Defaults
+        ``tools`` to the configured ``platform.mcp`` list and
+        ``guardrails`` to ``platform.guardrails``; either can be
+        overridden per-call.  See :meth:`LLMClient.call_model_responses`
+        for full semantics.
+        """
+        self._require_llm()
+        return await self.llm.call_model_responses(
+            input, tools=tools, guardrails=guardrails, **kwargs
+        )
+
+    async def call_model_responses_stream(
+        self,
+        input: str | list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        guardrails: list[str] | None = None,
+        **kwargs: Any,
+    ) -> "AsyncIterator[StreamEvent]":
+        """Streaming OGX ``/v1/responses`` call mapped to :class:`StreamEvent`.
+
+        See :meth:`LLMClient.call_model_responses_stream`.  When a
+        guardrail fires, emits :class:`GuardrailFiredEvent` followed by
+        :class:`StreamComplete` with ``finish_reason="guardrail"``.
+        """
+        self._require_llm()
+        async for event in self.llm.call_model_responses_stream(
+            input, tools=tools, guardrails=guardrails, **kwargs
+        ):
+            yield event
+
+    async def moderate(
+        self,
+        content: str,
+        *,
+        model: str | None = None,
+    ) -> "ModerationResult":
+        """Classify *content* via OGX ``/v1/moderations``.
+
+        Observability-only — never blocks.  When ``model`` is omitted,
+        defaults to the first entry in ``platform.guardrails`` (in OGX,
+        shield ids and moderation model ids share a namespace).  Emits
+        a structured log line for each call so deployments without a
+        trace exporter still get the audit trail.
+        """
+        self._require_llm()
+        if model is None:
+            shields = list(self.config.platform.guardrails)
+            if not shields:
+                raise ValueError(
+                    "moderate() called without `model` and "
+                    "platform.guardrails is empty — nothing to classify with."
+                )
+            model = shields[0]
+        result = await self.llm.moderate(content, model=model)
+        logger.info(
+            "moderation: model=%s flagged=%s categories=%s",
+            result.model,
+            result.flagged,
+            sorted(k for k, v in result.categories.items() if v),
+        )
+        return result
 
     # -- Tool dispatch -------------------------------------------------------
 

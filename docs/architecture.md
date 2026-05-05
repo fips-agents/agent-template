@@ -109,6 +109,34 @@ Beyond tools, `connect_mcp()` also discovers **prompts** and **resources** from 
 - **MCP resources** are stored in `self._mcp_resources` (keyed by URI). Call `read_resource(uri)` to fetch content on demand. `list_mcp_resources()` and `list_mcp_resource_templates()` return metadata. Resources are agent-plane by default -- agent subclasses choose which resources to surface to the LLM.
 - Resource subscriptions (real-time update notifications) are not implemented. Servers that don't expose prompts or resources are handled gracefully -- discovery errors are logged at DEBUG level and don't affect tool registration.
 
+### Platform Mode (OGX delegation)
+
+Platform mode is an opt-in switch that delegates LLM orchestration to OGX (the rebrand of LlamaStack) via its `/v1/responses` endpoint instead of `/v1/chat/completions`. Set `platform.enabled: true` in `agent.yaml` and OGX takes over MCP tool calls, shield enforcement, and the inference loop server-side -- the agent makes a single `call_model_responses()` per turn rather than running its own ReAct loop.
+
+When `platform.enabled` is true:
+
+- The framework skips the `connect_mcp()` startup loop. Entries under `platform.mcp` are passed to OGX on every Responses request; OGX handles the MCP transport (currently SSE).
+- Shields listed in `platform.guardrails` are enforced server-side. Each entry is a shield ID registered in OGX's stack YAML (e.g. `code-scanner`, `llama-guard`).
+- The legacy `mcp_servers:` block is ignored. Misconfigurations (both blocks set) surface a structured log line at setup, not silent precedence.
+
+Each `platform.mcp` entry takes `name` (becomes `server_label` on the wire) plus exactly one of `connector_id` (references a connector pre-registered in OGX's stack YAML) or `url` (inline `server_url`). An optional `authorization` field forwards a bearer token for OAuth-protected MCP servers. The framework validates the exactly-one-of constraint at config-load time.
+
+Three new framework methods support the Responses surface:
+
+- `call_model_responses(input, *, tools=None, guardrails=None, **kw) -> PlatformResponse` -- non-streaming. Returns a wrapper exposing `content` (joined `output_text` parts), `refusal` (set when a guardrail fires), `usage`, and `response_id`. Defaults `tools` to the configured `platform.mcp` entries and `guardrails` to `platform.guardrails`; either can be overridden per-call.
+- `call_model_responses_stream(input, ...) -> AsyncIterator[StreamEvent]` -- streaming. Maps OGX's Responses event protocol onto the existing `StreamEvent` taxonomy: `response.output_text.delta` becomes `ContentDelta`, and a `refusal` in the terminal `response.completed` payload becomes `GuardrailFiredEvent` followed by `StreamComplete(finish_reason="guardrail")`. Tool-call events (`response.tool_call.*`) are not yet mapped -- a follow-up will wire them once OGX-orchestrated MCP tool calls can be exercised end-to-end.
+- `moderate(content, *, model=None) -> ModerationResult` -- wraps `/v1/moderations`. Observability-only; never blocks. Defaults `model` to the first entry in `platform.guardrails` (in OGX, shield IDs and moderation model IDs share a namespace).
+
+Two OGX-side quirks worth knowing:
+
+**No dedicated guardrail event type.** OGX signals a fired shield structurally: `output[*].content[*].type == "refusal"` on the terminal payload. There is no machine-readable shield ID -- the violation type is embedded in the refusal text (e.g. `"(flagged for: insecure-eval-use)"`). The framework parses this heuristically into `GuardrailFiredEvent.shield_id`, falling back to a comma-joined list of configured shields when the pattern isn't present.
+
+**Late-firing output shields can leak pre-shield content during streaming.** When OGX's post-generation shield triggers (model generated unsafe content from a benign prompt), the unsafe `output_text.delta` events have already been streamed; the framework passes them through to consumers. The terminal `response.completed` payload then replaces the streamed text with the refusal, and the framework emits `GuardrailFiredEvent` + `finish_reason="guardrail"`. This matches how hosted providers like Anthropic and OpenAI handle late-firing safety filters. Consumers that need post-shield content only should buffer until `StreamComplete`.
+
+The `guardrails` field is an OGX extension to the Responses API and is not recognized by the OpenAI Python SDK's typed kwargs. The framework routes it through `extra_body` (the SDK's escape hatch for provider extensions). Caller-supplied `extra_body` keys are merged, not overwritten.
+
+Platform mode is decoupled from observability (#81). When that issue lands, OTLP wiring will apply uniformly to both chat-completions and Responses-based agents.
+
 ### Prompts
 
 `load_prompt(name, **variables)` loads a prompt from the `prompts/` directory, performs variable substitution, and returns the rendered text. `list_prompts()` returns available prompts with their metadata. The prompt format is described in its own section below.

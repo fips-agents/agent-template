@@ -8,13 +8,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
-from fipsagents.baseagent.config import LLMConfig
+from fipsagents.baseagent.config import LLMConfig, PlatformConfig, PlatformMcpServer
+from fipsagents.baseagent.events import (
+    ContentDelta,
+    GuardrailFiredEvent,
+    StreamComplete,
+)
 from fipsagents.baseagent.llm import (
     LLMError,
     LLMClient,
     ModelResponse,
+    ModerationResult,
+    PlatformResponse,
+    _extract_refusal,
+    _mcp_servers_to_tools,
     _parse_json_response,
     _schema_to_response_format,
+    _shield_id_from_refusal,
 )
 
 
@@ -415,3 +425,449 @@ class TestLLMClientCallModelStreamRaw:
 
         kwargs = mock_create.call_args.kwargs
         assert kwargs["stream_options"] == {"include_usage": False}
+
+
+# ---------------------------------------------------------------------------
+# Platform-mode helpers (issue #154)
+# ---------------------------------------------------------------------------
+
+
+class TestMcpServersToTools:
+    def test_connector_reference(self):
+        srv = PlatformMcpServer(name="weather", connector_id="mcp::weather")
+        out = _mcp_servers_to_tools([srv])
+        assert out == [
+            {"type": "mcp", "server_label": "weather", "connector_id": "mcp::weather"}
+        ]
+
+    def test_inline_url(self):
+        srv = PlatformMcpServer(name="calculus", url="http://mcp:8080/mcp/")
+        out = _mcp_servers_to_tools([srv])
+        assert out == [
+            {"type": "mcp", "server_label": "calculus", "server_url": "http://mcp:8080/mcp/"}
+        ]
+
+    def test_authorization_forwarded(self):
+        srv = PlatformMcpServer(
+            name="deepwiki",
+            url="https://mcp.deepwiki.com/sse",
+            authorization="abc123",
+        )
+        out = _mcp_servers_to_tools([srv])
+        assert out[0]["authorization"] == "abc123"
+
+    def test_empty_list(self):
+        assert _mcp_servers_to_tools([]) == []
+
+    def test_multiple_servers_mixed_modes(self):
+        servers = [
+            PlatformMcpServer(name="weather", connector_id="mcp::weather"),
+            PlatformMcpServer(name="calculus", url="http://mcp:8080/mcp/"),
+        ]
+        out = _mcp_servers_to_tools(servers)
+        assert len(out) == 2
+        assert "connector_id" in out[0]
+        assert "server_url" in out[1]
+
+
+class TestExtractRefusal:
+    def test_finds_refusal_in_dict(self):
+        output = [
+            {
+                "type": "message",
+                "content": [{"type": "refusal", "refusal": "blocked"}],
+            }
+        ]
+        assert _extract_refusal(output) == "blocked"
+
+    def test_returns_none_when_only_text(self):
+        output = [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "hello"}],
+            }
+        ]
+        assert _extract_refusal(output) is None
+
+    def test_returns_none_for_empty(self):
+        assert _extract_refusal([]) is None
+
+    def test_finds_refusal_among_mixed_content(self):
+        output = [
+            {
+                "type": "message",
+                "content": [
+                    {"type": "output_text", "text": "partial"},
+                    {"type": "refusal", "refusal": "blocked"},
+                ],
+            }
+        ]
+        assert _extract_refusal(output) == "blocked"
+
+
+class TestShieldIdFromRefusal:
+    def test_parses_flagged_for_pattern(self):
+        # The exact pattern OGX emits in code-scanner refusals.
+        msg = (
+            "Security concerns detected. Potential code injection due to "
+            "eval usage. (flagged for: insecure-eval-use)"
+        )
+        assert _shield_id_from_refusal(msg, ["code-scanner"]) == "insecure-eval-use"
+
+    def test_parses_multi_value_flagged_for(self):
+        msg = "(flagged for: eval-with-expression, insecure-eval-use)"
+        assert (
+            _shield_id_from_refusal(msg, ["code-scanner"])
+            == "eval-with-expression, insecure-eval-use"
+        )
+
+    def test_falls_back_to_configured_when_no_pattern(self):
+        assert _shield_id_from_refusal("plain text", ["a", "b"]) == "a,b"
+
+    def test_unknown_when_no_pattern_and_no_config(self):
+        assert _shield_id_from_refusal("plain text", []) == "unknown"
+
+
+class TestPlatformResponse:
+    def test_text_only_response(self):
+        # Shape mirrors the real /v1/responses fixture for a benign call.
+        raw = {
+            "id": "resp_abc",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello!"}],
+                }
+            ],
+            "usage": {"input_tokens": 76, "output_tokens": 63, "total_tokens": 139},
+        }
+        resp = PlatformResponse(raw)
+        assert resp.content == "Hello!"
+        assert resp.refusal is None
+        assert resp.response_id == "resp_abc"
+        assert resp.usage["input_tokens"] == 76
+
+    def test_refusal_response(self):
+        # Shape mirrors a code-scanner-blocked /v1/responses payload.
+        raw = {
+            "id": "resp_xyz",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "refusal", "refusal": "blocked: eval is unsafe"}
+                    ],
+                }
+            ],
+        }
+        resp = PlatformResponse(raw)
+        assert resp.content is None
+        assert resp.refusal == "blocked: eval is unsafe"
+        assert str(resp) == "blocked: eval is unsafe"
+
+    def test_joins_multiple_text_parts(self):
+        raw = {
+            "id": "resp_join",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Hello "},
+                        {"type": "output_text", "text": "world"},
+                    ],
+                }
+            ],
+        }
+        assert PlatformResponse(raw).content == "Hello world"
+
+
+# ---------------------------------------------------------------------------
+# LLMClient — platform-mode methods
+# ---------------------------------------------------------------------------
+
+
+def _platform_config(enabled: bool = True, **overrides: Any) -> PlatformConfig:
+    fields: dict[str, Any] = {"enabled": enabled}
+    if enabled:
+        fields["endpoint"] = "http://ogx:8321/v1"
+    fields.update(overrides)
+    return PlatformConfig(**fields)
+
+
+class TestLLMClientPlatformGuards:
+    def test_responses_call_without_platform_raises(self):
+        config = LLMConfig(name="test-model")
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI"):
+            client = LLMClient(config)
+            with pytest.raises(LLMError, match="platform.enabled is false"):
+                # Drive the lazy guard directly; method is async but the
+                # guard fires before any await.
+                client._require_platform()
+
+    def test_responses_call_with_disabled_platform_raises(self):
+        config = LLMConfig(name="test-model")
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI"):
+            client = LLMClient(config, platform=_platform_config(enabled=False))
+            with pytest.raises(LLMError, match="platform.enabled is false"):
+                client._require_platform()
+
+
+class TestLLMClientCallModelResponses:
+    @pytest.mark.asyncio
+    async def test_returns_platform_response(self):
+        config = LLMConfig(name="vllm/RedHatAI/gpt-oss-20b")
+        platform = _platform_config()
+        raw = MagicMock()
+        raw.id = "resp_abc"
+        raw.output = [
+            MagicMock(
+                type="message",
+                content=[MagicMock(type="output_text", text="Hi.")],
+            )
+        ]
+        raw.usage = MagicMock(input_tokens=10, output_tokens=2, total_tokens=12)
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.responses.create = AsyncMock(return_value=raw)
+            client = LLMClient(config, platform=platform)
+            result = await client.call_model_responses("Say hi.")
+
+        assert isinstance(result, PlatformResponse)
+        assert result.content == "Hi."
+
+    @pytest.mark.asyncio
+    async def test_defaults_tools_from_platform_mcp(self):
+        config = LLMConfig(name="vllm/RedHatAI/gpt-oss-20b")
+        platform = _platform_config(
+            mcp=[PlatformMcpServer(name="weather", connector_id="mcp::weather")]
+        )
+        raw = MagicMock(id="r", output=[], usage=None)
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_create = AsyncMock(return_value=raw)
+            mock_client.responses.create = mock_create
+            client = LLMClient(config, platform=platform)
+            await client.call_model_responses("hello")
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["tools"] == [
+            {"type": "mcp", "server_label": "weather", "connector_id": "mcp::weather"}
+        ]
+        # Model name passed verbatim — vllm/ prefix preserved (it's an OGX
+        # registered model id, not a litellm prefix).
+        assert kwargs["model"] == "vllm/RedHatAI/gpt-oss-20b"
+
+    @pytest.mark.asyncio
+    async def test_defaults_guardrails_from_platform_config(self):
+        config = LLMConfig(name="m")
+        platform = _platform_config(guardrails=["code-scanner"])
+        raw = MagicMock(id="r", output=[], usage=None)
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_create = AsyncMock(return_value=raw)
+            mock_client.responses.create = mock_create
+            client = LLMClient(config, platform=platform)
+            await client.call_model_responses("hi")
+
+        # guardrails travels via extra_body — OpenAI SDK rejects unknown
+        # top-level kwargs.
+        kwargs = mock_create.call_args.kwargs
+        assert "guardrails" not in kwargs
+        assert kwargs["extra_body"] == {"guardrails": ["code-scanner"]}
+
+    @pytest.mark.asyncio
+    async def test_extra_body_merges_with_caller_keys(self):
+        config = LLMConfig(name="m")
+        platform = _platform_config(guardrails=["code-scanner"])
+        raw = MagicMock(id="r", output=[], usage=None)
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_create = AsyncMock(return_value=raw)
+            mock_client.responses.create = mock_create
+            client = LLMClient(config, platform=platform)
+            await client.call_model_responses(
+                "hi", extra_body={"custom_field": "x"}
+            )
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["extra_body"] == {
+            "custom_field": "x",
+            "guardrails": ["code-scanner"],
+        }
+
+    @pytest.mark.asyncio
+    async def test_per_call_overrides_win(self):
+        config = LLMConfig(name="m")
+        platform = _platform_config(
+            mcp=[PlatformMcpServer(name="weather", connector_id="mcp::weather")],
+            guardrails=["code-scanner"],
+        )
+        raw = MagicMock(id="r", output=[], usage=None)
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_create = AsyncMock(return_value=raw)
+            mock_client.responses.create = mock_create
+            client = LLMClient(config, platform=platform)
+            await client.call_model_responses(
+                "hi", tools=[], guardrails=[],
+            )
+
+        kwargs = mock_create.call_args.kwargs
+        # Empty list per-call → fields omitted (don't override defaults to []).
+        assert "tools" not in kwargs
+        assert "guardrails" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_raises_llm_error_on_failure(self):
+        config = LLMConfig(name="m")
+        platform = _platform_config()
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.responses.create = AsyncMock(
+                side_effect=ConnectionError("down")
+            )
+            client = LLMClient(config, platform=platform)
+            with pytest.raises(LLMError, match="Responses API call failed"):
+                await client.call_model_responses("hi")
+
+
+class TestLLMClientCallModelResponsesStream:
+    @pytest.mark.asyncio
+    async def test_emits_content_deltas_and_terminal(self):
+        config = LLMConfig(name="m")
+        platform = _platform_config()
+
+        async def fake_stream():
+            yield MagicMock(type="response.created")
+            yield MagicMock(type="response.in_progress")
+            yield MagicMock(type="response.output_text.delta", delta="Hello")
+            yield MagicMock(type="response.output_text.delta", delta=" world")
+            final = MagicMock()
+            final.output = [
+                MagicMock(
+                    type="message",
+                    content=[MagicMock(type="output_text", text="Hello world")],
+                )
+            ]
+            final.usage = MagicMock(
+                input_tokens=5, output_tokens=2, total_tokens=7
+            )
+            yield MagicMock(type="response.completed", response=final)
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.responses.create = AsyncMock(return_value=fake_stream())
+            client = LLMClient(config, platform=platform)
+            events = [ev async for ev in client.call_model_responses_stream("hi")]
+
+        deltas = [e for e in events if isinstance(e, ContentDelta)]
+        complete = [e for e in events if isinstance(e, StreamComplete)]
+        assert [d.content for d in deltas] == ["Hello", " world"]
+        assert len(complete) == 1
+        assert complete[0].finish_reason == "stop"
+        assert complete[0].metrics.prompt_tokens == 5
+        assert complete[0].metrics.completion_tokens == 2
+        assert complete[0].metrics.total_tokens == 7
+
+    @pytest.mark.asyncio
+    async def test_emits_guardrail_event_on_refusal(self):
+        config = LLMConfig(name="m")
+        platform = _platform_config(guardrails=["code-scanner"])
+
+        async def fake_stream():
+            yield MagicMock(
+                type="response.output_text.delta", delta="Below is"
+            )
+            final = MagicMock()
+            final.output = [
+                MagicMock(
+                    type="message",
+                    content=[
+                        MagicMock(
+                            type="refusal",
+                            refusal=(
+                                "Security concerns detected. "
+                                "(flagged for: insecure-eval-use)"
+                            ),
+                        )
+                    ],
+                )
+            ]
+            final.usage = None
+            yield MagicMock(type="response.completed", response=final)
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.responses.create = AsyncMock(return_value=fake_stream())
+            client = LLMClient(config, platform=platform)
+            events = [ev async for ev in client.call_model_responses_stream("hi")]
+
+        # Pre-shield delta still passes through (per agreed UX).
+        assert any(
+            isinstance(e, ContentDelta) and e.content == "Below is" for e in events
+        )
+        guardrails = [e for e in events if isinstance(e, GuardrailFiredEvent)]
+        complete = [e for e in events if isinstance(e, StreamComplete)]
+        assert len(guardrails) == 1
+        assert guardrails[0].action == "blocked"
+        assert guardrails[0].shield_id == "insecure-eval-use"
+        assert "(flagged for:" in (guardrails[0].message or "")
+        assert complete[0].finish_reason == "guardrail"
+
+
+class TestLLMClientModerate:
+    @pytest.mark.asyncio
+    async def test_aggregates_categories_and_scores(self):
+        config = LLMConfig(name="m")
+        platform = _platform_config()
+
+        raw = MagicMock(model="code-scanner")
+        raw.results = [
+            MagicMock(
+                flagged=False,
+                categories={"a": False, "b": True},
+                category_scores={"a": 0.1, "b": 0.7},
+            ),
+            MagicMock(
+                flagged=True,
+                categories={"a": True, "c": True},
+                category_scores={"a": 0.9, "c": 0.6},
+            ),
+        ]
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.moderations.create = AsyncMock(return_value=raw)
+            client = LLMClient(config, platform=platform)
+            result = await client.moderate("hello", model="code-scanner")
+
+        assert isinstance(result, ModerationResult)
+        assert result.flagged is True
+        assert result.categories == {"a": True, "b": True, "c": True}
+        # max() across results
+        assert result.category_scores["a"] == 0.9
+        assert result.category_scores["b"] == 0.7
+        assert result.category_scores["c"] == 0.6
+
+    @pytest.mark.asyncio
+    async def test_no_results_returns_unflagged(self):
+        config = LLMConfig(name="m")
+        platform = _platform_config()
+        raw = MagicMock(model="code-scanner", results=[])
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.moderations.create = AsyncMock(return_value=raw)
+            client = LLMClient(config, platform=platform)
+            result = await client.moderate("hello", model="code-scanner")
+
+        assert result.flagged is False
+        assert result.categories == {}
