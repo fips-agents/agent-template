@@ -412,6 +412,7 @@ class BaseAgent(abc.ABC):
         self,
         *,
         max_iterations: int = 10,
+        include_tools: bool | None = None,
         **model_kwargs: Any,
     ) -> AsyncIterator[StreamEvent]:
         """Streaming agent loop. Yields typed ``StreamEvent`` values.
@@ -436,6 +437,14 @@ class BaseAgent(abc.ABC):
         This is source-agnostic: tools from MCP servers and local
         ``@tool`` functions flow through the same dispatch point, so
         streaming looks identical regardless of tool origin.
+
+        ``include_tools`` is a per-call override controlling whether
+        registered tool schemas are emitted to the upstream model.
+        ``None`` (the default) honors ``config.tools.enabled``;
+        ``True``/``False`` overrides the config for this call only.  Set
+        ``False`` for vLLM checkpoints that 400 on tool schemas
+        (vision-only, voice-only).  Mirrors the ``include_tools`` flag
+        on :meth:`call_model`.
         """
         self._require_llm()
 
@@ -461,9 +470,18 @@ class BaseAgent(abc.ABC):
 
         finish_reason = "stop"
 
+        # Resolve once per call: explicit kwarg wins, else honor config,
+        # else default True for backward compatibility when self.config
+        # has not been initialized (eg test stubs that bypass setup()).
+        if include_tools is None:
+            cfg = getattr(self, "config", None)
+            tools_active = cfg.tools.enabled if cfg is not None else True
+        else:
+            tools_active = include_tools
+
         for _ in range(max_iterations):
             metrics.model_calls += 1
-            schemas = self.get_tool_schemas()
+            schemas = self.get_tool_schemas() if tools_active else []
             tools_arg = schemas if schemas else None
 
             # Accumulators for this turn. Keyed by tool_call index since
