@@ -346,15 +346,19 @@ class TestCreateMemoryClient:
 
     @pytest.mark.asyncio
     async def test_empty_config_file(self, tmp_path: Path):
-        """An empty YAML file should not crash — just produce a client."""
+        """An empty YAML file is treated as 'memory not configured'.
+
+        Post-fipsagents-0.21.1: ``_create_memoryhub_client`` short-circuits
+        to ``NullMemoryClient`` when the parsed config has no ``server_url``
+        / ``url`` field, so the SDK constructor is never called.
+        """
         config_file = tmp_path / ".memoryhub.yaml"
         config_file.write_text("")
 
-        mock_sdk_instance = _make_sdk()
         mock_memoryhub = MagicMock()
-        mock_memoryhub.MemoryHubClient.return_value = mock_sdk_instance
 
         with patch.dict("sys.modules", {"memoryhub": mock_memoryhub}):
             client = await create_memory_client(config_file)
 
-        assert isinstance(client, MemoryClient)
+        assert isinstance(client, NullMemoryClient)
+        mock_memoryhub.MemoryHubClient.assert_not_called()
