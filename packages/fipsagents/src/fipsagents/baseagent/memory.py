@@ -324,13 +324,25 @@ async def _create_memoryhub_client(path: Path) -> MemoryClientBase:
             if key_path.exists():
                 api_key = key_path.read_text(encoding="utf-8").strip()
 
+        server_url = hub_config.get("server_url") or hub_config.get("url")
+
+        # Stub-config short-circuit. A scaffolded `.memoryhub.yaml` may exist
+        # with only comments / empty body — treat that as "memory not
+        # configured" rather than a runtime failure. Without this, the SDK
+        # raises MemoryHubError("url is required") and the generic except
+        # below logs a full stack trace, which spooks first-time readers.
+        if not server_url:
+            logger.info(
+                "MemoryHub config at %s has no server_url — memory disabled "
+                "(set server_url to enable).",
+                path,
+            )
+            return NullMemoryClient()
+
         # Build the SDK client — exact kwargs depend on the memoryhub SDK.
-        sdk_kwargs: dict[str, Any] = {}
+        sdk_kwargs: dict[str, Any] = {"server_url": server_url}
         if api_key:
             sdk_kwargs["api_key"] = api_key
-        server_url = hub_config.get("server_url") or hub_config.get("url")
-        if server_url:
-            sdk_kwargs["server_url"] = server_url
 
         sdk = memoryhub.MemoryHubClient(**sdk_kwargs)
 
