@@ -5,6 +5,7 @@ agent-template scaffolds production-ready AI agents for OpenShift via the `fips-
 ## Design
 
 - [Architecture](architecture.md) -- System design, BaseAgent class, tool planes, deployment model, and the reasoning behind each decision.
+- [Responsibilities & non-goals](responsibilities.md) -- What each adjacent platform layer owns (OGX, kagenti, MemoryHub, OpenShift, sibling repos) and what the main template deliberately does not build. Read before proposing features that may belong in an extension or a sibling project.
 - [ADRs](adr/) -- Architectural decision records for individual subsystems. Each ADR records context, decision, alternatives considered, and consequences for one design choice.
 
 ## Context

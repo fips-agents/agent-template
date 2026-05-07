@@ -11,6 +11,7 @@ Both templates are implemented. The agent-loop template (`templates/agent-loop/`
 Read these before making any architectural decisions:
 
 - `docs/architecture.md` -- The authoritative design document. Covers BaseAgent, tool planes, skills, config, deployment, MemoryHub integration. All decisions here are final unless explicitly changed.
+- `docs/responsibilities.md` -- What each adjacent platform layer owns (OGX, kagenti, MemoryHub, OpenShift, sibling repos) and the explicit non-goals for the main template. Read this before suggesting we add coding-specific tools, a TUI, or other things that belong in extensions or sibling projects.
 - `planning/requirements.md` -- What the system must do.
 - `planning/scope.md` -- What is and is not in scope.
 - `planning/constraints.md` -- Non-negotiable technical constraints.
