@@ -12,6 +12,7 @@ from fipsagents.baseagent.config import (
     LLMConfig,
     LoggingConfig,
     LoopConfig,
+    McpServerConfig,
     ModerationConfig,
     NodeConfig,
     PlatformConfig,
@@ -228,6 +229,19 @@ logging:
         with pytest.raises(ConfigError):
             load_config_from_string("model:\n  temperature: -1\n")
 
+    def test_unresolved_placeholder_passes_through_non_strict(self):
+        """With strict=False, an unresolved placeholder is treated as a literal string."""
+        import textwrap
+
+        raw = textwrap.dedent("""\
+            model:
+              endpoint: ${UNSET_ENDPOINT}
+              name: my-model
+        """)
+        # Should not raise; the placeholder stays in the endpoint string.
+        cfg = load_config_from_string(raw, env={}, strict=False)
+        assert "${UNSET_ENDPOINT}" in cfg.model.endpoint
+
 
 # ---------------------------------------------------------------------------
 # AgentConfig defaults
@@ -276,6 +290,42 @@ class TestToolsConfig:
         )
         assert config.tools.enabled is True
         assert config.tools.local_dir == "./custom"
+
+
+# ---------------------------------------------------------------------------
+# McpServerConfig
+# ---------------------------------------------------------------------------
+
+
+class TestMcpServerConfig:
+    def test_requires_url_or_command(self):
+        with pytest.raises(Exception, match="requires either"):
+            McpServerConfig()
+
+    def test_rejects_both_url_and_command(self):
+        with pytest.raises(Exception, match="cannot have both"):
+            McpServerConfig(url="http://mcp:8080/mcp", command="python")
+
+    def test_valid_http(self):
+        cfg = McpServerConfig(url="http://mcp:8080/mcp")
+        assert cfg.url == "http://mcp:8080/mcp"
+        assert cfg.command is None
+
+    def test_valid_stdio(self):
+        cfg = McpServerConfig(command="python", args=["server.py"])
+        assert cfg.command == "python"
+        assert cfg.args == ["server.py"]
+        assert cfg.url is None
+
+    def test_stdio_optional_fields(self):
+        cfg = McpServerConfig(
+            command="python",
+            args=["server.py"],
+            env={"LOG_LEVEL": "debug"},
+            cwd="/tmp",
+        )
+        assert cfg.env == {"LOG_LEVEL": "debug"}
+        assert cfg.cwd == "/tmp"
 
 
 # ---------------------------------------------------------------------------
@@ -663,3 +713,38 @@ platform:
         cfg = AgentConfig()
         assert isinstance(cfg.platform, PlatformConfig)
         assert cfg.platform.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Edge cases and integration
+# ---------------------------------------------------------------------------
+
+
+class TestEdgeCases:
+    def test_extra_keys_are_ignored(self):
+        """Unknown top-level keys should not cause a crash (forward compat)."""
+        import textwrap
+
+        raw = textwrap.dedent("""\
+            model:
+              name: test
+            future_feature:
+              something: true
+        """)
+        # Should not raise — Pydantic ignores extra by default
+        cfg = load_config_from_string(raw, env={})
+        assert cfg.model.name == "test"
+
+    def test_nested_env_vars_in_list(self):
+        import textwrap
+
+        raw = textwrap.dedent("""\
+            mcp_servers:
+              - url: ${MCP_1:-http://a:8080}
+              - url: ${MCP_2:-http://b:8080}
+        """)
+        cfg = load_config_from_string(
+            raw, env={"MCP_1": "http://custom:1111"}
+        )
+        assert cfg.mcp_servers[0].url == "http://custom:1111"
+        assert cfg.mcp_servers[1].url == "http://b:8080"

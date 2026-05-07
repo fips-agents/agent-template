@@ -1,4 +1,11 @@
-"""Tests for fipsagents.baseagent.agent — BaseAgent lifecycle, dispatch, and integration."""
+"""Tests for fipsagents.baseagent.agent — BaseAgent lifecycle, dispatch, and integration.
+
+Ported from templates/agent-loop/tests/test_agent.py to provide upstream coverage
+of real BaseAgent setup/run/start/shutdown, conversation state, tool dispatch,
+system-prompt assembly, MCP integration, and memory wiring. The template's
+``MyAgent`` subclass is replaced by a local ``CountingAgent`` (and friends)
+test fixture defined in this module.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from fipsagents.baseagent.agent import BaseAgent, StepOutcome, StepResult
-from fipsagents.baseagent.config import AgentConfig, LLMConfig, LoopConfig, BackoffConfig
+from fipsagents.baseagent.config import AgentConfig, BackoffConfig, LLMConfig, LoopConfig
 from fipsagents.baseagent.llm import LLMClient, ModelResponse
 from fipsagents.baseagent.memory import NullMemoryClient
 from fipsagents.baseagent.tools import tool

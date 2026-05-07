@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -43,6 +44,11 @@ def _make_raw_response(content: str | None = "hello", tool_calls: Any = None) ->
     raw = MagicMock()
     raw.choices = [choice]
     return raw
+
+
+SAMPLE_MESSAGES: list[dict[str, str]] = [
+    {"role": "user", "content": "Say hello"},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +257,20 @@ class TestLLMClientCallModel:
             with pytest.raises(LLMError, match="LLM call failed"):
                 await client.call_model([{"role": "user", "content": "x"}])
 
+    @pytest.mark.asyncio
+    async def test_kwargs_override_config(self):
+        """Caller-provided kwargs take precedence over config defaults."""
+        config = LLMConfig(name="test-model", temperature=0.5)
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_raw_response()
+            )
+            client = LLMClient(config)
+            await client.call_model(SAMPLE_MESSAGES, temperature=0.0)
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
+            assert call_kwargs["temperature"] == 0.0
+
 
 # ---------------------------------------------------------------------------
 # LLMClient.call_model_json
@@ -370,6 +390,33 @@ class TestLLMClientCallModelValidated:
                         max_retries=2,
                     )
 
+    @pytest.mark.asyncio
+    async def test_exponential_backoff_delays(self):
+        """Verify the actual sleep durations follow 2^attempt pattern."""
+        attempt = 0
+
+        def always_fail(resp: ModelResponse) -> None:
+            nonlocal attempt
+            attempt += 1
+            raise ValueError("nope")
+
+        with (
+            patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls,
+            patch("fipsagents.baseagent.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=_make_raw_response(content="x")
+            )
+            client = LLMClient(LLMConfig(name="test-model"))
+            with pytest.raises(LLMError, match="Validation failed after 4 attempts"):
+                await client.call_model_validated(
+                    SAMPLE_MESSAGES, always_fail, max_retries=3
+                )
+            # Delays: 2^0=1s, 2^1=2s, 2^2=4s
+            delays = [call.args[0] for call in mock_sleep.call_args_list]
+            assert delays == [1.0, 2.0, 4.0]
+
 
 # ---------------------------------------------------------------------------
 # LLMClient.call_model_stream_raw — stream_options.include_usage default
@@ -425,6 +472,131 @@ class TestLLMClientCallModelStreamRaw:
 
         kwargs = mock_create.call_args.kwargs
         assert kwargs["stream_options"] == {"include_usage": False}
+
+
+# ---------------------------------------------------------------------------
+# LLMClient.call_model_stream — high-level wrapper that yields content chunks
+# ---------------------------------------------------------------------------
+
+
+class TestCallModelStream:
+    @pytest.mark.asyncio
+    async def test_yields_content_chunks(self):
+        chunks_data = ["Hello", " ", "world"]
+
+        async def _gen():
+            for text in chunks_data:
+                delta = SimpleNamespace(content=text)
+                choice = SimpleNamespace(delta=delta)
+                yield SimpleNamespace(choices=[choice])
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=_gen())
+            client = LLMClient(LLMConfig(name="test-model"))
+            collected = []
+            async for chunk in client.call_model_stream(SAMPLE_MESSAGES):
+                collected.append(chunk)
+            assert collected == ["Hello", " ", "world"]
+
+    @pytest.mark.asyncio
+    async def test_skips_none_content(self):
+        """Chunks with None content (e.g. role-only deltas) are skipped."""
+        async def _gen():
+            # First chunk: role only, no content
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=None))]
+            )
+            # Second chunk: actual content
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="data"))]
+            )
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=_gen())
+            client = LLMClient(LLMConfig(name="test-model"))
+            collected = []
+            async for chunk in client.call_model_stream(SAMPLE_MESSAGES):
+                collected.append(chunk)
+            assert collected == ["data"]
+
+    @pytest.mark.asyncio
+    async def test_stream_kwarg_set(self):
+        async def _gen():
+            return
+            yield  # make it an async generator
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=_gen())
+            client = LLMClient(LLMConfig(name="test-model"))
+            async for _ in client.call_model_stream(SAMPLE_MESSAGES):
+                pass
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
+            assert call_kwargs["stream"] is True
+
+    @pytest.mark.asyncio
+    async def test_stream_tools_forwarded(self):
+        tools = [{"type": "function", "function": {"name": "search"}}]
+
+        async def _gen():
+            return
+            yield
+
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(return_value=_gen())
+            client = LLMClient(LLMConfig(name="test-model"))
+            async for _ in client.call_model_stream(SAMPLE_MESSAGES, tools=tools):
+                pass
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
+            assert call_kwargs["tools"] is tools
+
+    @pytest.mark.asyncio
+    async def test_stream_exception_wrapped(self):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                side_effect=ConnectionError("timeout")
+            )
+            client = LLMClient(LLMConfig(name="test-model"))
+            with pytest.raises(LLMError, match="timeout"):
+                async for _ in client.call_model_stream(SAMPLE_MESSAGES):
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# Error wrapping — various exception types should all become LLMError
+# ---------------------------------------------------------------------------
+
+
+class TestErrorWrapping:
+    """Various OpenAI SDK exception types should all become LLMError."""
+
+    @pytest.mark.parametrize(
+        "exc_class, exc_msg",
+        [
+            (RuntimeError, "generic failure"),
+            (ConnectionError, "network unreachable"),
+            (TimeoutError, "request timed out"),
+            (ValueError, "bad parameter"),
+        ],
+        ids=["runtime", "connection", "timeout", "value"],
+    )
+    @pytest.mark.asyncio
+    async def test_exception_types_wrapped(self, exc_class, exc_msg):
+        with patch("fipsagents.baseagent.llm.AsyncOpenAI") as mock_openai_cls:
+            mock_client = mock_openai_cls.return_value
+            mock_client.chat.completions.create = AsyncMock(
+                side_effect=exc_class(exc_msg)
+            )
+            client = LLMClient(LLMConfig(name="test-model"))
+            with pytest.raises(LLMError) as exc_info:
+                await client.call_model(SAMPLE_MESSAGES)
+            assert exc_msg in str(exc_info.value)
+            assert exc_info.value.__cause__ is not None
+            assert isinstance(exc_info.value.__cause__, exc_class)
 
 
 # ---------------------------------------------------------------------------

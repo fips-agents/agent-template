@@ -13,10 +13,51 @@ from fipsagents.baseagent.tools import (
     ToolMeta,
     ToolRegistry,
     ToolResult,
+    _is_optional,
     _params_from_signature,
     _type_to_schema,
     tool,
 )
+
+
+# ---------------------------------------------------------------------------
+# Sample model for pydantic-parameter schema tests
+# ---------------------------------------------------------------------------
+
+
+class SampleModel(BaseModel):
+    """A pydantic model used as a tool parameter in tests."""
+
+    name: str
+    count: int = 0
+
+
+def _make_sync_tool(
+    name: str = "sync_tool",
+    visibility: str = "both",
+    description: str = "A sync tool",
+):
+    """Factory for a simple sync tool."""
+
+    @tool(description=description, visibility=visibility, name=name)
+    def fn(x: str) -> str:
+        return f"sync:{x}"
+
+    return fn
+
+
+def _make_async_tool(
+    name: str = "async_tool",
+    visibility: str = "both",
+    description: str = "An async tool",
+):
+    """Factory for a simple async tool."""
+
+    @tool(description=description, visibility=visibility, name=name)
+    async def fn(x: str) -> str:
+        return f"async:{x}"
+
+    return fn
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +132,42 @@ class TestToolDecorator:
             @tool(description="x", visibility="invalid_plane")  # type: ignore[arg-type]
             def bad_tool() -> None:
                 pass
+
+    def test_preserves_original_function(self):
+        """The decorated function should still be directly callable."""
+
+        @tool(description="desc", visibility="both")
+        def add(a: int, b: int) -> int:
+            return a + b
+
+        assert add(2, 3) == 5
+
+    def test_docstring_not_duplicated_when_matches_description(self):
+        desc = "Exact match"
+
+        @tool(description=desc, visibility="both")
+        def fn() -> None:
+            """Exact match"""
+            pass
+
+        meta: ToolMeta = getattr(fn, "__base_agent_tool__")
+        # Should not repeat the description.
+        assert meta.description == desc
+
+    def test_parameters_extracted_from_signature(self):
+        @tool(description="desc", visibility="both")
+        def search(query: str, limit: int = 10) -> list:
+            pass
+
+        meta: ToolMeta = getattr(search, "__base_agent_tool__")
+        props = meta.parameters.get("properties", {})
+        assert "query" in props
+        assert "limit" in props
+        assert props["query"]["type"] == "string"
+        assert props["limit"]["type"] == "integer"
+        # query is required (no default), limit is not
+        assert "query" in meta.parameters.get("required", [])
+        assert "limit" not in meta.parameters.get("required", [])
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +350,42 @@ class TestToolRegistryGenerateSchemas:
         schemas = registry.generate_schemas()
         assert schemas == []
 
+    def test_pydantic_model_parameter_schema(self):
+        @tool(description="Process data", visibility="llm_only")
+        async def process(data: SampleModel) -> str:
+            return data.name
+
+        registry = ToolRegistry()
+        registry.register(process)
+        schemas = registry.generate_schemas()
+        params = schemas[0]["function"]["parameters"]
+        data_schema = params["properties"]["data"]
+        # Should contain the pydantic model's JSON schema (has 'properties' key).
+        assert "properties" in data_schema
+
+    def test_docstring_used_in_schema_description(self):
+        @tool(description="Main desc", visibility="llm_only")
+        async def documented(x: int) -> int:
+            """Extended explanation of what this does."""
+            return x
+
+        registry = ToolRegistry()
+        registry.register(documented)
+        schemas = registry.generate_schemas()
+        desc = schemas[0]["function"]["description"]
+        assert "Main desc" in desc
+        assert "Extended explanation" in desc
+
+    def test_multiple_tools_generate_multiple_schemas(self):
+        registry = ToolRegistry()
+        registry.register(_make_sync_tool(name="t1", visibility="llm_only"))
+        registry.register(_make_async_tool(name="t2", visibility="llm_only"))
+        registry.register(_make_sync_tool(name="t3", visibility="both"))
+        schemas = registry.generate_schemas()
+        assert len(schemas) == 3
+        names = {s["function"]["name"] for s in schemas}
+        assert names == {"t1", "t2", "t3"}
+
 
 class TestToolRegistryExecute:
     @pytest.mark.asyncio
@@ -322,6 +435,42 @@ class TestToolRegistryExecute:
         assert "ValueError" in result.error
         assert "boom" in result.error
 
+    @pytest.mark.asyncio
+    async def test_execute_sync_exception(self):
+        @tool(description="sync boom", visibility="both")
+        def sync_explode() -> str:
+            raise ValueError("bad value")
+
+        registry = ToolRegistry()
+        registry.register(sync_explode)
+        result = await registry.execute("sync_explode")
+        assert result.is_error
+        assert "ValueError" in result.error
+        assert "bad value" in result.error
+
+    @pytest.mark.asyncio
+    async def test_execute_returns_empty_string_for_none(self):
+        @tool(description="void", visibility="both")
+        async def void_tool() -> None:
+            pass
+
+        registry = ToolRegistry()
+        registry.register(void_tool)
+        result = await registry.execute("void_tool")
+        assert result.result == ""
+        assert result.error is None
+
+    @pytest.mark.asyncio
+    async def test_execute_result_has_call_id(self):
+        @tool(description="t", visibility="both")
+        async def t() -> str:
+            return "ok"
+
+        registry = ToolRegistry()
+        registry.register(t)
+        result = await registry.execute("t")
+        assert len(result.call_id) > 0
+
 
 class TestToolRegistryDiscover:
     def test_discovers_tools_from_directory(self, tmp_path):
@@ -350,6 +499,51 @@ class TestToolRegistryDiscover:
         registry = ToolRegistry()
         result = registry.discover("/nonexistent/path/that/does/not/exist")
         assert result == []
+
+    def test_discover_skips_files_with_errors(self, tmp_path):
+        (tmp_path / "broken.py").write_text("raise RuntimeError('boom')")
+        (tmp_path / "good.py").write_text(textwrap.dedent("""\
+            from fipsagents.baseagent.tools import tool
+
+            @tool(description="works", visibility="both")
+            def good_tool() -> str:
+                return "ok"
+        """))
+        registry = ToolRegistry()
+        found = registry.discover(tmp_path)
+        assert len(found) == 1
+        assert found[0].name == "good_tool"
+
+    def test_discover_does_not_duplicate(self, tmp_path):
+        (tmp_path / "dup.py").write_text(textwrap.dedent("""\
+            from fipsagents.baseagent.tools import tool
+
+            @tool(description="dup", visibility="both")
+            def my_fn() -> None:
+                pass
+        """))
+        registry = ToolRegistry()
+        registry.discover(tmp_path)
+        # Discover again — same tool should not be added twice.
+        found_second = registry.discover(tmp_path)
+        assert len(found_second) == 0
+        assert len(registry.get_all()) == 1
+
+
+# ---------------------------------------------------------------------------
+# _is_optional
+# ---------------------------------------------------------------------------
+
+
+class TestIsOptional:
+    def test_optional_str_is_optional(self):
+        assert _is_optional(Optional[str]) is True
+
+    def test_plain_str_is_not_optional(self):
+        assert _is_optional(str) is False
+
+    def test_plain_int_is_not_optional(self):
+        assert _is_optional(int) is False
 
 
 # ---------------------------------------------------------------------------
