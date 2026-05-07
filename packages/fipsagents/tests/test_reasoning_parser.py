@@ -144,6 +144,96 @@ def test_returns_none_for_openai():
     assert create_reasoning_parser("gpt-4o") is None
 
 
+def test_creates_implicit_open_parser_for_nemotron():
+    """Nemotron's chat template opens <think> implicitly; parser must start
+    already inside a think block."""
+    parser = create_reasoning_parser("nvidia/NVIDIA-Nemotron-Nano-9B-v2-FP8")
+    assert isinstance(parser, ThinkTagParser)
+    # Empirically: a Nemotron stream starts with reasoning content and the
+    # first explicit tag the model emits is the closing </think>.
+    result = parser.feed("Okay, let me think about this...</think>final answer")
+    assert result == [
+        ("reasoning", "Okay, let me think about this..."),
+        ("content", "final answer"),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# implicit_open mode
+# ---------------------------------------------------------------------------
+
+
+def test_implicit_open_starts_in_think_state():
+    """Parser constructed with implicit_open=True treats opening content as
+    reasoning until the first </think>."""
+    p = ThinkTagParser(implicit_open=True)
+    result = p.feed("thinking out loud</think>visible answer")
+    assert result == [
+        ("reasoning", "thinking out loud"),
+        ("content", "visible answer"),
+    ]
+
+
+def test_implicit_open_handles_chunked_thinking():
+    """Reasoning split across chunks accumulates correctly before the close."""
+    p = ThinkTagParser(implicit_open=True)
+    assert p.feed("first chunk ") == [("reasoning", "first chunk ")]
+    assert p.feed("second chunk") == [("reasoning", "second chunk")]
+    assert p.feed("</think>answer") == [("content", "answer")]
+
+
+def test_implicit_open_close_tag_split_across_chunks():
+    """Close-tag boundary handling still works with implicit_open=True."""
+    p = ThinkTagParser(implicit_open=True)
+    # "</thi" is held back as a possible close-tag prefix.
+    assert p.feed("thinking</thi") == [("reasoning", "thinking")]
+    assert p.feed("nk>answer") == [("content", "answer")]
+
+
+def test_implicit_open_subsequent_think_block_recognised():
+    """After the implicit block closes, a subsequent explicit <think>...</think>
+    is parsed normally — the parser is a regular state machine again once
+    the implicit block ends."""
+    p = ThinkTagParser(implicit_open=True)
+    result = p.feed("first thoughts</think>answer<think>more thoughts</think>more answer")
+    assert result == [
+        ("reasoning", "first thoughts"),
+        ("content", "answer"),
+        ("reasoning", "more thoughts"),
+        ("content", "more answer"),
+    ]
+
+
+def test_implicit_open_reset_returns_to_in_think():
+    """reset() between turns must restore the implicit-open initial state,
+    not the default not-in-think state."""
+    p = ThinkTagParser(implicit_open=True)
+    p.feed("first turn thoughts</think>first turn answer")
+    p.reset()
+    # Next turn: again starts inside think.
+    result = p.feed("second turn thoughts</think>second turn answer")
+    assert result == [
+        ("reasoning", "second turn thoughts"),
+        ("content", "second turn answer"),
+    ]
+
+
+def test_implicit_open_unclosed_still_emits_as_reasoning():
+    """Stream that ends without </think> emits everything as reasoning."""
+    p = ThinkTagParser(implicit_open=True)
+    result = p.feed("thinking forever and ever")
+    assert result == [("reasoning", "thinking forever and ever")]
+    assert p.flush() == []
+
+
+def test_default_constructor_unchanged():
+    """Backward compatibility: ThinkTagParser() with no args behaves
+    identically to the pre-implicit_open implementation."""
+    p = ThinkTagParser()
+    # Plain content with no tags is content, not reasoning.
+    assert p.feed("just some content") == [("content", "just some content")]
+
+
 # ---------------------------------------------------------------------------
 # Integration: astep_stream separates think tags end-to-end
 # ---------------------------------------------------------------------------

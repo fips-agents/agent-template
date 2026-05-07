@@ -9,6 +9,14 @@ blocks so ``astep_stream`` can emit ``ReasoningDelta`` for thinking and
 When vLLM is started with ``--reasoning-parser granite``, it does this
 extraction server-side and populates ``reasoning_content`` directly.
 The parser is a fallback for deployments that don't set that flag.
+
+A subset of reasoning-tuned models — Nemotron-Nano-9B-v2 is the
+canonical example — apply a chat template that implicitly opens
+``<think>`` before the assistant's turn, so the model only ever emits
+the closing ``</think>`` plus the user-visible answer. For these
+models, construct ``ThinkTagParser(implicit_open=True)``: the parser
+starts already inside a think block and transitions to content on
+the first ``</think>``.
 """
 
 from __future__ import annotations
@@ -42,16 +50,29 @@ class ThinkTagParser:
     in a single response.
     """
 
-    __slots__ = ("_buf", "_in_think")
+    __slots__ = ("_buf", "_in_think", "_implicit_open")
 
-    def __init__(self) -> None:
+    def __init__(self, *, implicit_open: bool = False) -> None:
+        """Construct a parser.
+
+        Parameters
+        ----------
+        implicit_open:
+            When ``True``, start already inside a think block. Use for
+            models whose chat template emits the opening ``<think>``
+            tag for them, leaving only ``</think>`` + final answer in
+            the assistant content stream (eg Nemotron-Nano-9B-v2).
+            Defaults to ``False`` (the original behaviour: wait for an
+            explicit ``<think>``).
+        """
         self._buf = ""
-        self._in_think = False
+        self._implicit_open = implicit_open
+        self._in_think = implicit_open
 
     def reset(self) -> None:
         """Reset parser state between model calls."""
         self._buf = ""
-        self._in_think = False
+        self._in_think = self._implicit_open
 
     def feed(self, text: str) -> list[tuple[str, str]]:
         """Process a content delta and return separated segments."""
@@ -118,4 +139,10 @@ def create_reasoning_parser(model_name: str) -> ThinkTagParser | None:
     name = model_name.lower()
     if "granite" in name or "deepseek" in name:
         return ThinkTagParser()
+    if "nemotron" in name:
+        # Nemotron-Nano-9B-v2 (and other Nemotron reasoning variants
+        # observed so far) apply a chat template that implicitly opens
+        # ``<think>`` before the assistant turn — the model only emits
+        # the closing tag and the final answer.
+        return ThinkTagParser(implicit_open=True)
     return None
