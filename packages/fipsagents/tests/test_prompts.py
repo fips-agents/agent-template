@@ -17,8 +17,43 @@ from fipsagents.baseagent.prompts import (
     PromptVariableError,
     VariableDefinition,
     _parse_parameters,
+    _parse_prompt_file,
     _parse_variable,
 )
+
+
+# ---------------------------------------------------------------------------
+# Sample prompt content for file-level parsing tests
+# ---------------------------------------------------------------------------
+
+
+GREETING_PROMPT = """\
+---
+name: greeting
+description: Greet the user
+---
+Hello! How can I help you today?
+"""
+
+
+SUMMARIZE_PROMPT = """\
+---
+name: summarize
+description: Summarize a document for the user
+model: default
+temperature: 0.3
+variables:
+  - name: document
+    required: true
+  - name: max_length
+    default: "500 words"
+---
+Summarize the following document in {max_length} or less.
+
+## Document
+
+{document}
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +255,60 @@ class TestParseParameters:
 
 
 # ---------------------------------------------------------------------------
+# _parse_prompt_file — full file-level parse
+# ---------------------------------------------------------------------------
+
+
+class TestParsePromptFile:
+    def test_invalid_variables_type_raises(self, tmp_path: Path):
+        content = """\
+---
+name: bad
+variables: "not a list"
+---
+Body.
+"""
+        path = tmp_path / "bad.md"
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(PromptParseError, match="must be a list"):
+            _parse_prompt_file(path)
+
+    def test_variable_missing_name_raises(self, tmp_path: Path):
+        content = """\
+---
+name: bad
+variables:
+  - description: "no name field"
+---
+Body.
+"""
+        path = tmp_path / "bad.md"
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(PromptParseError, match="must have a string 'name'"):
+            _parse_prompt_file(path)
+
+    def test_variable_wrong_type_raises(self, tmp_path: Path):
+        content = """\
+---
+name: bad
+variables:
+  - 42
+---
+Body.
+"""
+        path = tmp_path / "bad.md"
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(PromptParseError, match="must be a string or mapping"):
+            _parse_prompt_file(path)
+
+    def test_source_path_recorded(self, tmp_path: Path):
+        path = tmp_path / "test.md"
+        path.write_text(GREETING_PROMPT, encoding="utf-8")
+        prompt = _parse_prompt_file(path)
+        assert prompt.source_path == path
+
+
+# ---------------------------------------------------------------------------
 # PromptLoader.load_all
 # ---------------------------------------------------------------------------
 
@@ -292,6 +381,15 @@ class TestPromptLoaderLoadAll:
         loader.load_all(tmp_path)
         assert loader.names == ["aaa", "zzz"]
 
+    def test_ignores_non_md_files(self, tmp_path: Path):
+        _write_prompt(tmp_path, "real.md", GREETING_PROMPT)
+        (tmp_path / "notes.txt").write_text("not a prompt")
+        (tmp_path / "data.json").write_text("{}")
+
+        loader = PromptLoader()
+        loaded = loader.load_all(tmp_path)
+        assert len(loaded) == 1
+
 
 # ---------------------------------------------------------------------------
 # PromptLoader.get
@@ -357,3 +455,24 @@ class TestPromptLoaderLoadFile:
         loader = PromptLoader()
         prompt = loader.load_file(p)
         assert prompt.name == "my_prompt"
+
+
+# ---------------------------------------------------------------------------
+# PromptLoader.list_prompts
+# ---------------------------------------------------------------------------
+
+
+class TestPromptLoaderListPrompts:
+    def test_list_prompts_metadata(self, tmp_path: Path):
+        (tmp_path / "summarize.md").write_text(SUMMARIZE_PROMPT, encoding="utf-8")
+        (tmp_path / "greeting.md").write_text(GREETING_PROMPT, encoding="utf-8")
+        loader = PromptLoader()
+        loader.load_all(tmp_path)
+
+        listing = loader.list_prompts()
+        assert len(listing) == 2
+
+        # Sorted by name
+        assert listing[0]["name"] == "greeting"
+        assert listing[1]["name"] == "summarize"
+        assert listing[1]["variables"][0]["name"] == "document"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +15,28 @@ from fipsagents.baseagent.memory import (
     NullMemoryClient,
     create_memory_client,
 )
+
+
+class _FakeSDK:
+    """Minimal stand-in for the MemoryHub SDK.
+
+    Unlike MagicMock, this does not auto-create attributes, so
+    ``getattr(sdk, "search", None)`` returns ``None`` and
+    ``hasattr(sdk, "__aenter__")`` returns ``False`` — matching the
+    attribute-probing logic in memory.py.
+    """
+
+
+def _make_sdk(**overrides: Any) -> _FakeSDK:
+    """Create a fake MemoryHub SDK with async methods."""
+    sdk = _FakeSDK()
+    sdk.search_memory = AsyncMock(return_value=[{"id": "m1", "content": "found"}])
+    sdk.write_memory = AsyncMock(return_value={"id": "m2", "content": "written"})
+    sdk.update_memory = AsyncMock(return_value={"id": "m1", "content": "updated"})
+    sdk.report_contradiction = AsyncMock(return_value=None)
+    for key, value in overrides.items():
+        setattr(sdk, key, value)
+    return sdk
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +304,76 @@ class TestCreateMemoryClientFactory:
         with patch.dict(sys.modules, {"memoryhub": mock_memoryhub}):
             client = await create_memory_client(config_file)
         assert isinstance(client, MemoryClient)
+
+    @pytest.mark.asyncio
+    async def test_api_key_from_config(self, tmp_path):
+        """api_key in YAML takes precedence over the key file."""
+        config_file = tmp_path / ".memoryhub.yaml"
+        config_file.write_text(
+            "api_key: yaml-key-456\nserver_url: http://memory:8080\n"
+        )
+
+        mock_sdk_instance = _make_sdk()
+        mock_memoryhub = MagicMock()
+        mock_memoryhub.MemoryHubClient.return_value = mock_sdk_instance
+
+        with patch.dict(sys.modules, {"memoryhub": mock_memoryhub}):
+            client = await create_memory_client(config_file)
+
+        assert isinstance(client, MemoryClient)
+        call_kwargs = mock_memoryhub.MemoryHubClient.call_args[1]
+        assert call_kwargs["api_key"] == "yaml-key-456"
+
+    @pytest.mark.asyncio
+    async def test_register_session_called_when_available(self, tmp_path):
+        """If the SDK has register_session, the factory calls it."""
+        config_file = tmp_path / ".memoryhub.yaml"
+        config_file.write_text("server_url: http://memory:8080\n")
+
+        mock_sdk_instance = _make_sdk()
+        mock_sdk_instance.register_session = AsyncMock()
+
+        mock_memoryhub = MagicMock()
+        mock_memoryhub.MemoryHubClient.return_value = mock_sdk_instance
+
+        with patch.dict(sys.modules, {"memoryhub": mock_memoryhub}):
+            client = await create_memory_client(config_file)
+
+        assert isinstance(client, MemoryClient)
+        mock_sdk_instance.register_session.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_register_session_failure_falls_back(self, tmp_path, caplog):
+        """register_session failure triggers fallback to NullMemoryClient."""
+        import logging
+
+        config_file = tmp_path / ".memoryhub.yaml"
+        config_file.write_text("server_url: http://memory:8080\n")
+
+        mock_sdk_instance = _make_sdk()
+        mock_sdk_instance.register_session = AsyncMock(
+            side_effect=ConnectionError("cannot reach server"),
+        )
+
+        mock_memoryhub = MagicMock()
+        mock_memoryhub.MemoryHubClient.return_value = mock_sdk_instance
+
+        with (
+            patch.dict(sys.modules, {"memoryhub": mock_memoryhub}),
+            caplog.at_level(logging.WARNING),
+        ):
+            client = await create_memory_client(config_file)
+
+        assert isinstance(client, NullMemoryClient)
+        assert "Failed to initialise MemoryHub" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_default_config_path(self, monkeypatch):
+        """Default config_path argument is .memoryhub.yaml in cwd."""
+        # Point to a dir that definitely lacks the config file
+        monkeypatch.chdir("/tmp")
+        client = await create_memory_client()
+        assert isinstance(client, NullMemoryClient)
 
     @pytest.mark.asyncio
     async def test_env_var_placeholders_are_substituted(self, tmp_path, monkeypatch):
