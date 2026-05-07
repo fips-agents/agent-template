@@ -492,6 +492,55 @@ security:
 #  guardrails:
 #    mode: observe     # override global mode for guardrails
 
+# -- Subagents (optional, per #165) ------------------------------------------
+#
+# Register other agents the LLM can delegate to via the stock
+# `delegate_to_agent` tool.  When this block is non-empty, BaseAgent
+# auto-registers the tool at startup.  The LLM picks a subagent by name
+# and passes a self-contained task; the framework handles transport,
+# trace propagation, identity forwarding, and depth bounds.
+#
+# Two transport types are supported:
+#
+#   transport.type: remote
+#     HTTP call to another agent's /v1/chat/completions endpoint.
+#     `url` is the OpenAI-compatible endpoint base.  Standard
+#     ${VAR:-default} substitution applies.
+#
+#   transport.type: inprocess
+#     Same-process call to a BaseAgent subclass.  `class_path` is a
+#     dotted import path; `config_path` (optional) points at the
+#     subagent's own agent.yaml.
+#
+# `permission_scope` references a named rule set in PermissionConfig.scopes
+# (#164).  v1 parses this field but does NOT enforce it — enforcement
+# lands once #164 is merged.  A WARNING is logged each time a subagent
+# with permission_scope set is invoked under the v1 scaffold.
+#
+# `identity: inherit` (default) forwards the parent's incoming
+# Authorization header to the subagent.  `identity: service_account: <name>`
+# is reserved for kagenti-issued credentials and is incompatible with
+# inprocess transport (no HTTP boundary at which to override identity).
+#
+# `max_depth` caps delegation chains.  v1 enforces depth on the
+# inprocess path; remote-chain enforcement is a follow-up.
+#
+# Production env vars (example):
+#   RESEARCH_HELPER_URL  -- URL of a research-helper subagent
+#
+# subagents:
+#   - name: research_helper
+#     description: "Searches internal knowledge base; returns synthesised brief."
+#     when_to_use: "Use when the user asks an open-ended policy question."
+#     transport:
+#       type: remote
+#       url: ${RESEARCH_HELPER_URL:-http://research-helper:8080/v1}
+#       timeout_seconds: 60
+#     permission_scope: research-readonly   # parsed; not enforced until #164
+#     identity: inherit
+#     max_depth: 3
+subagents: []
+
 # -- Node deployment topology (optional) -------------------------------------
 #
 # Maps workflow node names to their deployment topology.  Nodes default to

@@ -119,6 +119,65 @@ class StreamComplete:
     metrics: StreamMetrics
 
 
+@dataclass
+class SubagentInvoked:
+    """Emitted when a delegate_to_agent tool call begins.
+
+    The parent's stream sees this immediately after the LLM's tool-call
+    decision, before the subagent runs. Use ``span_id`` to correlate with
+    the matching ``SubagentCompleted`` / ``SubagentFailed`` event.
+    """
+
+    agent_name: str
+    task: str
+    span_id: str
+    transport: str  # "remote" | "inprocess"
+    depth: int
+
+
+@dataclass
+class SubagentCompleted:
+    """Emitted when a subagent invocation finishes successfully.
+
+    Carries the same payload that the parent's tool result will surface
+    to the LLM, plus the rolled-up token and cost telemetry.
+    """
+
+    agent_name: str
+    span_id: str
+    content: str
+    tokens_used: dict[str, int]
+    tool_calls_made: int
+    cost_usd: float
+
+
+@dataclass
+class SubagentFailed:
+    """Emitted when a subagent invocation fails (timeout, remote error,
+    max depth, crash, etc.).
+    """
+
+    agent_name: str
+    span_id: str
+    error_type: str  # short type name, e.g. "Timeout", "RemoteError"
+    error_message: str
+
+
+@dataclass
+class SubagentDelta:
+    """Forward-compat variant for v2 streaming.
+
+    v1 ships buffered subagent calls and never emits this event; v2 will
+    forward the subagent's intermediate stream onto the parent's stream
+    so the gateway can render nested deltas. Defined now so consumers can
+    pattern-match exhaustively.
+    """
+
+    agent_name: str
+    span_id: str
+    delta: object  # the original StreamEvent from the subagent
+
+
 # Discriminated union of every event a stream can emit.
 StreamEvent = Union[
     ReasoningDelta,
@@ -127,4 +186,8 @@ StreamEvent = Union[
     ContentDelta,
     GuardrailFiredEvent,
     StreamComplete,
+    SubagentInvoked,
+    SubagentCompleted,
+    SubagentFailed,
+    SubagentDelta,
 ]
