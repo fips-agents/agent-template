@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This is the agent-template project -- a monorepo of agent templates for the `fips-agents` CLI. It scaffolds production-ready AI agents for OpenShift.
+This is the agent-template project -- a monorepo of agent templates for the `fips-agents` CLI. It scaffolds production-ready AI agents for Red Hat AI.
 
 ## Project Status
 

@@ -1,6 +1,6 @@
 # fipsagents
 
-Production-ready AI agent framework for FIPS/OpenShift environments. Provides `BaseAgent` — a pure Python, async-first base class that handles LLM communication, tool dispatch, MCP connections, prompt loading, skill management, configuration, and lifecycle so your agent subclass stays small.
+Production-ready AI agent framework for FIPS/Red Hat AI environments. Provides `BaseAgent` — a pure Python, async-first base class that handles LLM communication, tool dispatch, MCP connections, prompt loading, skill management, configuration, and lifecycle so your agent subclass stays small.
 
 ## Install
 

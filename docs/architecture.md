@@ -1,6 +1,6 @@
 # Architecture
 
-agent-template is a monorepo of agent templates for the `fips-agents` CLI. It scaffolds production-ready AI agents that deploy to OpenShift, communicate with LLMs through the OpenAI SDK, and let developers focus on the work that actually differentiates their agent: prompts, tools, model selection, and evals.
+agent-template is a monorepo of agent templates for the `fips-agents` CLI. It scaffolds production-ready AI agents that deploy to Red Hat AI, communicate with LLMs through the OpenAI SDK, and let developers focus on the work that actually differentiates their agent: prompts, tools, model selection, and evals.
 
 This document describes the system architecture, core abstractions, and the reasoning behind each design decision.
 

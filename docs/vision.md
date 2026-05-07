@@ -1,6 +1,6 @@
 # Vision
 
-A developer runs `fips-agents create agent my-agent`, selects a template variant, and gets a project that compiles, runs locally, and deploys to OpenShift. The scaffolded project includes an agent subclass of roughly 20-30 lines, a set of prompts, a tools directory, an evals directory, a Helm chart, and AI-assisted slash commands that guide development from design through deployment. The developer's job from that point forward is to write agent logic, craft prompts, define tools, and run evals. Everything else is handled.
+A developer runs `fips-agents create agent my-agent`, selects a template variant, and gets a project that compiles, runs locally, and deploys to Red Hat AI. The scaffolded project includes an agent subclass of roughly 20-30 lines, a set of prompts, a tools directory, an evals directory, a Helm chart, and AI-assisted slash commands that guide development from design through deployment. The developer's job from that point forward is to write agent logic, craft prompts, define tools, and run evals. Everything else is handled.
 
 ## What Changes
 
@@ -16,4 +16,4 @@ A developer runs `fips-agents create agent my-agent`, selects a template variant
 
 ## Success Criteria
 
-The template is successful when a developer with no prior agent-building experience can scaffold and deploy a working agent to OpenShift in under an hour. It is successful when agent subclasses remain 20-30 lines even for production agents with multiple tools, skills, and memory integration. It is successful when it becomes the default way agents are built in the fips-agents ecosystem -- not because it is mandated, but because it is easier than the alternatives.
+The template is successful when a developer with no prior agent-building experience can scaffold and deploy a working agent to Red Hat AI in under an hour. It is successful when agent subclasses remain 20-30 lines even for production agents with multiple tools, skills, and memory integration. It is successful when it becomes the default way agents are built in the fips-agents ecosystem -- not because it is mandated, but because it is easier than the alternatives.

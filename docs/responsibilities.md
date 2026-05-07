@@ -12,7 +12,7 @@ so we can argue with them, not so we can hide behind them.
 ## What this project is
 
 `agent-template` is a general-purpose harness for building production
-AI agents that run on Red Hat OpenShift. It scaffolds an immutable
+AI agents that run on Red Hat AI. It scaffolds an immutable
 container image with code, tools, prompts, skills, and rules baked in,
 and ships it through a Helm chart that consumes platform services
 (inference, memory, identity, tracing) provided by adjacent layers.
@@ -28,6 +28,48 @@ about to add a feature, ask whether the concern belongs here or in one
 of the layers below. If it belongs elsewhere, the right move is usually
 to wire `agent-template` to consume the existing service rather than
 to reimplement it.
+
+### Red Hat AI — pipelines, model lifecycle, governance
+
+Red Hat AI is the umbrella platform that bundles most of the layers
+in this document. OpenShift AI is the on-cluster instantiation;
+RHEL AI is the bare-metal / edge variant. Components like OGX, vLLM,
+llm-d, and KServe are all parts of OpenShift AI when deployed as a
+stack — the sections below drill into each individually because they
+are independently substitutable. This section calls out what Red Hat
+AI uniquely contributes that does not fit cleanly under those
+headings.
+
+Red Hat AI owns:
+
+- **KubeFlow Pipelines / Data Science Pipelines** — offline data
+  flows. RAG corpus refreshes, batch evaluation, fine-tuning
+  preparation, scheduled enrichment, document ingestion upstream of
+  the agent. Not the agent's runtime concern, but typically lives
+  alongside it in production deployments.
+- **Model Registry** — model versioning, lineage, and promotion
+  across environments. Useful for "which model version is this
+  agent actually talking to?" audits, especially in regulated
+  industries where model provenance is a compliance requirement.
+- **TrustyAI** — bias, drift, and explainability monitoring. Feeds
+  the governance metrics that ops and risk teams watch. Relevant
+  when an agent's outputs need scrutiny beyond functional correctness.
+- **Distributed Workloads (KubeRay, CodeFlare)** — distributed
+  training and tuning jobs. Not used by a deployed agent at runtime,
+  but often the path that produces the model the agent eventually
+  talks to.
+- **Workbenches** — Jupyter-based prototyping environment. Where
+  humans iterate on prompts, tools, and agent shapes before
+  scaffolding them into a deployed `agent-template`. Worth knowing
+  it exists so contributors do not propose embedding notebook
+  features into the agent runtime.
+
+`agent-template` consumes the runtime pieces of Red Hat AI (OGX,
+inference) over HTTP. We do not run pipelines from inside the agent,
+do not register models, do not emit TrustyAI metrics, and do not
+embed Jupyter. When a use case needs offline data flow, batch
+evaluation, or model lineage tracking, the answer is "use the
+relevant Red Hat AI component," not "build it into BaseAgent."
 
 ### OGX (rebrand of LlamaStack) — orchestration, safety, observability
 
@@ -89,9 +131,10 @@ Memory CRUD, contradiction tracking, scoping (user / project /
 organizational / enterprise) are properties of the backend, not of
 this project.
 
-### OpenShift — platform, builds, deployment, monitoring
+### OpenShift — cluster, builds, deployment, monitoring
 
-OpenShift owns:
+This section is about OpenShift the cluster platform — distinct from
+OpenShift AI (the Red Hat AI bundle described above). OpenShift owns:
 
 - The cluster, namespaces, and project boundaries.
 - Secret management (Secrets, ESO, Vault integration).

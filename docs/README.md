@@ -1,6 +1,6 @@
 # Documentation
 
-agent-template scaffolds production-ready AI agents for OpenShift via the `fips-agents` CLI. For the project overview and getting started, see the [root README](../README.md).
+agent-template scaffolds production-ready AI agents for Red Hat AI via the `fips-agents` CLI. For the project overview and getting started, see the [root README](../README.md).
 
 ## Design
 
