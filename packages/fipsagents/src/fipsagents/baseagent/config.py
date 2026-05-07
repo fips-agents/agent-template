@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal, Union
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -499,6 +499,146 @@ class NodeConfig(BaseModel):
         return self
 
 
+class RemoteTransportConfig(BaseModel):
+    """HTTP transport for a remote subagent.
+
+    ``url`` is the OpenAI-compatible endpoint base (e.g.
+    ``http://research-helper:8080/v1``).  Standard ``${VAR:-default}``
+    env-var substitution applies before this model is validated.
+    ``timeout_seconds`` caps the per-call wall time; subagent failures do
+    not block the parent indefinitely.
+    """
+
+    type: Literal["remote"]
+    url: str
+    timeout_seconds: float = 60.0
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def _url_not_empty(cls, v: Any) -> Any:
+        """Reject empty or None url values (env substitution may produce either)."""
+        if v is None or (isinstance(v, str) and not v.strip()):
+            raise ValueError(
+                "transport.url is required for remote transport "
+                "(env substitution may have produced an empty string)"
+            )
+        return v
+
+
+class InProcessTransportConfig(BaseModel):
+    """In-process transport for a subagent running in the same Python process.
+
+    ``class_path`` is a dotted import path for a ``BaseAgent`` subclass
+    (e.g. ``myagents.helper.HelperAgent``).  ``config_path`` is an
+    optional path to the subagent's own ``agent.yaml``; when omitted the
+    parent's config environment is inherited.
+
+    .. note::
+        ``identity: service_account: <name>`` is incompatible with this
+        transport — there is no HTTP boundary at which to override the
+        identity.  The validator on :class:`SubagentConfig` enforces this.
+    """
+
+    type: Literal["inprocess"]
+    class_path: str
+    config_path: str | None = None
+
+
+TransportConfig = Annotated[
+    Union[RemoteTransportConfig, InProcessTransportConfig],
+    Field(discriminator="type"),
+]
+"""Discriminated union of supported subagent transports.
+
+Select via ``transport.type: remote`` or ``transport.type: inprocess``
+in ``agent.yaml``.
+"""
+
+
+_SUBAGENT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
+
+
+class IdentityServiceAccount(BaseModel):
+    """Explicit service-account identity override for a subagent.
+
+    The subagent runs under the named kagenti-issued service-account
+    credentials rather than inheriting the caller's identity.  Useful when
+    the subagent has its own scoped credentials (e.g. an account-lookup
+    agent with read-only DB access).
+    """
+
+    service_account: str
+
+
+class SubagentConfig(BaseModel):
+    """Configuration for a single registered subagent.
+
+    Subagents are discovered by name via the ``subagents:`` block in
+    ``agent.yaml`` and made available to the LLM as a ``delegate_to_agent``
+    tool call.
+
+    Fields
+    ------
+    name:
+        Identifier the LLM uses in the ``agent_name`` tool parameter.
+        Must match ``^[a-zA-Z][a-zA-Z0-9_]*$`` so it can be used safely
+        as a tool argument value.
+    description:
+        Surfaced in the tool schema so the LLM knows what this subagent
+        does.
+    when_to_use:
+        Selection hint baked into the tool's schema so the LLM has
+        guidance on when to delegate.
+    transport:
+        Where and how to reach the subagent.  Either
+        :class:`RemoteTransportConfig` (HTTP) or
+        :class:`InProcessTransportConfig` (same process).
+    permission_scope:
+        References a named rule set in ``PermissionConfig.scopes`` (#164).
+        The subagent runs under ``min(parent_scope, this_scope)``.
+    identity:
+        ``"inherit"`` (default) — the subagent carries the caller's
+        identity.  ``service_account: <name>`` — the subagent runs under a
+        fixed kagenti-issued identity.  Incompatible with
+        ``transport.type: inprocess``.
+    max_depth:
+        Cap on delegation chains.  The framework tracks depth in the trace
+        context and rejects calls that would exceed this limit.
+    """
+
+    name: str
+    description: str
+    when_to_use: str
+    transport: TransportConfig
+    permission_scope: str | None = None
+    identity: Union[Literal["inherit"], IdentityServiceAccount] = "inherit"
+    max_depth: int = Field(default=3, ge=1, le=10)
+
+    @field_validator("name", mode="after")
+    @classmethod
+    def _name_valid_identifier(cls, v: str) -> str:
+        if not _SUBAGENT_NAME_RE.match(v):
+            raise ValueError(
+                f"subagent name {v!r} is invalid: must match "
+                r"^[a-zA-Z][a-zA-Z0-9_]*$ "
+                "(start with a letter, contain only letters, digits, underscores)"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _inprocess_forbids_service_account(self) -> "SubagentConfig":
+        if (
+            self.transport.type == "inprocess"
+            and isinstance(self.identity, IdentityServiceAccount)
+        ):
+            raise ValueError(
+                f"Subagent {self.name!r}: identity 'service_account' is not supported "
+                "for inprocess transport (no HTTP boundary to override identity at). "
+                "Use identity: inherit, or switch to transport.type: remote."
+            )
+        return self
+
+
 class AgentIdentity(BaseModel):
     """Agent name, description, and version for logging and API endpoints."""
 
@@ -923,6 +1063,23 @@ class AgentConfig(BaseModel):
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)
+    subagents: list[SubagentConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _no_duplicate_subagent_names(self) -> "AgentConfig":
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for sa in self.subagents:
+            if sa.name in seen:
+                duplicates.append(sa.name)
+            seen.add(sa.name)
+        if duplicates:
+            raise ValueError(
+                f"Duplicate subagent name(s) in agent.yaml: "
+                f"{', '.join(sorted(set(duplicates)))}. "
+                "Each subagent must have a unique name."
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------

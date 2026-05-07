@@ -33,6 +33,10 @@ from fipsagents.baseagent.events import (
     StreamComplete,
     StreamEvent,
     StreamMetrics,
+    SubagentCompleted,
+    SubagentDelta,
+    SubagentFailed,
+    SubagentInvoked,
     ToolCallDelta,
     ToolResultEvent,
 )
@@ -223,6 +227,71 @@ async def stream_events_as_sse(
                         "role": "tool",
                         "tool_call_id": event.call_id,
                         "content": event.content,
+                    },
+                )
+
+            elif isinstance(event, SubagentInvoked):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "subagent": {
+                            "type": "invoked",
+                            "agent_name": event.agent_name,
+                            "task": event.task,
+                            "span_id": event.span_id,
+                            "transport": event.transport,
+                            "depth": event.depth,
+                        }
+                    },
+                )
+
+            elif isinstance(event, SubagentCompleted):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "subagent": {
+                            "type": "completed",
+                            "agent_name": event.agent_name,
+                            "span_id": event.span_id,
+                            "content": event.content,
+                            "tokens_used": event.tokens_used,
+                            "tool_calls_made": event.tool_calls_made,
+                            "cost_usd": event.cost_usd,
+                        }
+                    },
+                )
+
+            elif isinstance(event, SubagentFailed):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "subagent": {
+                            "type": "failed",
+                            "agent_name": event.agent_name,
+                            "span_id": event.span_id,
+                            "error_type": event.error_type,
+                            "error_message": event.error_message,
+                        }
+                    },
+                )
+
+            elif isinstance(event, SubagentDelta):
+                # v1: forward-compat placeholder. Delta nested in subagent object.
+                # v2 will recursively serialize event.delta with the full event stream.
+                # For now, emit repr() of the delta for debugging; v2 will refactor.
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "subagent": {
+                            "type": "delta",
+                            "agent_name": event.agent_name,
+                            "span_id": event.span_id,
+                            "delta": repr(event.delta),  # v1 placeholder
+                        }
                     },
                 )
 

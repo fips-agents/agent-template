@@ -123,6 +123,22 @@ class BaseAgent(abc.ABC):
         self._mcp_resources: dict[str, tuple[Any, Any]] = {}     # uri_string → (client, mcp.types.Resource)
         self._mcp_resource_templates: dict[str, tuple[Any, Any]] = {}  # uri_template → (client, mcp.types.ResourceTemplate)
 
+        # Subagent registry — populated by setup() from config.subagents.
+        self.subagents: dict[str, Any] = {}
+        # Append-only buffer drained by astep_stream; appended to by the
+        # delegate_to_agent tool.
+        self._subagent_events: list[StreamEvent] = []
+        # Append-only token-usage list drained by the server's per-turn
+        # cost-roll-up (_persist_cost_data). Each entry is a dict with
+        # "input"/"output"/"cached" keys.
+        self._subagent_token_usage: list[dict[str, int]] = []
+        # Current depth in the delegation chain. 0 for a top-level agent.
+        self._delegation_depth: int = 0
+        # Forwarded for ``identity: inherit`` subagents. Populated by the
+        # server before calling astep_stream when the incoming request
+        # carries an Authorization header.
+        self._inbound_auth_header: str | None = None
+
         # Tracks whether setup has completed.
         self._setup_done = False
 
@@ -177,6 +193,16 @@ class BaseAgent(abc.ABC):
         tools_dir = base / self.config.tools.local_dir
         discovered = self.tools.discover(tools_dir)
         logger.info("Discovered %d local tool(s)", len(discovered))
+
+        # 4a. Subagent registry + delegate_to_agent tool
+        self.subagents = {sa.name: sa for sa in self.config.subagents}
+        if self.subagents:
+            from fipsagents.baseagent.subagent_tool import make_delegate_tool
+            self.tools.register(make_delegate_tool(self))
+            logger.info(
+                "Registered delegate_to_agent tool with %d subagent(s)",
+                len(self.subagents),
+            )
 
         # 4b. Tool inspection
         if self.config.security.tool_inspection.enabled:
@@ -670,6 +696,18 @@ class BaseAgent(abc.ABC):
                         args = {}
 
                     result = await self.tools.execute(fn_name, **args)
+
+                    # Drain subagent events emitted by delegate_to_agent
+                    # (or any future tool that uses _subagent_events).
+                    # Yield in append order: SubagentInvoked → SubagentCompleted/Failed
+                    # before the ToolResultEvent so consumers see the full
+                    # lifecycle in the order the design doc's diagram implies.
+                    # Use getattr defensively for agents constructed via __new__
+                    # in tests that bypass __init__.
+                    _pending = getattr(self, "_subagent_events", None)
+                    while _pending:
+                        yield _pending.pop(0)
+
                     is_err = result.is_error
                     content_str = (
                         result.result

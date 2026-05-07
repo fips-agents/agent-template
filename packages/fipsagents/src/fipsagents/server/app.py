@@ -1313,12 +1313,21 @@ class OpenAIChatServer:
         if self._metrics_collector is not None:
             metrics_start = self._metrics_collector.record_request_start()
 
+        # Forward the inbound Authorization header so delegate_to_agent can
+        # propagate it to subagents configured with ``identity: inherit``.
+        # Reset to None after the response so the value doesn't leak into
+        # subsequent requests when the agent instance is reused.
+        agent._inbound_auth_header = request.headers.get("authorization")
+
         if not req.stream:
-            content, metrics, finish_reason = await self._collect_sync(
-                agent, incoming, model_name=model_name,
-                overrides=overrides, collector=collector,
-                tenant_id=tenant_id, session_id=req.session_id,
-            )
+            try:
+                content, metrics, finish_reason = await self._collect_sync(
+                    agent, incoming, model_name=model_name,
+                    overrides=overrides, collector=collector,
+                    tenant_id=tenant_id, session_id=req.session_id,
+                )
+            finally:
+                agent._inbound_auth_header = None
             # Session: save after sync response.
             if req.session_id and self._session_store:
                 await self._session_store.save(req.session_id, agent.messages)
@@ -1495,6 +1504,9 @@ class OpenAIChatServer:
             except Exception:
                 logger.exception("Stream errored")
                 stream_status = "error"
+            finally:
+                # Reset auth header so it doesn't bleed into the next request.
+                self._agent._inbound_auth_header = None
 
             # Tracing: finalize after streaming completes.
             if collector:
@@ -1574,6 +1586,22 @@ class OpenAIChatServer:
             "model": model_name or existing.get("model"),
             "turn_count": int(existing.get("turn_count", 0) or 0) + 1,
         }
+
+        # Roll up subagent token usage from this turn into the parent's
+        # session totals. The buffer is populated by delegate_to_agent and
+        # drained here so tokens are not double-counted across turns.
+        subagent_usages = getattr(self._agent, "_subagent_token_usage", None)
+        if subagent_usages:
+            new_data["input_tokens"] += sum(
+                int(u.get("input", 0) or 0) for u in subagent_usages
+            )
+            new_data["output_tokens"] += sum(
+                int(u.get("output", 0) or 0) for u in subagent_usages
+            )
+            new_data["cached_tokens"] += sum(
+                int(u.get("cached", 0) or 0) for u in subagent_usages
+            )
+            subagent_usages.clear()
 
         try:
             await self._session_store.update(session_id, cost_data=new_data)
