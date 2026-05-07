@@ -137,6 +137,29 @@ The `guardrails` field is an OGX extension to the Responses API and is not recog
 
 Platform mode is decoupled from observability (#81). When that issue lands, OTLP wiring will apply uniformly to both chat-completions and Responses-based agents.
 
+### Subagent-as-tool
+
+Subagent-as-tool is composable delegation through the tool plane: a parent agent declares peer agents in `agent.yaml` under `subagents:`, and `BaseAgent.setup()` auto-registers a stock `delegate_to_agent(agent_name, task, context)` tool. The LLM picks a subagent at runtime and the framework handles transport, trace propagation, identity forwarding, parent-side cost roll-up, and depth bounds. This is intentionally orthogonal to the workflow graph -- workflows remain the right shape when topology is known up front and the graph itself encodes business logic; subagent-as-tool is the right shape when the parent decides *at runtime* whether to delegate based on the user's intent.
+
+When `subagents:` is non-empty:
+
+- `BaseAgent.setup()` builds `self.subagents: dict[str, SubagentConfig]` and registers a per-agent closure-based `delegate_to_agent` via `ToolRegistry.register`. Agents with no subagents pay nothing -- the tool is not registered, the schema is not surfaced, and the LLM sees no extra option.
+- The parent's `astep_stream` drains a `_subagent_events` buffer between `tools.execute()` and `ToolResultEvent`, yielding `SubagentInvoked` → `SubagentCompleted` (or `SubagentFailed`) before the tool result so consumers see the lifecycle in cause-and-effect order.
+- `OpenAIChatServer._persist_cost_data` drains `agent._subagent_token_usage` into the turn's `cost_data` write so `BudgetEnforcer` (which reads `cost_data` on its next pre-request check) sees rolled-up totals across both the parent's own LLM calls and any subagent invocations.
+
+Two transports are supported, validated by a Pydantic discriminated union on `transport.type`:
+
+- **`remote`** -- HTTP POST to the target's `/v1/chat/completions` with `stream=False`. The wire shape is standard OpenAI chat completions; the response's `usage` block populates `SubagentResult.tokens_used`. Outgoing headers always include `x-subagent-depth` (caller's depth + 1) and a synthesised W3C `traceparent` derived from the call's span id; `Authorization` is forwarded when `identity: inherit` and the parent received an inbound auth header.
+- **`inprocess`** -- imports the subagent class via `class_path`, calls `setup()` once, runs `astep_stream` to completion, and assembles a `SubagentResult` from the collected events. Trace headers are ignored (no HTTP boundary) but `x-subagent-depth` *is* propagated in-band so an inprocess sub-subagent can detect chain depth.
+
+`identity: service_account: <name>` is reserved for kagenti-issued credentials and is rejected at config-validation time when paired with `inprocess` transport (no HTTP boundary at which to override identity). `permission_scope` is parsed but not enforced in v1 -- it logs a single `WARNING` per `(agent, agent_name)` until per-tool permission policy lands (#164).
+
+Four new `StreamEvent` variants land on the union: `SubagentInvoked`, `SubagentCompleted`, `SubagentFailed`, and `SubagentDelta` (forward-compat for v2 nested streaming, no emitter in v1). The OpenAI SSE serializer maps them onto a `subagent` top-level delta field, mirroring how `GuardrailFiredEvent` handles non-standard payloads.
+
+Failure modes surface as concrete `SubagentError` subclasses -- `SubagentTimeoutError`, `SubagentRemoteError`, `MaxDelegationDepthError`, `SubagentCrashedError` -- so the parent's LLM can branch on type and replan. The existing server-layer `BudgetExceededError` is reused for budget exhaustion. Retries are the parent's loop's responsibility; the framework does not auto-retry subagent calls because retrying conflates failure modes (timeout vs. crash vs. denial) the model should handle differently.
+
+v1 ships buffered: the parent waits for the subagent to finish and sees a single tool result. Nested-delta streaming (the `SubagentDelta` event), kagenti-driven dynamic registries, and remote-chain depth enforcement (the receiver reading `x-subagent-depth` on inbound) are scoped as follow-ups. Full design lives in `planning/subagent-tool-design.md`.
+
 ### Prompts
 
 `load_prompt(name, **variables)` loads a prompt from the `prompts/` directory, performs variable substitution, and returns the rendered text. `list_prompts()` returns available prompts with their metadata. The prompt format is described in its own section below.

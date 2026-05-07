@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-05-07
+
+Subagent-as-tool: composable delegation through the tool plane. Closes the bulk of [#165](https://github.com/fips-agents/agent-template/issues/165).
+
+### Added
+
+- **`subagents:` config block on `AgentConfig`** ([#165](https://github.com/fips-agents/agent-template/issues/165), [#173](https://github.com/fips-agents/agent-template/pull/173)). New `SubagentConfig` (with `RemoteTransportConfig` / `InProcessTransportConfig` discriminated union, `IdentityServiceAccount`, and validators rejecting `inprocess` + `service_account` and duplicate names) lets a parent agent declare peer agents the LLM may delegate to. `BaseAgent.setup()` auto-registers a stock `delegate_to_agent` tool when the list is non-empty; agents with no subagents pay nothing.
+- **`fipsagents.subagents` package** ([#165](https://github.com/fips-agents/agent-template/issues/165)). New `SubagentResult` dataclass plus a `SubagentError` hierarchy (`SubagentTimeoutError`, `SubagentRemoteError`, `MaxDelegationDepthError`, `SubagentCrashedError`). `SubagentTransport` ABC with two concrete implementations: `RemoteSubagentTransport` (HTTP POST to `/v1/chat/completions` with `stream=False`, OpenAI-compatible request shape, W3C `traceparent` injection, `Authorization` forwarding for `identity: inherit`) and `InProcessSubagentTransport` (imports the subagent class via `class_path`, runs `astep_stream` to completion, propagates `x-subagent-depth` in-band).
+- **`delegate_to_agent` stock tool** ([#165](https://github.com/fips-agents/agent-template/issues/165)). Closure-based factory in `fipsagents.baseagent.subagent_tool` that captures the agent instance for `subagents` registry resolution, depth-cap enforcement against `_delegation_depth`, transport selection, header construction, and event emission. Returns the `SubagentResult` to the LLM as a JSON string. Registered via `ToolRegistry.register` from `BaseAgent.setup()` step 4a.
+- **Subagent `StreamEvent` variants** ([#165](https://github.com/fips-agents/agent-template/issues/165)). `SubagentInvoked`, `SubagentCompleted`, `SubagentFailed` are emitted by the delegation tool and drained from `agent._subagent_events` inside `astep_stream` between `tools.execute()` and `ToolResultEvent`. `SubagentDelta` is forward-compat for v2 nested streaming -- no emitter in v1. The OpenAI SSE serializer maps all four onto a `subagent` top-level delta field.
+- **Parent-side cost roll-up via `_persist_cost_data`** ([#165](https://github.com/fips-agents/agent-template/issues/165)). The delegation tool appends each subagent's `tokens_used` to `agent._subagent_token_usage`; `OpenAIChatServer._persist_cost_data` drains the buffer into the turn's `cost_data` write before the session-store update. `BudgetEnforcer` -- which reads `cost_data` on its next pre-request check -- sees rolled-up totals across both the parent's own LLM calls and any subagent invocations.
+- **Inbound `Authorization` header forwarding** ([#165](https://github.com/fips-agents/agent-template/issues/165)). `OpenAIChatServer._chat_completions` sets `agent._inbound_auth_header` from the incoming request and clears it in `finally` (both the sync and streaming paths). When `identity: inherit`, the delegation tool forwards this header to remote subagents so the chain runs under the caller's identity.
+- **Commented-out `subagents:` example in the agent-loop template `agent.yaml`** ([#165](https://github.com/fips-agents/agent-template/issues/165)). Documents both transport types with `${VAR:-default}` env-var substitution and explicitly calls out the v1 permission gap (`permission_scope` parsed but not enforced until [#164](https://github.com/fips-agents/agent-template/issues/164)).
+
+### Notes
+
+- **Streaming is buffered in v1.** The parent waits for the subagent to finish and sees a single tool result. The `SubagentDelta` event is defined and round-trips through the SSE serializer so consumers can pattern-match exhaustively, but no code path emits it. Nested-delta streaming arrives once the UI rendering shape is known (see `fips-agents/ui-template`).
+- **Permission enforcement is gated on [#164](https://github.com/fips-agents/agent-template/issues/164).** `permission_scope` is parsed and validated for shape but does not gate calls. A `WARNING` is logged once per `(agent, agent_name)` so the gap is visible. The follow-up PR will plug enforcement into the existing permission policy hook without requiring a config change.
+- **Registry is static.** Subagents are deployment facts baked into `agent.yaml`. kagenti-driven dynamic discovery (`discovery: kagenti` mode) is a follow-up that will not break existing configs.
+- **`identity: service_account` is rejected for inprocess transport** at config-validation time (no HTTP boundary at which to override identity). The Pydantic `model_validator` raises a specific error message pointing at the two valid alternatives.
+- **Depth enforcement is parent-side only on the inprocess path.** `x-subagent-depth` propagates in-band so an inprocess sub-subagent can detect chain depth, but the receiving end of remote chains does not yet read the header on inbound. Remote chain-depth enforcement is a follow-up.
+- **Stock tools currently live as functions inside `baseagent/tools.py`, not as one-file-per-tool under a `tools/` package** ([#174](https://github.com/fips-agents/agent-template/issues/174)). The closure-based factory in `subagent_tool.py` works but doesn't scale to additional stock tools. Tracked as a follow-up; no API change for users.
+
 ## [0.21.1] - 2026-05-05
 
 ### Fixed
