@@ -28,7 +28,13 @@ import uuid
 from typing import Any, AsyncIterator
 
 from fipsagents.baseagent.events import (
+    CompactionCompleted,
+    CompactionSkipped,
+    CompactionStarted,
     ContentDelta,
+    PermissionDecisionMade,
+    QuestionAnswered,
+    QuestionAsked,
     ReasoningDelta,
     StreamComplete,
     StreamEvent,
@@ -291,6 +297,87 @@ async def stream_events_as_sse(
                             "agent_name": event.agent_name,
                             "span_id": event.span_id,
                             "delta": repr(event.delta),  # v1 placeholder
+                        }
+                    },
+                )
+
+            elif isinstance(event, CompactionStarted):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "compaction": {
+                            "type": "started",
+                            "session_id": event.session_id,
+                            "message_count": event.message_count,
+                        }
+                    },
+                )
+
+            elif isinstance(event, CompactionCompleted):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "compaction": {
+                            "type": "completed",
+                            "session_id": event.session_id,
+                            "original_count": event.original_count,
+                            "compacted_count": event.compacted_count,
+                        }
+                    },
+                )
+
+            elif isinstance(event, CompactionSkipped):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "compaction": {
+                            "type": "skipped",
+                            "reason": event.reason,
+                            "session_id": event.session_id,
+                        }
+                    },
+                )
+
+            elif isinstance(event, PermissionDecisionMade):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "permission": {
+                            "tool": event.tool,
+                            "action": event.action,
+                            "rule_id": event.rule_id,
+                            "scope": event.scope,
+                        }
+                    },
+                )
+
+            elif isinstance(event, QuestionAsked):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "question": {
+                            "type": "asked",
+                            "question_id": event.question_id,
+                            "question_text": event.question_text,
+                            "session_id": event.session_id,
+                        }
+                    },
+                )
+
+            elif isinstance(event, QuestionAnswered):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "question": {
+                            "type": "answered",
+                            "question_id": event.question_id,
+                            "answer_text": event.answer_text,
                         }
                     },
                 )
