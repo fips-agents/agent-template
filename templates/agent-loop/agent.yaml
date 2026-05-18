@@ -227,6 +227,18 @@ server:
   metrics:
     enabled: ${METRICS_ENABLED:-false}
 
+  # -- Message compaction (#166) -----------------------------------------------
+  # compaction:
+  #   enabled: ${COMPACTION_ENABLED:-false}
+  #   backend: null          # null (no-op) | llm (model-driven summarisation)
+  #   threshold_messages: 50
+
+  # -- Permission policy (#164) ------------------------------------------------
+  # permissions:
+  #   source: null           # null (allow-all) | static (config-driven rules)
+  #   default_action: allow
+  #   rules: []
+
   # -- User feedback collection (optional) --------------------------------------
   #
   # Persists thumbs-up / thumbs-down ratings, comments, and corrections
