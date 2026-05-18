@@ -364,6 +364,52 @@ Multi-agent deployments (workflow graphs with `RemoteNode`) propagate trace cont
 
 The result is a single trace tree spanning all agents in a workflow, viewable in any W3C-compliant trace backend (Jaeger, Tempo, the OTEL collector).
 
+## Safety & Resilience
+
+Three features guard against runaway behavior in long-running or autonomous agent sessions. All are opt-in via `agent.yaml` and degrade to no-ops when unconfigured.
+
+### Auto-Compaction
+
+`LLMCompactor` in `fipsagents.server.compactor` summarises older messages when the conversation grows beyond a configurable threshold. The server runs `_maybe_compact()` before `astep_stream()` in both sync and streaming paths.
+
+The algorithm preserves system messages and the last N user/assistant exchange pairs (`keep_recent_turns`, default 4). A tool-call pairing guard ensures `tool_calls` assistant messages are never separated from their corresponding `tool` result messages. A pending-state guard skips compaction when `__pending__` or `__permission_pending__` sentinels exist in the compactable range. On LLM failure, the compactor returns the original messages unchanged.
+
+Two trigger modes: message-count (`threshold_messages`, default 50) and token-estimate (`context_limit - reserve_tokens`). The `summary_model` config allows using a cheaper model for the summarisation call.
+
+```yaml
+server:
+  compaction:
+    enabled: true
+    backend: llm
+    threshold_messages: 50
+    keep_recent_turns: 4
+    summary_role: developer
+    summary_model: ${COMPACTION_MODEL:-}
+```
+
+### Per-Turn Resource Limits
+
+`LimitsConfig` under `model.limits` enforces per-turn ceilings on token consumption and iteration count. Checked in `astep_stream()` after each model call, before tool dispatch. When a limit is breached, the agent emits a `LimitExceeded` event, sets `finish_reason="limit"`, and stops without dispatching pending tool calls. All limits are optional and default to no limit.
+
+```yaml
+model:
+  limits:
+    max_tokens_per_turn: 100000
+    max_iterations_per_turn: 20
+```
+
+### Doom-Loop Detection
+
+`LoopGuardConfig` under `loop.guard` detects when the LLM gets stuck calling the same tool with identical arguments. A sliding window of tool-call hashes (SHA-256 of `(tool_name, canonical_args)`) is maintained per `astep_stream()` invocation. When the same hash appears `repeat_threshold` times (default 3) within the `pattern_window` (default 5), the guard emits a `LoopBreakEvent` and breaks with `finish_reason="loop_break"`. Enabled by default with conservative thresholds.
+
+```yaml
+loop:
+  guard:
+    enabled: true
+    repeat_threshold: 3
+    pattern_window: 5
+```
+
 ## Prompts
 
 Prompts are Markdown files with YAML frontmatter, stored one-per-file in the `prompts/` directory:
