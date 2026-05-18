@@ -13,6 +13,8 @@ import abc
 import asyncio
 import enum
 import logging
+import os as _os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, TypeVar
@@ -47,6 +49,25 @@ from fipsagents.baseagent.skills import SkillLoader
 from fipsagents.baseagent.tools import ToolRegistry, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Message ID utilities
+# ---------------------------------------------------------------------------
+
+
+def _generate_message_id() -> str:
+    """Sortable timestamp+random ID for stable message references."""
+    ms = int(time.time() * 1000)
+    rand = _os.urandom(6).hex()
+    return f"msg_{ms:012x}_{rand}"
+
+
+def _stamp_message_id(msg: dict) -> dict:
+    """Ensure *msg* has an ``id`` key. Mutates in place and returns *msg*."""
+    if "id" not in msg:
+        msg["id"] = _generate_message_id()
+    return msg
 
 T = TypeVar("T")
 
@@ -272,12 +293,12 @@ class BaseAgent(abc.ABC):
                 await self.connect_mcp(mcp_cfg)
 
         # 10. Seed messages with system prompt + optional memory prefix.
-        self.messages.append(
+        self._append_message(
             {"role": "system", "content": self.build_system_prompt()}
         )
         prefix = await self.build_memory_prefix()
         if prefix:
-            self.messages.append(
+            self._append_message(
                 {"role": self.config.memory.prefix_role, "content": prefix}
             )
             logger.info(
@@ -397,6 +418,11 @@ class BaseAgent(abc.ABC):
 
     # -- Conversation state --------------------------------------------------
 
+    def _append_message(self, msg: dict[str, Any]) -> None:
+        """Append *msg* to ``self.messages`` with a stable ID stamped."""
+        _stamp_message_id(msg)
+        self.messages.append(msg)
+
     def add_message(self, role: str, content: str | list[dict[str, Any]]) -> None:
         """Append a message to the conversation history.
 
@@ -405,7 +431,8 @@ class BaseAgent(abc.ABC):
         ``{"type": "image_url", "image_url": {...}}``) so multimodal callers
         can append image-bearing turns without going through the HTTP layer.
         """
-        self.messages.append({"role": role, "content": content})
+        msg = {"role": role, "content": content}
+        self._append_message(msg)
 
     def get_messages(self) -> list[dict[str, Any]]:
         """Return a copy of the current conversation history."""
@@ -674,7 +701,7 @@ class BaseAgent(abc.ABC):
                 # Append the assistant's tool-calling message so the
                 # conversation history is correctly shaped for the next
                 # model call.
-                self.messages.append(
+                self._append_message(
                     {
                         "role": "assistant",
                         "content": "".join(assistant_content_parts) or None,
@@ -715,7 +742,7 @@ class BaseAgent(abc.ABC):
                         else f"ERROR: {result.error}"
                     )
 
-                    self.messages.append(
+                    self._append_message(
                         {
                             "role": "tool",
                             "content": content_str,
@@ -735,7 +762,7 @@ class BaseAgent(abc.ABC):
 
             # No tool calls -> this turn produced the final response.
             if assistant_content_parts:
-                self.messages.append(
+                self._append_message(
                     {
                         "role": "assistant",
                         "content": "".join(assistant_content_parts),
@@ -904,7 +931,7 @@ class BaseAgent(abc.ABC):
                 break
 
             # Append assistant message with tool_calls to conversation history.
-            self.messages.append({
+            self._append_message({
                 "role": "assistant",
                 "content": response.content or "",
                 "tool_calls": [
@@ -939,7 +966,7 @@ class BaseAgent(abc.ABC):
                     if not result.is_error
                     else f"ERROR: {result.error}"
                 )
-                self.messages.append({
+                self._append_message({
                     "role": "tool",
                     "content": content_str,
                     "tool_call_id": tc.id,
@@ -1382,10 +1409,9 @@ class BaseAgent(abc.ABC):
                 )
             else:
                 # prefix mode: insert a new message immediately before the user message.
-                self.messages.insert(
-                    user_msg_idx,
-                    {"role": self.config.memory.prefix_role, "content": joined},
-                )
+                msg = {"role": self.config.memory.prefix_role, "content": joined}
+                _stamp_message_id(msg)
+                self.messages.insert(user_msg_idx, msg)
                 logger.debug(
                     "Deferred memory injected as prefix before user turn "
                     "(%d chars, role=%r, pattern=%r)",
