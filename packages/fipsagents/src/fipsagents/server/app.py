@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import random
 import re
 import uuid
@@ -335,8 +336,42 @@ class OpenAIChatServer:
         # Initialize compactor.
         from .compactor import create_compactor
         compaction_cfg = getattr(server_cfg, "compaction", None)
-        if compaction_cfg is not None and compaction_cfg.enabled:
-            self._compactor = create_compactor(compaction_cfg.backend)
+        if (
+            compaction_cfg is not None
+            and compaction_cfg.enabled
+            and compaction_cfg.backend == "llm"
+        ):
+            summary_model = (
+                compaction_cfg.summary_model or self._agent.config.model.name
+            )
+            summary_endpoint = self._agent.config.model.endpoint
+
+            async def _compaction_model_fn(messages: list[dict]) -> str:
+                import openai as _oai
+                client = _oai.AsyncOpenAI(
+                    base_url=summary_endpoint or None,
+                    api_key=os.environ.get("OPENAI_API_KEY", "not-required"),
+                )
+                try:
+                    resp = await client.chat.completions.create(
+                        model=summary_model,
+                        messages=messages,
+                        temperature=0.3,
+                        max_tokens=2000,
+                    )
+                    return resp.choices[0].message.content or ""
+                finally:
+                    await client.close()
+
+            self._compactor = create_compactor(
+                compaction_cfg.backend,
+                model_fn=_compaction_model_fn,
+                threshold_messages=compaction_cfg.threshold_messages,
+                keep_recent_turns=compaction_cfg.keep_recent_turns,
+                summary_role=compaction_cfg.summary_role,
+                context_limit=compaction_cfg.context_limit,
+                reserve_tokens=compaction_cfg.reserve_tokens,
+            )
         else:
             self._compactor = create_compactor(None)
 
@@ -1520,6 +1555,51 @@ class OpenAIChatServer:
             },
         )
 
+    # -- Compaction helper ---------------------------------------------------
+
+    async def _maybe_compact(
+        self,
+        agent: BaseAgent,
+        *,
+        session_id: str | None = None,
+    ) -> None:
+        """Run compaction on ``agent.messages`` if the compactor triggers."""
+        from .compactor import NullCompactor
+
+        if self._compactor is None or isinstance(self._compactor, NullCompactor):
+            return
+
+        # Skip compaction when pending state exists.
+        if session_id and self._session_store:
+            _state = await self._session_store.get_state(session_id)
+            if (
+                _state.get("pending_question")
+                or _state.get("open_tool_calls")
+                or _state.get("pending_subagent_calls")
+            ):
+                logger.debug("Compaction skipped: pending state")
+                return
+
+        if not await self._compactor.should_compact(agent.messages):
+            return
+
+        result = await self._compactor.compact(agent.messages)
+        if not result.skipped:
+            agent.messages = result.messages
+            logger.info(
+                "Compaction: %d -> %d messages",
+                result.original_count,
+                result.compacted_count,
+            )
+            if session_id and self._session_store:
+                import json as _cjson
+                await self._session_store.update_state(
+                    session_id,
+                    compaction_state=_cjson.dumps({"compaction_count": 1}),
+                )
+        else:
+            logger.debug("Compaction skipped: %s", result.skip_reason)
+
     # -- Sync ----------------------------------------------------------------
 
     async def _collect_sync(
@@ -1559,6 +1639,10 @@ class OpenAIChatServer:
                 getattr(_perm_cfg, "mode", "enforce") if _perm_cfg else "enforce"
             )
             agent._permission_preapproved = set()
+
+            # Compaction check (before agent loop).
+            await self._maybe_compact(agent, session_id=session_id)
+
             events = agent.astep_stream(max_iterations=10, **(overrides or {}))
             if self._metrics_collector is not None:
                 events = self._metrics_collector.observe(
@@ -1636,6 +1720,11 @@ class OpenAIChatServer:
                 getattr(_perm_cfg, "mode", "enforce") if _perm_cfg else "enforce"
             )
             self._agent._permission_preapproved = set()
+
+            # Compaction check (before agent loop).
+            await self._maybe_compact(
+                self._agent, session_id=session_id,
+            )
 
             stream_status = "ok"
             captured_metrics: StreamMetrics | None = None

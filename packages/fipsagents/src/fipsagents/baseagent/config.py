@@ -768,6 +768,11 @@ class CompactionConfig(BaseModel):
     enabled: bool = False
     backend: Literal["null", "llm"] | None = None
     threshold_messages: int = Field(default=50, ge=1)
+    keep_recent_turns: int = Field(default=4, ge=1)
+    summary_role: Literal["system", "developer"] = "developer"
+    summary_model: str | None = None
+    context_limit: int = Field(default=0, ge=0)
+    reserve_tokens: int = Field(default=4000, ge=0)
 
     @field_validator("backend", mode="before")
     @classmethod
