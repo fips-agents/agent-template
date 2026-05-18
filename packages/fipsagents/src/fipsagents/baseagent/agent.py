@@ -28,6 +28,8 @@ from fipsagents.baseagent.config import (
 )
 from fipsagents.baseagent.events import (
     ContentDelta,
+    PermissionDecisionMade,
+    QuestionAsked,
     ReasoningDelta,
     StreamComplete,
     StreamEvent,
@@ -163,6 +165,11 @@ class BaseAgent(abc.ABC):
         # Question tool: pending question state set by ask_user.
         self._question_pending: dict[str, Any] | None = None
         self._question_events: list[StreamEvent] = []
+
+        # Permission source — set by the server before astep_stream().
+        self._permission_source: Any | None = None
+        self._permission_mode: str = "enforce"
+        self._permission_preapproved: set[str] = set()
 
         # Tracks whether setup has completed.
         self._setup_done = False
@@ -730,6 +737,110 @@ class BaseAgent(abc.ABC):
                         )
                     except _json.JSONDecodeError:
                         args = {}
+
+                    # Permission check (before tool execution).
+                    _perm_src = getattr(self, "_permission_source", None)
+                    if _perm_src is not None:
+                        _perm_mode = getattr(self, "_permission_mode", "enforce")
+                        _preapproved = getattr(self, "_permission_preapproved", set())
+
+                        if call["id"] not in _preapproved:
+                            _perm_ctx = {"args": args, "tool_call_id": call["id"]}
+                            _perm_decision = await _perm_src.resolve(
+                                fn_name, context=_perm_ctx,
+                            )
+
+                            yield PermissionDecisionMade(
+                                tool=fn_name,
+                                action=_perm_decision.action,
+                                rule_id=_perm_decision.rule_id,
+                                scope=_perm_decision.scope,
+                            )
+
+                            _perm_audit = logging.getLogger(
+                                "fipsagents.security.audit.permissions"
+                            )
+                            _perm_audit.info(
+                                "permission_decision tool=%s action=%s "
+                                "rule_id=%s mode=%s",
+                                fn_name, _perm_decision.action,
+                                _perm_decision.rule_id, _perm_mode,
+                            )
+
+                            if _perm_mode == "enforce":
+                                if _perm_decision.action == "deny":
+                                    _deny_msg = (
+                                        f"DENIED: Tool '{fn_name}' is not "
+                                        f"permitted. "
+                                        f"{_perm_decision.reason or 'Permission denied by policy.'}"
+                                    )
+                                    self._append_message({
+                                        "role": "tool",
+                                        "content": _deny_msg,
+                                        "tool_call_id": call["id"],
+                                    })
+                                    yield ToolResultEvent(
+                                        call_id=call["id"],
+                                        name=fn_name,
+                                        content=_deny_msg,
+                                        is_error=True,
+                                    )
+                                    continue
+
+                                if _perm_decision.action == "ask":
+                                    import json as _perm_json
+                                    _perm_q_id = _generate_message_id().replace(
+                                        "msg_", "perm_"
+                                    )
+                                    _perm_pending = {
+                                        "question_id": _perm_q_id,
+                                        "prompt": (
+                                            f"Tool '{fn_name}' requires "
+                                            f"approval. "
+                                            f"{_perm_decision.reason or ''}"
+                                        ).strip(),
+                                        "options": [
+                                            {"label": "Allow", "value": "allow"},
+                                            {"label": "Deny", "value": "deny"},
+                                        ],
+                                        "multiple": False,
+                                        "allow_custom": False,
+                                        "permission_ask": True,
+                                        "tool_name": fn_name,
+                                        "tool_args": args,
+                                        "tool_call_id": call["id"],
+                                        "rule_id": _perm_decision.rule_id,
+                                    }
+                                    self._question_pending = _perm_pending
+
+                                    yield QuestionAsked(
+                                        question_id=_perm_q_id,
+                                        question_text=_perm_pending["prompt"],
+                                        options=_perm_pending["options"],
+                                        multiple=False,
+                                        allow_custom=False,
+                                    )
+
+                                    _sentinel = _perm_json.dumps({
+                                        "__permission_pending__": True,
+                                        "question_id": _perm_q_id,
+                                        "tool_name": fn_name,
+                                    })
+                                    self._append_message({
+                                        "role": "tool",
+                                        "content": _sentinel,
+                                        "tool_call_id": call["id"],
+                                    })
+                                    yield ToolResultEvent(
+                                        call_id=call["id"],
+                                        name=fn_name,
+                                        content=_sentinel,
+                                        is_error=False,
+                                    )
+
+                                    self._question_pending["tool_call_id"] = call["id"]
+                                    finish_reason = "question"
+                                    break
 
                     result = await self.tools.execute(fn_name, **args)
 

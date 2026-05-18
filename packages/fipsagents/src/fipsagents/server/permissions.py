@@ -11,6 +11,7 @@ minimal resolve contract.
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ class PermissionRule:
     tool: str  # tool name or "*" for all
     action: Literal["allow", "deny", "ask"]
     scope: str | None = None
+    reason: str | None = None
 
 
 class PermissionSource(ABC):
@@ -92,12 +94,13 @@ class StaticPermissionSource(PermissionSource):
         for rule in self._rules:
             if rule.scope is not None and rule.scope != scope:
                 continue
-            if rule.tool == "*" or rule.tool == tool_name:
+            if fnmatch.fnmatch(tool_name, rule.tool):
                 return PermissionDecision(
                     action=rule.action,
                     tool=tool_name,
                     rule_id=rule.id,
                     scope=scope,
+                    reason=rule.reason,
                 )
         return PermissionDecision(
             action=self._default_action,
@@ -122,6 +125,7 @@ def create_permission_source(
                 tool=r.get("tool", "*"),
                 action=r.get("action", "allow"),
                 scope=r.get("scope"),
+                reason=r.get("reason"),
             )
             for i, r in enumerate(rules or [])
         ]

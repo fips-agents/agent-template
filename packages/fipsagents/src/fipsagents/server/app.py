@@ -1332,10 +1332,37 @@ class OpenAIChatServer:
                     answer_content = c if isinstance(c, str) else str(c)
                     answer_msg_id = msg.get("id")
                     break
-            for msg in incoming:
-                if msg.get("role") == "tool" and msg.get("tool_call_id") == tool_call_id:
-                    msg["content"] = answer_content
-                    break
+            # Permission-ask: execute or deny the tool based on the answer.
+            if _pending_question_data and _pending_question_data.get("permission_ask"):
+                perm_tool = _pending_question_data.get("tool_name")
+                perm_args = _pending_question_data.get("tool_args", {})
+                _answer_lower = answer_content.strip().lower()
+                _approved = _answer_lower in (
+                    "allow", "allowed", "yes", "approve", "approved",
+                )
+                if _approved and perm_tool and self._agent is not None:
+                    _result = await self._agent.tools.execute(perm_tool, **perm_args)
+                    _content = (
+                        _result.result if not _result.is_error
+                        else f"ERROR: {_result.error}"
+                    )
+                    for msg in incoming:
+                        if msg.get("role") == "tool" and msg.get("tool_call_id") == tool_call_id:
+                            msg["content"] = _content
+                            break
+                    if self._agent is not None:
+                        self._agent._permission_preapproved.add(tool_call_id)
+                else:
+                    _deny = f"DENIED: Tool '{perm_tool}' was denied by the operator."
+                    for msg in incoming:
+                        if msg.get("role") == "tool" and msg.get("tool_call_id") == tool_call_id:
+                            msg["content"] = _deny
+                            break
+            else:
+                for msg in incoming:
+                    if msg.get("role") == "tool" and msg.get("tool_call_id") == tool_call_id:
+                        msg["content"] = answer_content
+                        break
             # Drop the answer message by ID — not by content match.
             if answer_msg_id:
                 incoming = [m for m in incoming if m.get("id") != answer_msg_id]
@@ -1433,6 +1460,8 @@ class OpenAIChatServer:
                 )
             finally:
                 agent._inbound_auth_header = None
+                agent._permission_source = None
+                agent._permission_preapproved = set()
             # Session: save after sync response.
             if req.session_id and self._session_store:
                 await self._session_store.save(req.session_id, agent.messages)
@@ -1521,6 +1550,15 @@ class OpenAIChatServer:
             agent.messages = list(incoming)
             agent._question_pending = None
             agent._question_events = []
+            agent._permission_source = self._permission_source
+            _perm_cfg = getattr(
+                getattr(agent, "config", None), "server", None,
+            )
+            _perm_cfg = getattr(_perm_cfg, "permissions", None)
+            agent._permission_mode = (
+                getattr(_perm_cfg, "mode", "enforce") if _perm_cfg else "enforce"
+            )
+            agent._permission_preapproved = set()
             events = agent.astep_stream(max_iterations=10, **(overrides or {}))
             if self._metrics_collector is not None:
                 events = self._metrics_collector.observe(
@@ -1588,6 +1626,16 @@ class OpenAIChatServer:
             self._agent.messages = list(incoming)
             self._agent._question_pending = None
             self._agent._question_events = []
+            self._agent._permission_source = self._permission_source
+            _perm_cfg = getattr(
+                getattr(self._agent, "config", None),
+                "server", None,
+            )
+            _perm_cfg = getattr(_perm_cfg, "permissions", None)
+            self._agent._permission_mode = (
+                getattr(_perm_cfg, "mode", "enforce") if _perm_cfg else "enforce"
+            )
+            self._agent._permission_preapproved = set()
 
             stream_status = "ok"
             captured_metrics: StreamMetrics | None = None
@@ -1624,6 +1672,8 @@ class OpenAIChatServer:
             finally:
                 # Reset auth header so it doesn't bleed into the next request.
                 self._agent._inbound_auth_header = None
+                self._agent._permission_source = None
+                self._agent._permission_preapproved = set()
 
             # Tracing: finalize after streaming completes.
             if collector:

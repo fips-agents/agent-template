@@ -104,6 +104,42 @@ class TestStaticPermissionSource:
         d = await src.resolve("any_tool")
         assert d.action == "allow"
 
+    @pytest.mark.asyncio
+    async def test_fnmatch_glob_matching(self):
+        src = StaticPermissionSource(
+            rules=[PermissionRule(id="r1", tool="kubectl_*", action="deny")]
+        )
+        d = await src.resolve("kubectl_exec")
+        assert d.action == "deny"
+        assert d.rule_id == "r1"
+
+    @pytest.mark.asyncio
+    async def test_fnmatch_no_false_positive(self):
+        src = StaticPermissionSource(
+            rules=[PermissionRule(id="r1", tool="kubectl_*", action="deny")]
+        )
+        d = await src.resolve("docker_exec")
+        assert d.action == "allow"
+
+    @pytest.mark.asyncio
+    async def test_reason_propagation(self):
+        src = StaticPermissionSource(
+            rules=[PermissionRule(
+                id="r1", tool="dangerous", action="deny",
+                reason="Too dangerous",
+            )]
+        )
+        d = await src.resolve("dangerous")
+        assert d.reason == "Too dangerous"
+
+    @pytest.mark.asyncio
+    async def test_reason_none_when_unset(self):
+        src = StaticPermissionSource(
+            rules=[PermissionRule(id="r1", tool="tool_a", action="allow")]
+        )
+        d = await src.resolve("tool_a")
+        assert d.reason is None
+
 
 class TestCreatePermissionSource:
     def test_none_returns_null(self):
@@ -118,6 +154,13 @@ class TestCreatePermissionSource:
         src = create_permission_source(
             "static",
             rules=[{"tool": "search", "action": "allow"}],
+        )
+        assert isinstance(src, StaticPermissionSource)
+
+    def test_static_with_reason(self):
+        src = create_permission_source(
+            "static",
+            rules=[{"tool": "search", "action": "deny", "reason": "blocked"}],
         )
         assert isinstance(src, StaticPermissionSource)
 

@@ -761,12 +761,14 @@ class PermissionRuleConfig(BaseModel):
     tool: str = "*"
     action: Literal["allow", "deny", "ask"] = "allow"
     scope: str | None = None
+    reason: str | None = None
 
 
 class PermissionConfig(BaseModel):
     """Permission resolution settings."""
     source: Literal["null", "static"] | None = None
     default_action: Literal["allow", "deny", "ask"] = "allow"
+    mode: Literal["enforce", "observe"] = "enforce"
     rules: list[PermissionRuleConfig] = Field(default_factory=list)
 
     @field_validator("source", mode="before")
