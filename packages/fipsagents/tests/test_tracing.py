@@ -10,7 +10,6 @@ from fipsagents.baseagent.events import (
     StreamMetrics,
     SubagentInvoked,
     SubagentCompleted,
-    SubagentFailed,
     ToolCallDelta,
     ToolResultEvent,
 )
@@ -326,6 +325,31 @@ class TestTraceCollector:
         assert collected == original
         assert isinstance(collected[1], SubagentInvoked)
         assert isinstance(collected[2], SubagentCompleted)
+
+    @pytest.mark.asyncio
+    async def test_foundation_events_pass_through(self, null_store):
+        """Foundation events (#182) pass through the collector unchanged."""
+        from fipsagents.baseagent.events import (
+            CompactionStarted,
+            CompactionSkipped,
+            PermissionDecisionMade,
+        )
+        original = [
+            ContentDelta("Start"),
+            CompactionStarted(session_id="s1", message_count=50),
+            CompactionSkipped(reason="pending_state", session_id="s1"),
+            PermissionDecisionMade(tool="search", action="allow", rule_id="r1"),
+            ContentDelta("End"),
+            StreamComplete(finish_reason="stop", metrics=_default_metrics()),
+        ]
+        collector = TraceCollector(null_store, trace_id="t-foundation")
+        collector.begin_request()
+        collected = [e async for e in collector.observe(_emit_events(*original))]
+        await collector.end_request()
+        assert len(collected) == 6
+        assert isinstance(collected[1], CompactionStarted)
+        assert isinstance(collected[2], CompactionSkipped)
+        assert isinstance(collected[3], PermissionDecisionMade)
 
 
 # ---------------------------------------------------------------------------

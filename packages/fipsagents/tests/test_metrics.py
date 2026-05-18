@@ -286,3 +286,37 @@ class TestSubagentEventPassthrough:
         assert len(result) == 2
         assert isinstance(result[0], SubagentFailed)
         assert result[0].error_type == "Timeout"
+
+
+class TestFoundationEventPassthrough:
+    """Verify MetricsCollector passes through foundation events unchanged."""
+
+    @pytest.mark.asyncio
+    async def test_compaction_events_pass_through(self):
+        from fipsagents.baseagent.events import CompactionStarted, CompactionSkipped
+        collector = MetricsCollector()
+        events = [
+            CompactionStarted(session_id="s1", message_count=50),
+            CompactionSkipped(reason="pending_state"),
+            StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+        ]
+        result = []
+        async for e in collector.observe(_emit_events(*events), model="test"):
+            result.append(e)
+        assert len(result) == 3
+        assert isinstance(result[0], CompactionStarted)
+        assert isinstance(result[1], CompactionSkipped)
+
+    @pytest.mark.asyncio
+    async def test_permission_events_pass_through(self):
+        from fipsagents.baseagent.events import PermissionDecisionMade
+        collector = MetricsCollector()
+        events = [
+            PermissionDecisionMade(tool="search", action="allow"),
+            StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+        ]
+        result = []
+        async for e in collector.observe(_emit_events(*events), model="test"):
+            result.append(e)
+        assert len(result) == 2
+        assert isinstance(result[0], PermissionDecisionMade)
