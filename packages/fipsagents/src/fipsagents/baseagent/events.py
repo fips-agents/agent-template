@@ -17,7 +17,7 @@ typed surface, not on litellm chunk shapes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Union
+from typing import Any, Union
 
 
 @dataclass
@@ -211,15 +211,18 @@ class PermissionDecisionMade:
 
 @dataclass
 class QuestionAsked:
-    """Reserved for #163 (Question tool). Emitter wiring deferred."""
+    """Emitted when the agent poses a structured question to the operator."""
     question_id: str
     question_text: str
+    options: list[dict[str, Any]] = field(default_factory=list)
+    multiple: bool = False
+    allow_custom: bool = False
     session_id: str | None = None
 
 
 @dataclass
 class QuestionAnswered:
-    """Reserved for #163 (Question tool). Emitter wiring deferred."""
+    """Emitted when the operator answers a pending question."""
     question_id: str
     answer_text: str
     session_id: str | None = None

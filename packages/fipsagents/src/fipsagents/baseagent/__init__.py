@@ -27,6 +27,7 @@ from fipsagents.baseagent.rules import Rule, RuleLoader
 from fipsagents.baseagent.skills import Skill, SkillLoader
 from fipsagents.baseagent.diagnostics import RoleProbeResult, probe_role_support
 from fipsagents.baseagent.tool_inspector import InspectionFinding, InspectionResult, ToolInspector
+from fipsagents.baseagent.question_tool import QuestionAnswer, QuestionOption
 from fipsagents.baseagent.tools import ToolCall, ToolRegistry, ToolResult, tool
 
 __all__ = [
@@ -78,6 +79,9 @@ __all__ = [
     "InspectionFinding",
     "InspectionResult",
     "ToolInspector",
+    # question_tool
+    "QuestionAnswer",
+    "QuestionOption",
     # tools
     "tool",
     "ToolCall",

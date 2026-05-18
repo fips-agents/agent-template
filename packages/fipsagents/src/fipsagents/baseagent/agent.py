@@ -160,6 +160,10 @@ class BaseAgent(abc.ABC):
         # carries an Authorization header.
         self._inbound_auth_header: str | None = None
 
+        # Question tool: pending question state set by ask_user.
+        self._question_pending: dict[str, Any] | None = None
+        self._question_events: list[StreamEvent] = []
+
         # Tracks whether setup has completed.
         self._setup_done = False
 
@@ -238,6 +242,11 @@ class BaseAgent(abc.ABC):
             logger.info(
                 "Tool inspection enabled (mode=%s)", effective_mode
             )
+
+        # 4c. Question tool (ask_user)
+        from fipsagents.baseagent.question_tool import make_question_tool
+        self.tools.register(make_question_tool(self))
+        logger.info("Registered ask_user question tool")
 
         # 5. Prompts
         prompts_dir = base / self.config.prompts.dir
@@ -735,6 +744,11 @@ class BaseAgent(abc.ABC):
                     while _pending:
                         yield _pending.pop(0)
 
+                    # Drain question events emitted by ask_user.
+                    _q_events = getattr(self, "_question_events", None)
+                    while _q_events:
+                        yield _q_events.pop(0)
+
                     is_err = result.is_error
                     content_str = (
                         result.result
@@ -755,6 +769,18 @@ class BaseAgent(abc.ABC):
                         content=content_str,
                         is_error=is_err,
                     )
+
+                    # If ask_user set a pending question, stamp the
+                    # tool_call_id and stop the loop.
+                    _q_state = getattr(self, "_question_pending", None)
+                    if _q_state is not None:
+                        _q_state["tool_call_id"] = call["id"]
+                        finish_reason = "question"
+                        break
+
+                # If a question is pending, break the outer loop.
+                if getattr(self, "_question_pending", None) is not None:
+                    break
 
                 # Continue the loop: call the model again with the tool
                 # results appended.
