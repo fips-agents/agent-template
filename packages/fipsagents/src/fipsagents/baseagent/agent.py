@@ -29,6 +29,7 @@ from fipsagents.baseagent.config import (
 from fipsagents.baseagent.events import (
     ContentDelta,
     LimitExceeded,
+    LoopBreakEvent,
     PermissionDecisionMade,
     QuestionAsked,
     ReasoningDelta,
@@ -554,6 +555,12 @@ class BaseAgent(abc.ABC):
         _cumulative_completion = 0
         _loop_broken = False
 
+        # Doom-loop guard config — tracks repeated tool calls.
+        _guard_cfg = getattr(getattr(getattr(self, "config", None), "loop", None), "guard", None)
+        _guard_enabled = _guard_cfg is not None and getattr(_guard_cfg, "enabled", True)
+        _guard_window: list[str] = []
+        _loop_guard_broken = False
+
         loop = asyncio.get_running_loop()
         start_time = loop.time()
         last_content_time: float | None = None
@@ -934,6 +941,29 @@ class BaseAgent(abc.ABC):
                         is_error=is_err,
                     )
 
+                    # Doom-loop guard: hash (tool_name, args) and check for repeats.
+                    if _guard_enabled and _guard_cfg is not None:
+                        _call_hash = _doom_loop_hash(fn_name, args, _guard_cfg.canonicalization)
+                        _guard_window.append(_call_hash)
+                        if len(_guard_window) > _guard_cfg.pattern_window:
+                            _guard_window = _guard_window[-_guard_cfg.pattern_window:]
+                        _repeat_count = _guard_window.count(_call_hash)
+                        if _repeat_count >= _guard_cfg.repeat_threshold:
+                            _guard_audit = logging.getLogger("fipsagents.security.audit.loop_guard")
+                            _guard_audit.warning(
+                                "doom_loop_detected tool=%s repeat_count=%d args=%s",
+                                fn_name, _repeat_count, _truncate(repr(args), 200),
+                            )
+                            yield LoopBreakEvent(
+                                tool_name=fn_name,
+                                repeat_count=_repeat_count,
+                                last_args=args,
+                                last_error=content_str if is_err else None,
+                            )
+                            finish_reason = "loop_break"
+                            _loop_guard_broken = True
+                            break
+
                     # If ask_user set a pending question, stamp the
                     # tool_call_id and stop the loop.
                     _q_state = getattr(self, "_question_pending", None)
@@ -944,6 +974,9 @@ class BaseAgent(abc.ABC):
 
                 # If a question is pending, break the outer loop.
                 if getattr(self, "_question_pending", None) is not None:
+                    break
+
+                if _loop_guard_broken:
                     break
 
                 # Continue the loop: call the model again with the tool
@@ -1662,6 +1695,17 @@ def _register_mcp_tool(
 # ---------------------------------------------------------------------------
 # String helpers
 # ---------------------------------------------------------------------------
+
+
+def _doom_loop_hash(tool_name: str, args: dict, mode: str = "structured") -> str:
+    """Compute a canonical hash of a tool call for doom-loop detection."""
+    import hashlib
+    import json as _json
+    if mode == "structured":
+        canonical = _json.dumps({"tool": tool_name, "args": args}, sort_keys=True, default=str)
+    else:
+        canonical = f"{tool_name}:{args}"
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 def _summarise_kwargs(kwargs: dict[str, Any], max_len: int = 120) -> str:

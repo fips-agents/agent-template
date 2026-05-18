@@ -334,11 +334,21 @@ class BackoffConfig(BaseModel):
         return self
 
 
+class LoopGuardConfig(BaseModel):
+    """Doom-loop detector: fires when the same tool call repeats."""
+
+    enabled: bool = True
+    repeat_threshold: int = Field(default=3, ge=2)
+    pattern_window: int = Field(default=5, ge=2)
+    canonicalization: Literal["structured", "string"] = "structured"
+
+
 class LoopConfig(BaseModel):
     """Agent loop execution parameters."""
 
     max_iterations: int = Field(default=100, gt=0)
     backoff: BackoffConfig = Field(default_factory=BackoffConfig)
+    guard: LoopGuardConfig = Field(default_factory=LoopGuardConfig)
 
     @field_validator("max_iterations", mode="before")
     @classmethod

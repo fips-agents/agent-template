@@ -236,6 +236,15 @@ class LimitExceeded:
     actual: float
 
 
+@dataclass
+class LoopBreakEvent:
+    """Emitted when the doom-loop guard detects repeated tool calls."""
+    tool_name: str
+    repeat_count: int
+    last_args: dict[str, Any]
+    last_error: str | None = None
+
+
 # Discriminated union of every event a stream can emit.
 StreamEvent = Union[
     ReasoningDelta,
@@ -255,4 +264,5 @@ StreamEvent = Union[
     QuestionAsked,
     QuestionAnswered,
     LimitExceeded,
+    LoopBreakEvent,
 ]
