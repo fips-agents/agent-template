@@ -741,6 +741,42 @@ class MetricsConfig(BaseModel):
     token_label_mode: Literal["model", "tenant", "session"] = "model"
 
 
+class CompactionConfig(BaseModel):
+    """Message compaction settings."""
+    enabled: bool = False
+    backend: Literal["null", "llm"] | None = None
+    threshold_messages: int = Field(default=50, ge=1)
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _coerce_empty_backend(cls, v: Any) -> Any:
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+
+class PermissionRuleConfig(BaseModel):
+    """A single declarative permission rule."""
+    id: str | None = None
+    tool: str = "*"
+    action: Literal["allow", "deny", "ask"] = "allow"
+    scope: str | None = None
+
+
+class PermissionConfig(BaseModel):
+    """Permission resolution settings."""
+    source: Literal["null", "static"] | None = None
+    default_action: Literal["allow", "deny", "ask"] = "allow"
+    rules: list[PermissionRuleConfig] = Field(default_factory=list)
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _coerce_empty_source(cls, v: Any) -> Any:
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+
 class FeedbackConfig(_PerStoreBackendMixin):
     """Feedback collection settings."""
 
@@ -1031,6 +1067,8 @@ class ServerConfig(BaseModel):
     feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
     files: FilesConfig = Field(default_factory=FilesConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+    permissions: PermissionConfig = Field(default_factory=PermissionConfig)
 
     @field_validator("port", mode="before")
     @classmethod

@@ -30,7 +30,14 @@ class SessionStore(ABC):
     """Pluggable session persistence backend."""
 
     @abstractmethod
-    async def create(self, session_id: str | None = None) -> str:
+    async def create(
+        self,
+        session_id: str | None = None,
+        *,
+        parent_session_id: str | None = None,
+        forked_at_message_id: str | None = None,
+        permission_scope_active: str | None = None,
+    ) -> str:
         """Create a session. Generate ID if not provided."""
 
     @abstractmethod
@@ -80,6 +87,18 @@ class SessionStore(ABC):
     async def delete_before(self, cutoff: datetime) -> int:
         """Delete sessions not updated since *cutoff*. Return count deleted."""
 
+    async def update_state(self, session_id: str, **fields: Any) -> bool:
+        """Update session state fields. Default no-op for backward compat.
+
+        Supported fields: pending_question, open_tool_calls,
+        pending_subagent_calls, permission_scope_active, compaction_state.
+        """
+        return False
+
+    async def get_state(self, session_id: str) -> dict[str, Any]:
+        """Return session state fields. Default returns empty dict."""
+        return {}
+
     async def close(self) -> None:
         """Release resources. Default is a no-op."""
 
@@ -87,7 +106,14 @@ class SessionStore(ABC):
 class NullSessionStore(SessionStore):
     """No persistence -- every request is ephemeral."""
 
-    async def create(self, session_id: str | None = None) -> str:
+    async def create(
+        self,
+        session_id: str | None = None,
+        *,
+        parent_session_id: str | None = None,
+        forked_at_message_id: str | None = None,
+        permission_scope_active: str | None = None,
+    ) -> str:
         sid = session_id or _generate_session_id()
         logger.debug("NullSessionStore: created (ephemeral) %s", sid)
         return sid
@@ -157,17 +183,43 @@ CREATE TABLE IF NOT EXISTS sessions (
                 "ALTER TABLE sessions ADD COLUMN cost_data TEXT NOT NULL DEFAULT '{}'"
             )
             logger.debug("SqliteSessionStore: migrated schema (added cost_data)")
+        # Migrate to add new state columns.
+        new_cols = {
+            "parent_session_id": "TEXT DEFAULT NULL",
+            "forked_at_message_id": "TEXT DEFAULT NULL",
+            "pending_question": "TEXT DEFAULT NULL",
+            "open_tool_calls": "TEXT NOT NULL DEFAULT '[]'",
+            "pending_subagent_calls": "TEXT NOT NULL DEFAULT '[]'",
+            "permission_scope_active": "TEXT DEFAULT NULL",
+            "compaction_state": "TEXT NOT NULL DEFAULT '{}'",
+        }
+        cursor = await db.execute("PRAGMA table_info(sessions)")
+        existing = {row[1] for row in await cursor.fetchall()}
+        for col_name, col_def in new_cols.items():
+            if col_name not in existing:
+                await db.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_def}")
+                logger.debug("SqliteSessionStore: migrated schema (added %s)", col_name)
         await db.commit()
         self._initialized = True
 
-    async def create(self, session_id: str | None = None) -> str:
+    async def create(
+        self,
+        session_id: str | None = None,
+        *,
+        parent_session_id: str | None = None,
+        forked_at_message_id: str | None = None,
+        permission_scope_active: str | None = None,
+    ) -> str:
         sid = session_id or _generate_session_id()
         now = _utc_now_iso()
         db = await self._get_db()
         await db.execute(
-            "INSERT INTO sessions (session_id, messages, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?)",
-            (sid, "[]", now, now),
+            "INSERT INTO sessions "
+            "(session_id, messages, created_at, updated_at, parent_session_id, "
+            "forked_at_message_id, permission_scope_active) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (sid, "[]", now, now, parent_session_id, forked_at_message_id,
+             permission_scope_active),
         )
         await db.commit()
         logger.debug("SqliteSessionStore: created %s", sid)
@@ -273,6 +325,51 @@ CREATE TABLE IF NOT EXISTS sessions (
             logger.debug("SqliteSessionStore: housekeeping removed %d sessions", deleted)
         return deleted
 
+    async def update_state(self, session_id: str, **fields: Any) -> bool:
+        allowed = {"pending_question", "open_tool_calls", "pending_subagent_calls",
+                   "permission_scope_active", "compaction_state"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return False
+        db = await self._get_db()
+        sets = ", ".join(f"{k} = ?" for k in updates)
+        vals = []
+        for k, v in updates.items():
+            if isinstance(v, (dict, list)):
+                vals.append(json.dumps(v))
+            elif v is None:
+                vals.append(None)
+            else:
+                vals.append(str(v))
+        cursor = await db.execute(
+            f"UPDATE sessions SET {sets}, updated_at = ? WHERE session_id = ?",
+            vals + [_utc_now_iso(), session_id],
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+    async def get_state(self, session_id: str) -> dict[str, Any]:
+        state_cols = ["pending_question", "open_tool_calls", "pending_subagent_calls",
+                      "permission_scope_active", "compaction_state",
+                      "parent_session_id", "forked_at_message_id"]
+        db = await self._get_db()
+        cols_str = ", ".join(state_cols)
+        cursor = await db.execute(
+            f"SELECT {cols_str} FROM sessions WHERE session_id = ?",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return {}
+        result = {}
+        for i, col in enumerate(state_cols):
+            val = row[i]
+            if col in ("open_tool_calls", "pending_subagent_calls", "compaction_state") and val:
+                result[col] = json.loads(val)
+            else:
+                result[col] = val
+        return result
+
     async def close(self) -> None:
         if self._db is not None and not self._managed:
             await self._db.close()
@@ -299,6 +396,15 @@ CREATE TABLE IF NOT EXISTS sessions (
         "ALTER TABLE sessions "
         "ADD COLUMN IF NOT EXISTS cost_data JSONB NOT NULL DEFAULT '{}'::jsonb"
     )
+    _ADD_NEW_COLS = [
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS parent_session_id TEXT DEFAULT NULL",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS forked_at_message_id TEXT DEFAULT NULL",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_question TEXT DEFAULT NULL",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS open_tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_subagent_calls JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS permission_scope_active TEXT DEFAULT NULL",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS compaction_state JSONB NOT NULL DEFAULT '{}'::jsonb",
+    ]
 
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -319,18 +425,30 @@ CREATE TABLE IF NOT EXISTS sessions (
         async with pool.acquire() as conn:
             await conn.execute(self._CREATE_TABLE)
             await conn.execute(self._ADD_COST_DATA)
+            for stmt in self._ADD_NEW_COLS:
+                await conn.execute(stmt)
             await conn.execute(self._CREATE_INDEX)
         self._initialized = True
 
-    async def create(self, session_id: str | None = None) -> str:
+    async def create(
+        self,
+        session_id: str | None = None,
+        *,
+        parent_session_id: str | None = None,
+        forked_at_message_id: str | None = None,
+        permission_scope_active: str | None = None,
+    ) -> str:
         sid = session_id or _generate_session_id()
         now = datetime.now(timezone.utc)
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO sessions (session_id, messages, created_at, updated_at) "
-                "VALUES ($1, $2, $3, $4)",
-                sid, json.dumps([]), now, now,
+                "INSERT INTO sessions "
+                "(session_id, messages, created_at, updated_at, parent_session_id, "
+                "forked_at_message_id, permission_scope_active) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                sid, json.dumps([]), now, now, parent_session_id,
+                forked_at_message_id, permission_scope_active,
             )
         logger.debug("PostgresSessionStore: created %s", sid)
         return sid
@@ -441,6 +559,66 @@ CREATE TABLE IF NOT EXISTS sessions (
         if deleted:
             logger.debug("PostgresSessionStore: housekeeping removed %d sessions", deleted)
         return deleted
+
+    async def update_state(self, session_id: str, **fields: Any) -> bool:
+        allowed = {"pending_question", "open_tool_calls", "pending_subagent_calls",
+                   "permission_scope_active", "compaction_state"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return False
+        pool = await self._get_pool()
+        now = datetime.now(timezone.utc)
+        # Build UPDATE statement with SET clauses
+        set_clauses = []
+        params = []
+        param_idx = 1
+        for k, v in updates.items():
+            if k in ("open_tool_calls", "pending_subagent_calls", "compaction_state"):
+                set_clauses.append(f"{k} = ${param_idx}::jsonb")
+                params.append(json.dumps(v))
+            else:
+                set_clauses.append(f"{k} = ${param_idx}")
+                params.append(v)
+            param_idx += 1
+        params.append(now)
+        params.append(session_id)
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                f"UPDATE sessions SET {', '.join(set_clauses)}, "
+                f"updated_at = ${param_idx} WHERE session_id = ${param_idx + 1}",
+                *params,
+            )
+        # asyncpg returns "UPDATE N"
+        updated = not result.endswith("0")
+        if updated:
+            logger.debug("PostgresSessionStore: updated %s state", session_id)
+        return updated
+
+    async def get_state(self, session_id: str) -> dict[str, Any]:
+        state_cols = ["pending_question", "open_tool_calls", "pending_subagent_calls",
+                      "permission_scope_active", "compaction_state",
+                      "parent_session_id", "forked_at_message_id"]
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            cols_str = ", ".join(state_cols)
+            row = await conn.fetchrow(
+                f"SELECT {cols_str} FROM sessions WHERE session_id = $1",
+                session_id,
+            )
+        if row is None:
+            return {}
+        result = {}
+        for col in state_cols:
+            val = row[col]
+            # asyncpg auto-decodes JSONB to Python objects
+            if col in ("open_tool_calls", "pending_subagent_calls", "compaction_state"):
+                if isinstance(val, str):
+                    result[col] = json.loads(val)
+                else:
+                    result[col] = val
+            else:
+                result[col] = val
+        return result
 
     async def close(self) -> None:
         if self._pool is not None:

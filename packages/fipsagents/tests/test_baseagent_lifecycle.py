@@ -378,8 +378,12 @@ class TestConversationState:
         agent.add_message("assistant", "hi there")
 
         assert len(agent.messages) == 2
-        assert agent.messages[0] == {"role": "user", "content": "hello"}
-        assert agent.messages[1] == {"role": "assistant", "content": "hi there"}
+        assert agent.messages[0]["role"] == "user"
+        assert agent.messages[0]["content"] == "hello"
+        assert agent.messages[0]["id"].startswith("msg_")
+        assert agent.messages[1]["role"] == "assistant"
+        assert agent.messages[1]["content"] == "hi there"
+        assert agent.messages[1]["id"].startswith("msg_")
 
     def test_get_messages_returns_copy(self):
         config = _make_config()

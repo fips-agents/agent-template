@@ -178,6 +178,53 @@ class SubagentDelta:
     delta: object  # the original StreamEvent from the subagent
 
 
+@dataclass
+class CompactionStarted:
+    """Emitted when message compaction begins."""
+    session_id: str | None = None
+    message_count: int = 0
+
+
+@dataclass
+class CompactionCompleted:
+    """Emitted when message compaction finishes successfully."""
+    session_id: str | None = None
+    original_count: int = 0
+    compacted_count: int = 0
+
+
+@dataclass
+class CompactionSkipped:
+    """Emitted when compaction is skipped."""
+    reason: str
+    session_id: str | None = None
+
+
+@dataclass
+class PermissionDecisionMade:
+    """Emitted when a permission check resolves for a tool call."""
+    tool: str
+    action: str  # "allow" | "deny" | "ask"
+    rule_id: str | None = None
+    scope: str | None = None
+
+
+@dataclass
+class QuestionAsked:
+    """Reserved for #163 (Question tool). Emitter wiring deferred."""
+    question_id: str
+    question_text: str
+    session_id: str | None = None
+
+
+@dataclass
+class QuestionAnswered:
+    """Reserved for #163 (Question tool). Emitter wiring deferred."""
+    question_id: str
+    answer_text: str
+    session_id: str | None = None
+
+
 # Discriminated union of every event a stream can emit.
 StreamEvent = Union[
     ReasoningDelta,
@@ -190,4 +237,10 @@ StreamEvent = Union[
     SubagentCompleted,
     SubagentFailed,
     SubagentDelta,
+    CompactionStarted,
+    CompactionCompleted,
+    CompactionSkipped,
+    PermissionDecisionMade,
+    QuestionAsked,
+    QuestionAnswered,
 ]

@@ -150,6 +150,8 @@ class OpenAIChatServer:
         self._chunking_tasks: set[asyncio.Task] = set()
         self._metrics_collector: Any = None  # Set in lifespan
         self._budget_enforcer: Any = None  # Set in lifespan
+        self._compactor: Any = None  # Set in lifespan
+        self._permission_source: Any = None  # Set in lifespan
         self._housekeeping_task: asyncio.Task | None = None
         self._sqlite_mgr: Any = None
 
@@ -330,6 +332,26 @@ class OpenAIChatServer:
             session_store=self._session_store,
         )
 
+        # Initialize compactor.
+        from .compactor import create_compactor
+        compaction_cfg = getattr(server_cfg, "compaction", None)
+        if compaction_cfg is not None and compaction_cfg.enabled:
+            self._compactor = create_compactor(compaction_cfg.backend)
+        else:
+            self._compactor = create_compactor(None)
+
+        # Initialize permission source.
+        from .permissions import create_permission_source
+        perm_cfg = getattr(server_cfg, "permissions", None)
+        if perm_cfg is not None:
+            self._permission_source = create_permission_source(
+                perm_cfg.source,
+                rules=[r.model_dump() for r in perm_cfg.rules],
+                default_action=perm_cfg.default_action,
+            )
+        else:
+            self._permission_source = create_permission_source(None)
+
         # Run housekeeping only if at least one *locally persistent*
         # backend is in play.  HTTP-backed stores delegate housekeeping
         # to the platform service.
@@ -365,6 +387,10 @@ class OpenAIChatServer:
             if self._bytes_store is not None:
                 await self._bytes_store.close()
             await self._virus_scanner.close()
+            if self._compactor is not None:
+                await self._compactor.close()
+            if self._permission_source is not None:
+                await self._permission_source.close()
             if self._sqlite_mgr:
                 await self._sqlite_mgr.close_all()
             self._agent = None
@@ -497,9 +523,14 @@ class OpenAIChatServer:
         return JSONResponse(info)
 
     async def _create_session(self, body: CreateSessionRequest = Body(default_factory=CreateSessionRequest)):
-        if self._session_store is None:
+        if self._session_store is None or self._agent is None:
             raise HTTPException(status_code=503, detail="Server not ready")
-        sid = await self._session_store.create(body.session_id)
+        perm_cfg = getattr(self._agent.config.server, "permissions", None)
+        perm_scope = perm_cfg.source if (perm_cfg and perm_cfg.source) else None
+        sid = await self._session_store.create(
+            body.session_id,
+            permission_scope_active=perm_scope,
+        )
         return JSONResponse({"session_id": sid}, status_code=201)
 
     async def _get_session(self, session_id: str):
@@ -1232,12 +1263,34 @@ class OpenAIChatServer:
                 ) from exc
 
         # Session: load prior messages if session_id provided.
+        from fipsagents.baseagent.agent import _stamp_message_id
+
         if req.session_id and self._session_store:
             stored = await self._session_store.load(req.session_id)
             if stored:
+                for msg in stored:
+                    _stamp_message_id(msg)
                 incoming = stored + incoming
             else:
                 logger.info("Session %s not found; will auto-create on save", req.session_id)
+
+        for msg in incoming:
+            _stamp_message_id(msg)
+
+        # Guard: reject if session has a pending question not answered by this request.
+        if req.session_id and self._session_store:
+            session_state = await self._session_store.get_state(req.session_id)
+            pending_q = session_state.get("pending_question")
+            if pending_q and not req.answers_to_question_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "pending_question",
+                        "question_id": pending_q,
+                        "message": "Session has an unanswered question. "
+                                   "Include answers_to_question_id in your request.",
+                    },
+                )
 
         # File attachments: resolve file_ids to extracted text and inject
         # as system messages just before the current user turn so the

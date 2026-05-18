@@ -8,6 +8,8 @@ from fipsagents.baseagent.events import (
     ContentDelta,
     StreamComplete,
     StreamMetrics,
+    SubagentInvoked,
+    SubagentCompleted,
     ToolCallDelta,
     ToolResultEvent,
 )
@@ -289,6 +291,65 @@ class TestTraceCollector:
         await collector.end_request()
 
         assert collected == original
+
+    @pytest.mark.asyncio
+    async def test_subagent_events_pass_through(self, null_store):
+        """Subagent events pass through the collector unchanged."""
+        original = [
+            ContentDelta("Start"),
+            SubagentInvoked(
+                agent_name="helper",
+                task="help me",
+                span_id="span_123",
+                transport="remote",
+                depth=1,
+            ),
+            SubagentCompleted(
+                agent_name="helper",
+                span_id="span_123",
+                content="Done",
+                tokens_used={"prompt": 10, "completion": 20},
+                tool_calls_made=0,
+                cost_usd=0.001,
+            ),
+            ContentDelta("End"),
+            StreamComplete(finish_reason="stop", metrics=_default_metrics()),
+        ]
+        collector = TraceCollector(null_store, trace_id="t-subagent")
+        collector.begin_request()
+
+        collected = [e async for e in collector.observe(_emit_events(*original))]
+        await collector.end_request()
+
+        assert len(collected) == 5
+        assert collected == original
+        assert isinstance(collected[1], SubagentInvoked)
+        assert isinstance(collected[2], SubagentCompleted)
+
+    @pytest.mark.asyncio
+    async def test_foundation_events_pass_through(self, null_store):
+        """Foundation events (#182) pass through the collector unchanged."""
+        from fipsagents.baseagent.events import (
+            CompactionStarted,
+            CompactionSkipped,
+            PermissionDecisionMade,
+        )
+        original = [
+            ContentDelta("Start"),
+            CompactionStarted(session_id="s1", message_count=50),
+            CompactionSkipped(reason="pending_state", session_id="s1"),
+            PermissionDecisionMade(tool="search", action="allow", rule_id="r1"),
+            ContentDelta("End"),
+            StreamComplete(finish_reason="stop", metrics=_default_metrics()),
+        ]
+        collector = TraceCollector(null_store, trace_id="t-foundation")
+        collector.begin_request()
+        collected = [e async for e in collector.observe(_emit_events(*original))]
+        await collector.end_request()
+        assert len(collected) == 6
+        assert isinstance(collected[1], CompactionStarted)
+        assert isinstance(collected[2], CompactionSkipped)
+        assert isinstance(collected[3], PermissionDecisionMade)
 
 
 # ---------------------------------------------------------------------------

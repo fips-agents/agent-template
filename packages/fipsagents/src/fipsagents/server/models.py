@@ -94,6 +94,10 @@ class ChatCompletionRequest(BaseModel):
         description="Session ID for conversation persistence. "
         "If provided but no session exists, one is created automatically.",
     )
+    answers_to_question_id: str | None = Field(
+        default=None,
+        description="ID of a pending question this request answers.",
+    )
     # File attachments (extension field, not part of OpenAI API).
     file_ids: list[str] | None = Field(
         default=None,
