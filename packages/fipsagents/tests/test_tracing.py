@@ -8,6 +8,9 @@ from fipsagents.baseagent.events import (
     ContentDelta,
     StreamComplete,
     StreamMetrics,
+    SubagentInvoked,
+    SubagentCompleted,
+    SubagentFailed,
     ToolCallDelta,
     ToolResultEvent,
 )
@@ -289,6 +292,40 @@ class TestTraceCollector:
         await collector.end_request()
 
         assert collected == original
+
+    @pytest.mark.asyncio
+    async def test_subagent_events_pass_through(self, null_store):
+        """Subagent events pass through the collector unchanged."""
+        original = [
+            ContentDelta("Start"),
+            SubagentInvoked(
+                agent_name="helper",
+                task="help me",
+                span_id="span_123",
+                transport="remote",
+                depth=1,
+            ),
+            SubagentCompleted(
+                agent_name="helper",
+                span_id="span_123",
+                content="Done",
+                tokens_used={"prompt": 10, "completion": 20},
+                tool_calls_made=0,
+                cost_usd=0.001,
+            ),
+            ContentDelta("End"),
+            StreamComplete(finish_reason="stop", metrics=_default_metrics()),
+        ]
+        collector = TraceCollector(null_store, trace_id="t-subagent")
+        collector.begin_request()
+
+        collected = [e async for e in collector.observe(_emit_events(*original))]
+        await collector.end_request()
+
+        assert len(collected) == 5
+        assert collected == original
+        assert isinstance(collected[1], SubagentInvoked)
+        assert isinstance(collected[2], SubagentCompleted)
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,9 @@ from fipsagents.baseagent.events import (  # noqa: E402
     ContentDelta,
     StreamComplete,
     StreamMetrics,
+    SubagentInvoked,
+    SubagentCompleted,
+    SubagentFailed,
     ToolResultEvent,
 )
 from fipsagents.server.metrics import (  # noqa: E402
@@ -219,3 +222,67 @@ class TestTokenLabelModes:
     def test_unknown_mode_rejected(self):
         with pytest.raises(ValueError):
             MetricsCollector(token_label_mode="bogus")
+
+
+class TestSubagentEventPassthrough:
+    """Verify MetricsCollector passes through subagent events unchanged."""
+
+    @pytest.mark.asyncio
+    async def test_subagent_invoked_passes_through(self):
+        collector = MetricsCollector()
+        events = [
+            SubagentInvoked(
+                agent_name="helper",
+                task="help",
+                span_id="s1",
+                transport="remote",
+                depth=1,
+            ),
+            StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+        ]
+        result = []
+        async for e in collector.observe(_emit_events(*events), model="test"):
+            result.append(e)
+        assert len(result) == 2
+        assert isinstance(result[0], SubagentInvoked)
+        assert result[0].agent_name == "helper"
+
+    @pytest.mark.asyncio
+    async def test_subagent_completed_passes_through(self):
+        collector = MetricsCollector()
+        events = [
+            SubagentCompleted(
+                agent_name="helper",
+                span_id="s1",
+                content="done",
+                tokens_used={},
+                tool_calls_made=0,
+                cost_usd=0.0,
+            ),
+            StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+        ]
+        result = []
+        async for e in collector.observe(_emit_events(*events), model="test"):
+            result.append(e)
+        assert len(result) == 2
+        assert isinstance(result[0], SubagentCompleted)
+        assert result[0].content == "done"
+
+    @pytest.mark.asyncio
+    async def test_subagent_failed_passes_through(self):
+        collector = MetricsCollector()
+        events = [
+            SubagentFailed(
+                agent_name="helper",
+                span_id="s1",
+                error_type="Timeout",
+                error_message="timeout",
+            ),
+            StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+        ]
+        result = []
+        async for e in collector.observe(_emit_events(*events), model="test"):
+            result.append(e)
+        assert len(result) == 2
+        assert isinstance(result[0], SubagentFailed)
+        assert result[0].error_type == "Timeout"
