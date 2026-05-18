@@ -105,6 +105,17 @@ _OFF_PLATFORM_PROVIDERS: frozenset[str] = frozenset({"anthropic", "bedrock", "az
 # ---------------------------------------------------------------------------
 
 
+class LimitsConfig(BaseModel):
+    """Per-turn resource limits checked inside astep_stream().
+
+    All fields are optional. None means no limit (backward compatible).
+    """
+
+    max_tokens_per_turn: int | None = None
+    max_iterations_per_turn: int | None = None
+    max_cost_per_turn_usd: float | None = None
+
+
 class LLMConfig(BaseModel):
     """LLM provider and generation settings."""
 
@@ -113,6 +124,7 @@ class LLMConfig(BaseModel):
     name: str = "meta-llama/Llama-3.3-70B-Instruct"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, gt=0)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
 
 
 class McpServerConfig(BaseModel):

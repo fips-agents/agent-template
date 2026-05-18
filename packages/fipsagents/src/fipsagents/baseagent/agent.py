@@ -28,6 +28,7 @@ from fipsagents.baseagent.config import (
 )
 from fipsagents.baseagent.events import (
     ContentDelta,
+    LimitExceeded,
     PermissionDecisionMade,
     QuestionAsked,
     ReasoningDelta,
@@ -545,6 +546,14 @@ class BaseAgent(abc.ABC):
         await self._inject_deferred_memory()
 
         metrics = StreamMetrics()
+
+        # Per-turn limit config — resolved once, checked after each model call.
+        _limits_cfg = getattr(getattr(self, "config", None), "model", None)
+        _limits = getattr(_limits_cfg, "limits", None) if _limits_cfg else None
+        _cumulative_prompt = 0
+        _cumulative_completion = 0
+        _loop_broken = False
+
         loop = asyncio.get_running_loop()
         start_time = loop.time()
         last_content_time: float | None = None
@@ -693,6 +702,50 @@ class BaseAgent(abc.ABC):
                     getattr(usage, "total_tokens", None)
                     or metrics.total_tokens
                 )
+
+            # Accumulate tokens for per-turn limit checks.
+            if usage is not None:
+                _cumulative_prompt += int(getattr(usage, "prompt_tokens", 0) or 0)
+                _cumulative_completion += int(getattr(usage, "completion_tokens", 0) or 0)
+
+            # Per-turn limit checks (before tool dispatch).
+            if _limits is not None:
+                _exceeded = None
+                _cum_total = _cumulative_prompt + _cumulative_completion
+
+                if (
+                    _limits.max_tokens_per_turn is not None
+                    and _cum_total > _limits.max_tokens_per_turn
+                ):
+                    _exceeded = LimitExceeded(
+                        limit_type="tokens",
+                        threshold=float(_limits.max_tokens_per_turn),
+                        actual=float(_cum_total),
+                    )
+                elif (
+                    _limits.max_iterations_per_turn is not None
+                    and metrics.model_calls >= _limits.max_iterations_per_turn
+                ):
+                    _exceeded = LimitExceeded(
+                        limit_type="iterations",
+                        threshold=float(_limits.max_iterations_per_turn),
+                        actual=float(metrics.model_calls),
+                    )
+
+                if _exceeded is not None:
+                    _limit_audit = logging.getLogger(
+                        "fipsagents.security.audit.limits"
+                    )
+                    _limit_audit.warning(
+                        "limit_exceeded type=%s threshold=%s actual=%s",
+                        _exceeded.limit_type,
+                        _exceeded.threshold,
+                        _exceeded.actual,
+                    )
+                    yield _exceeded
+                    finish_reason = "limit"
+                    _loop_broken = True
+                    break
 
             # If the model decided to call tools, execute them and loop.
             if tool_buf:
