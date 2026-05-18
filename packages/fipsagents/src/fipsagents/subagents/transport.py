@@ -108,11 +108,14 @@ class SubagentTransport(ABC):
 def _build_completions_url(base_url: str) -> str:
     """Normalize *base_url* and append the chat completions path.
 
-    Handles two common forms:
-    - ``http://host:8080``      → ``http://host:8080/v1/chat/completions``
-    - ``http://host:8080/v1``   → ``http://host:8080/v1/chat/completions``
+    Handles three common forms:
+    - ``http://host:8080/v1/chat/completions`` → ``http://host:8080/v1/chat/completions``
+    - ``http://host:8080/v1``                  → ``http://host:8080/v1/chat/completions``
+    - ``http://host:8080``                     → ``http://host:8080/v1/chat/completions``
     """
     url = base_url.rstrip("/")
+    if url.endswith("/v1/chat/completions"):
+        return url
     if url.endswith("/v1"):
         return f"{url}/chat/completions"
     return f"{url}/v1/chat/completions"

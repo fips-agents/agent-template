@@ -396,6 +396,8 @@ class TestUrlHandling:
             "http://agent:8080/v1",
             "http://agent:8080/",
             "http://agent:8080/v1/",
+            "http://agent:8080/v1/chat/completions",
+            "http://agent:8080/v1/chat/completions/",
         ],
     )
     async def test_always_posts_to_completions_endpoint(self, base_url: str) -> None:
@@ -418,6 +420,10 @@ class TestUrlHandling:
         assert len(received_url) == 1
         assert received_url[0].endswith("/v1/chat/completions"), (
             f"Expected URL ending in /v1/chat/completions, got: {received_url[0]}"
+        )
+        # Ensure the path is not doubled.
+        assert "/v1/chat/completions/v1/chat/completions" not in received_url[0], (
+            f"URL path was doubled: {received_url[0]}"
         )
 
 
