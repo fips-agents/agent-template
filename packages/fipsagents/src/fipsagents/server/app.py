@@ -1278,19 +1278,71 @@ class OpenAIChatServer:
             _stamp_message_id(msg)
 
         # Guard: reject if session has a pending question not answered by this request.
+        _pending_question_data: dict | None = None
         if req.session_id and self._session_store:
             session_state = await self._session_store.get_state(req.session_id)
             pending_q = session_state.get("pending_question")
-            if pending_q and not req.answers_to_question_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "error": "pending_question",
-                        "question_id": pending_q,
-                        "message": "Session has an unanswered question. "
-                                   "Include answers_to_question_id in your request.",
-                    },
+            if pending_q:
+                import json as _json
+                try:
+                    _pending_question_data = _json.loads(pending_q) if isinstance(pending_q, str) else pending_q
+                except (ValueError, TypeError):
+                    logger.error(
+                        "Corrupted pending_question JSON in session %s: %r",
+                        req.session_id, pending_q,
+                    )
+                    _pending_question_data = {"question_id": str(pending_q)}
+                pq_id = _pending_question_data.get("question_id", pending_q)
+                if not req.answers_to_question_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": "pending_question",
+                            "question_id": pq_id,
+                            "message": "Session has an unanswered question. "
+                                       "Include answers_to_question_id in your request.",
+                        },
+                    )
+
+        # Answer injection: replace the sentinel tool result with the answer.
+        if req.answers_to_question_id and req.session_id and self._session_store:
+            await self._session_store.update_state(
+                req.session_id, pending_question=None,
+            )
+            tool_call_id = (
+                _pending_question_data.get("tool_call_id")
+                if _pending_question_data else None
+            )
+            if not tool_call_id:
+                logger.error(
+                    "pending_question missing tool_call_id for session %s",
+                    req.session_id,
                 )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Session state corrupted: pending_question lacks tool_call_id",
+                )
+            # Extract the answer from the last user message and track
+            # its ID so we drop exactly that message, not a duplicate.
+            answer_content = ""
+            answer_msg_id = None
+            for msg in reversed(incoming):
+                if msg.get("role") == "user":
+                    c = msg.get("content", "")
+                    answer_content = c if isinstance(c, str) else str(c)
+                    answer_msg_id = msg.get("id")
+                    break
+            for msg in incoming:
+                if msg.get("role") == "tool" and msg.get("tool_call_id") == tool_call_id:
+                    msg["content"] = answer_content
+                    break
+            # Drop the answer message by ID — not by content match.
+            if answer_msg_id:
+                incoming = [m for m in incoming if m.get("id") != answer_msg_id]
+            # Reset agent-side pending state.
+            if self._agent is not None:
+                self._agent._question_pending = None
+                self._agent._question_events = []
 
         # File attachments: resolve file_ids to extracted text and inject
         # as system messages just before the current user turn so the
@@ -1387,6 +1439,14 @@ class OpenAIChatServer:
                 await self._persist_cost_data(
                     req.session_id, metrics, model_name,
                 )
+                # Persist pending question state.
+                q_pending = getattr(agent, "_question_pending", None)
+                if q_pending:
+                    import json as _q_json
+                    await self._session_store.update_state(
+                        req.session_id,
+                        pending_question=_q_json.dumps(q_pending),
+                    )
             # Budget post-record: refresh the in-process tenant counter
             # from the new session cost. Logs soft-warning crossings.
             # Run even without a session_id so future tenant-only modes work.
@@ -1459,6 +1519,8 @@ class OpenAIChatServer:
         finish_reason = "stop"
         async with self._agent_lock:
             agent.messages = list(incoming)
+            agent._question_pending = None
+            agent._question_events = []
             events = agent.astep_stream(max_iterations=10, **(overrides or {}))
             if self._metrics_collector is not None:
                 events = self._metrics_collector.observe(
@@ -1524,6 +1586,8 @@ class OpenAIChatServer:
         async with self._agent_lock:
             assert self._agent is not None
             self._agent.messages = list(incoming)
+            self._agent._question_pending = None
+            self._agent._question_events = []
 
             stream_status = "ok"
             captured_metrics: StreamMetrics | None = None
@@ -1577,6 +1641,14 @@ class OpenAIChatServer:
                 await self._persist_cost_data(
                     session_id, captured_metrics, model_name,
                 )
+                # Persist pending question state.
+                q_pending = getattr(self._agent, "_question_pending", None)
+                if q_pending:
+                    import json as _q_json
+                    await self._session_store.update_state(
+                        session_id,
+                        pending_question=_q_json.dumps(q_pending),
+                    )
             # Budget post-record (mirrors the sync path).
             if run_budget_post and self._budget_enforcer is not None:
                 try:

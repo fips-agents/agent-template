@@ -364,6 +364,9 @@ async def stream_events_as_sse(
                             "type": "asked",
                             "question_id": event.question_id,
                             "question_text": event.question_text,
+                            "options": event.options,
+                            "multiple": event.multiple,
+                            "allow_custom": event.allow_custom,
                             "session_id": event.session_id,
                         }
                     },
