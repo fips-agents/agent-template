@@ -228,6 +228,14 @@ class QuestionAnswered:
     session_id: str | None = None
 
 
+@dataclass
+class LimitExceeded:
+    """Emitted when a per-turn resource limit is breached."""
+    limit_type: str  # "tokens" | "iterations" | "cost"
+    threshold: float
+    actual: float
+
+
 # Discriminated union of every event a stream can emit.
 StreamEvent = Union[
     ReasoningDelta,
@@ -246,4 +254,5 @@ StreamEvent = Union[
     PermissionDecisionMade,
     QuestionAsked,
     QuestionAnswered,
+    LimitExceeded,
 ]

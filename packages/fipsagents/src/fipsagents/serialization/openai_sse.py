@@ -32,6 +32,7 @@ from fipsagents.baseagent.events import (
     CompactionSkipped,
     CompactionStarted,
     ContentDelta,
+    LimitExceeded,
     PermissionDecisionMade,
     QuestionAnswered,
     QuestionAsked,
@@ -381,6 +382,20 @@ async def stream_events_as_sse(
                             "type": "answered",
                             "question_id": event.question_id,
                             "answer_text": event.answer_text,
+                        }
+                    },
+                )
+
+            elif isinstance(event, LimitExceeded):
+                yield _sse_chunk(
+                    completion_id,
+                    model_name,
+                    {
+                        "limit": {
+                            "type": "exceeded",
+                            "limit_type": event.limit_type,
+                            "threshold": event.threshold,
+                            "actual": event.actual,
                         }
                     },
                 )
