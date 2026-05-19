@@ -10,9 +10,13 @@ from fipsagents.baseagent.config import (
     CronSourceConfig,
     EventRetryConfig,
     HttpCallbackSinkConfig,
+    KafkaSinkConfig,
+    KafkaSourceConfig,
     LogSinkConfig,
     NullSinkConfig,
     NullSourceConfig,
+    RedisSinkConfig,
+    RedisSourceConfig,
     ServerConfig,
     WebhookSourceConfig,
     load_config_from_string,
@@ -228,3 +232,182 @@ server:
         assert isinstance(cfg.server.event_sources[0], WebhookSourceConfig)
         assert isinstance(cfg.server.event_sources[1], CronSourceConfig)
         assert isinstance(cfg.server.event_sources[2], NullSourceConfig)
+
+    def test_kafka_source_via_yaml(self):
+        yaml_str = """
+server:
+  event_sources:
+    - type: kafka
+      bootstrap_servers: "localhost:9092"
+      topic: my-events
+      consumer_group: my-agent
+"""
+        cfg = load_config_from_string(yaml_str)
+        assert len(cfg.server.event_sources) == 1
+        src = cfg.server.event_sources[0]
+        assert isinstance(src, KafkaSourceConfig)
+        assert src.bootstrap_servers == "localhost:9092"
+        assert src.topic == "my-events"
+        assert src.consumer_group == "my-agent"
+        assert src.auto_offset_reset == "latest"
+        assert src.source_id is None
+
+    def test_kafka_source_with_sasl(self):
+        yaml_str = """
+server:
+  event_sources:
+    - type: kafka
+      bootstrap_servers: "broker:9093"
+      topic: secure-events
+      consumer_group: agent-group
+      security_protocol: SASL_SSL
+      sasl_mechanism: PLAIN
+      sasl_username: user1
+      sasl_password: secret
+"""
+        cfg = load_config_from_string(yaml_str)
+        src = cfg.server.event_sources[0]
+        assert isinstance(src, KafkaSourceConfig)
+        assert src.security_protocol == "SASL_SSL"
+        assert src.sasl_mechanism == "PLAIN"
+        assert src.sasl_username == "user1"
+        assert src.sasl_password == "secret"
+
+    def test_kafka_source_empty_source_id_coercion(self):
+        cfg = KafkaSourceConfig(
+            type="kafka",
+            bootstrap_servers="localhost:9092",
+            topic="t",
+            consumer_group="g",
+            source_id="",
+        )
+        assert cfg.source_id is None
+
+    def test_redis_source_via_yaml(self):
+        yaml_str = """
+server:
+  event_sources:
+    - type: redis
+      url: "redis://localhost:6379"
+      stream: events
+      consumer_group: my-agent
+"""
+        cfg = load_config_from_string(yaml_str)
+        assert len(cfg.server.event_sources) == 1
+        src = cfg.server.event_sources[0]
+        assert isinstance(src, RedisSourceConfig)
+        assert src.url == "redis://localhost:6379"
+        assert src.stream == "events"
+        assert src.consumer_group == "my-agent"
+        assert src.consumer_name == "worker-0"
+        assert src.block_ms == 5000
+
+    def test_redis_source_custom_fields(self):
+        yaml_str = """
+server:
+  event_sources:
+    - type: redis
+      url: "redis://redis:6379"
+      stream: jobs
+      consumer_group: workers
+      consumer_name: worker-3
+      block_ms: 10000
+      session_ttl_hours: 48
+"""
+        cfg = load_config_from_string(yaml_str)
+        src = cfg.server.event_sources[0]
+        assert isinstance(src, RedisSourceConfig)
+        assert src.consumer_name == "worker-3"
+        assert src.block_ms == 10000
+        assert src.session_ttl_hours == 48
+
+    def test_redis_source_empty_source_id_coercion(self):
+        cfg = RedisSourceConfig(
+            type="redis",
+            url="redis://localhost",
+            stream="s",
+            consumer_group="g",
+            source_id="  ",
+        )
+        assert cfg.source_id is None
+
+    def test_kafka_sink_via_yaml(self):
+        yaml_str = """
+server:
+  event_sink:
+    type: kafka
+    bootstrap_servers: "localhost:9092"
+    topic: results
+"""
+        cfg = load_config_from_string(yaml_str)
+        assert isinstance(cfg.server.event_sink, KafkaSinkConfig)
+        assert cfg.server.event_sink.bootstrap_servers == "localhost:9092"
+        assert cfg.server.event_sink.topic == "results"
+        assert cfg.server.event_sink.security_protocol is None
+
+    def test_kafka_sink_with_sasl(self):
+        yaml_str = """
+server:
+  event_sink:
+    type: kafka
+    bootstrap_servers: "broker:9093"
+    topic: output
+    security_protocol: SASL_SSL
+    sasl_mechanism: SCRAM-SHA-256
+    sasl_username: producer
+    sasl_password: pw
+"""
+        cfg = load_config_from_string(yaml_str)
+        sink = cfg.server.event_sink
+        assert isinstance(sink, KafkaSinkConfig)
+        assert sink.security_protocol == "SASL_SSL"
+        assert sink.sasl_mechanism == "SCRAM-SHA-256"
+
+    def test_redis_sink_via_yaml(self):
+        yaml_str = """
+server:
+  event_sink:
+    type: redis
+    url: "redis://localhost:6379"
+    stream: results
+"""
+        cfg = load_config_from_string(yaml_str)
+        assert isinstance(cfg.server.event_sink, RedisSinkConfig)
+        assert cfg.server.event_sink.url == "redis://localhost:6379"
+        assert cfg.server.event_sink.stream == "results"
+        assert cfg.server.event_sink.maxlen is None
+
+    def test_redis_sink_with_maxlen(self):
+        yaml_str = """
+server:
+  event_sink:
+    type: redis
+    url: "redis://localhost"
+    stream: bounded
+    maxlen: 50000
+"""
+        cfg = load_config_from_string(yaml_str)
+        sink = cfg.server.event_sink
+        assert isinstance(sink, RedisSinkConfig)
+        assert sink.maxlen == 50000
+
+    def test_mixed_kafka_redis_sources(self):
+        yaml_str = """
+server:
+  event_sources:
+    - type: kafka
+      bootstrap_servers: "localhost:9092"
+      topic: topic-a
+      consumer_group: grp-a
+    - type: redis
+      url: "redis://localhost"
+      stream: stream-b
+      consumer_group: grp-b
+    - type: webhook
+      path: /hooks/gh
+"""
+        cfg = load_config_from_string(yaml_str)
+        assert len(cfg.server.event_sources) == 3
+        assert isinstance(cfg.server.event_sources[0], KafkaSourceConfig)
+        assert isinstance(cfg.server.event_sources[1], RedisSourceConfig)
+        assert isinstance(cfg.server.event_sources[2], WebhookSourceConfig)

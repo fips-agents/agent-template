@@ -1137,6 +1137,53 @@ class CronSourceConfig(BaseModel):
         return v
 
 
+class KafkaSourceConfig(BaseModel):
+    """Configuration for a Kafka event source."""
+
+    type: Literal["kafka"]
+    source_id: str | None = None
+    bootstrap_servers: str
+    topic: str
+    consumer_group: str
+    auto_offset_reset: str = "latest"
+    security_protocol: str | None = None
+    sasl_mechanism: str | None = None
+    sasl_username: str | None = None
+    sasl_password: str | None = None
+    session_ttl_hours: int = Field(default=168, ge=0)
+    max_events_per_second: float = Field(default=10.0, ge=0)
+    retry: EventRetryConfig = Field(default_factory=EventRetryConfig)
+
+    @field_validator("source_id", mode="before")
+    @classmethod
+    def _coerce_empty(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+
+class RedisSourceConfig(BaseModel):
+    """Configuration for a Redis Streams event source."""
+
+    type: Literal["redis"]
+    source_id: str | None = None
+    url: str
+    stream: str
+    consumer_group: str
+    consumer_name: str = "worker-0"
+    block_ms: int = Field(default=5000, ge=0)
+    session_ttl_hours: int = Field(default=168, ge=0)
+    max_events_per_second: float = Field(default=10.0, ge=0)
+    retry: EventRetryConfig = Field(default_factory=EventRetryConfig)
+
+    @field_validator("source_id", mode="before")
+    @classmethod
+    def _coerce_empty(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+
 class NullSourceConfig(BaseModel):
     """Configuration for a null (no-op) event source."""
 
@@ -1165,13 +1212,46 @@ class HttpCallbackSinkConfig(BaseModel):
     timeout_seconds: float = Field(default=30.0, gt=0)
 
 
+class KafkaSinkConfig(BaseModel):
+    """Configuration for a Kafka event sink."""
+
+    type: Literal["kafka"]
+    bootstrap_servers: str
+    topic: str
+    security_protocol: str | None = None
+    sasl_mechanism: str | None = None
+    sasl_username: str | None = None
+    sasl_password: str | None = None
+
+
+class RedisSinkConfig(BaseModel):
+    """Configuration for a Redis Streams event sink."""
+
+    type: Literal["redis"]
+    url: str
+    stream: str
+    maxlen: int | None = None
+
+
 EventSourceConfig = Annotated[
-    Union[WebhookSourceConfig, CronSourceConfig, NullSourceConfig],
+    Union[
+        WebhookSourceConfig,
+        CronSourceConfig,
+        KafkaSourceConfig,
+        RedisSourceConfig,
+        NullSourceConfig,
+    ],
     Field(discriminator="type"),
 ]
 
 EventSinkConfig = Annotated[
-    Union[NullSinkConfig, LogSinkConfig, HttpCallbackSinkConfig],
+    Union[
+        NullSinkConfig,
+        LogSinkConfig,
+        HttpCallbackSinkConfig,
+        KafkaSinkConfig,
+        RedisSinkConfig,
+    ],
     Field(discriminator="type"),
 ]
 

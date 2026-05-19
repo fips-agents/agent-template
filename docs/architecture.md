@@ -384,7 +384,7 @@ The result is a single trace tree spanning all agents in a workflow, viewable in
 
 ## Event-Triggered Mode
 
-Event-triggered mode allows agents to respond to external events (webhooks, cron schedules) rather than only serving synchronous HTTP requests. Configure one or more `EventSource`s in `agent.yaml` under `server.event_sources`; the server spawns one `asyncio.Task` per source at startup, each polling or listening for events and translating them to chat-completion requests.
+Event-triggered mode allows agents to respond to external events (webhooks, cron schedules, message queues) rather than only serving synchronous HTTP requests. Configure one or more `EventSource`s in `agent.yaml` under `server.event_sources`; the server spawns one `asyncio.Task` per source at startup, each polling or listening for events and translating them to chat-completion requests.
 
 ### Event Sources
 
@@ -392,15 +392,22 @@ Event-triggered mode allows agents to respond to external events (webhooks, cron
 
 **`CronSource`** runs on a POSIX cron schedule (5-field: minute, hour, day-of-month, month, day-of-week). At each trigger time, it invokes the translator with an empty event payload.
 
-Phase 1b event sources (Kafka, Redis Pub/Sub) are deferred behind pip extras for targeted dependency installs.
+**`KafkaSource`** (`fipsagents[kafka]` extra) wraps `aiokafka.AIOKafkaConsumer` for stream processing. Auto-commit is disabled; offset commits happen via the `acknowledge()` callback after successful event processing. Consumer group membership handles replica load balancing. SASL/SSL configuration is supported via `security_protocol`, `sasl_mechanism`, `sasl_username`, and `sasl_password` fields.
+
+**`RedisStreamSource`** (`fipsagents[redis]` extra) wraps `redis.asyncio` with `XREADGROUP` for Redis Streams. Consumer groups are auto-created with `MKSTREAM` on setup. `acknowledge()` calls `XACK` to remove messages from the pending-entries list. Configurable block time controls polling latency.
 
 ### Event Sink
 
-The `EventSink` receives the agent's response after processing. Three implementations ship in Phase 1a:
+The `EventSink` receives the agent's response after processing. Implementations include:
 
+**Phase 1a:**
 - **`NullSink`** — silent discard (useful for cron tasks that persist their own state)
 - **`LogSink`** — structured JSON log line at INFO level
 - **`HttpCallbackSink`** — POST to a configured URL with the response body and optional headers
+
+**Phase 1b:**
+- **`KafkaSink`** (`fipsagents[kafka]` extra) — produces response to a Kafka topic. Lazy initialization, non-blocking errors.
+- **`RedisStreamSink`** (`fipsagents[redis]` extra) — appends response to a Redis Stream via `XADD`. Optional `maxlen` with approximate trimming.
 
 Configure the sink via `server.event_sink` (discriminated union on `type`).
 
@@ -409,6 +416,17 @@ Configure the sink via `server.event_sink` (discriminated union on `type`).
 `default_translate_event(event_data)` is a server-layer function (not a BaseAgent method) that constructs a `ChatCompletionRequest` from the event payload. It lives in `fipsagents.server.events` and is the default translator for both sources. Custom translators can be registered per-source via the `translator` config field.
 
 The server integration reuses `_collect_sync()` — the same code path that handles HTTP requests — so all server-layer features (session lock, compaction, permissions, cost tracking) apply uniformly to event-triggered requests. Event-triggered sessions are keyed with an `event:` prefix (`event:{source_name}:{deterministic_id}`) to namespace them separately from user-initiated sessions.
+
+### Session Keys
+
+Event-triggered sessions are keyed with an `event:` prefix to namespace them separately from user-initiated chat sessions. Default session key derivation:
+
+- **Webhook** — `event:{path}` (e.g., `event:/events/github`)
+- **Cron** — `event:cron:{event_type}`
+- **Kafka** — `event:kafka:{topic}:{consumer_group}`
+- **Redis** — `event:redis:{stream}:{consumer_group}`
+
+Explicit `source_id` in config overrides the default derivation.
 
 ### Retry and Observability
 
