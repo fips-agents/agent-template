@@ -320,6 +320,168 @@ class TestSqliteSessionStore:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Fork & Revert — Sqlite
+# ---------------------------------------------------------------------------
+
+
+async def _populate_session(store, session_id, n_messages=5):
+    """Helper: save N alternating user/assistant messages into a session."""
+    messages = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"msg-{i}"}
+        for i in range(n_messages)
+    ]
+    await store.save(session_id, messages)
+    return messages
+
+
+class TestSqliteForkAndRevert:
+
+    # -- fork ---------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_fork_full_copy(self, sqlite_store):
+        sid = await sqlite_store.create()
+        original = await _populate_session(sqlite_store, sid)
+
+        new_id = await sqlite_store.fork(sid)
+        forked = await sqlite_store.load(new_id)
+        assert forked == original
+
+    @pytest.mark.asyncio
+    async def test_fork_at_middle(self, sqlite_store):
+        sid = await sqlite_store.create()
+        await _populate_session(sqlite_store, sid, n_messages=5)
+
+        new_id = await sqlite_store.fork(sid, from_message_index=3)
+        forked = await sqlite_store.load(new_id)
+        assert len(forked) == 3
+        assert [m["content"] for m in forked] == ["msg-0", "msg-1", "msg-2"]
+
+    @pytest.mark.asyncio
+    async def test_fork_at_zero(self, sqlite_store):
+        sid = await sqlite_store.create()
+        await _populate_session(sqlite_store, sid)
+
+        new_id = await sqlite_store.fork(sid, from_message_index=0)
+        forked = await sqlite_store.load(new_id)
+        assert forked == []
+
+    @pytest.mark.asyncio
+    async def test_fork_preserves_lineage(self, sqlite_store):
+        sid = await sqlite_store.create()
+        await _populate_session(sqlite_store, sid)
+
+        new_id = await sqlite_store.fork(sid)
+        state = await sqlite_store.get_state(new_id)
+        assert state["parent_session_id"] == sid
+
+    @pytest.mark.asyncio
+    async def test_fork_nonexistent_session_raises(self, sqlite_store):
+        with pytest.raises(ValueError, match="not found"):
+            await sqlite_store.fork("no-such-session")
+
+    @pytest.mark.asyncio
+    async def test_fork_invalid_index_raises(self, sqlite_store):
+        sid = await sqlite_store.create()
+        await _populate_session(sqlite_store, sid, n_messages=3)
+
+        with pytest.raises(ValueError, match="out of range"):
+            await sqlite_store.fork(sid, from_message_index=10)
+
+    @pytest.mark.asyncio
+    async def test_fork_negative_index_raises(self, sqlite_store):
+        sid = await sqlite_store.create()
+        await _populate_session(sqlite_store, sid)
+
+        with pytest.raises(ValueError, match="out of range"):
+            await sqlite_store.fork(sid, from_message_index=-1)
+
+    @pytest.mark.asyncio
+    async def test_fork_messages_are_independent(self, sqlite_store):
+        sid = await sqlite_store.create()
+        original = await _populate_session(sqlite_store, sid)
+
+        new_id = await sqlite_store.fork(sid)
+
+        # Append to forked session
+        forked = await sqlite_store.load(new_id)
+        forked.append({"role": "user", "content": "only-in-fork"})
+        await sqlite_store.save(new_id, forked)
+
+        # Parent should be unchanged
+        parent_msgs = await sqlite_store.load(sid)
+        assert parent_msgs == original
+
+    # -- revert -------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_revert_to_middle(self, sqlite_store):
+        sid = await sqlite_store.create()
+        await _populate_session(sqlite_store, sid, n_messages=5)
+
+        await sqlite_store.revert(sid, to_message_index=2)
+        msgs = await sqlite_store.load(sid)
+        assert len(msgs) == 2
+        assert [m["content"] for m in msgs] == ["msg-0", "msg-1"]
+
+    @pytest.mark.asyncio
+    async def test_revert_to_zero(self, sqlite_store):
+        sid = await sqlite_store.create()
+        await _populate_session(sqlite_store, sid)
+
+        await sqlite_store.revert(sid, to_message_index=0)
+        msgs = await sqlite_store.load(sid)
+        assert msgs == []
+
+    @pytest.mark.asyncio
+    async def test_revert_to_end(self, sqlite_store):
+        sid = await sqlite_store.create()
+        original = await _populate_session(sqlite_store, sid, n_messages=5)
+
+        await sqlite_store.revert(sid, to_message_index=5)
+        msgs = await sqlite_store.load(sid)
+        assert msgs == original
+
+    @pytest.mark.asyncio
+    async def test_revert_nonexistent_session_raises(self, sqlite_store):
+        with pytest.raises(ValueError, match="not found"):
+            await sqlite_store.revert("no-such-session", to_message_index=0)
+
+    @pytest.mark.asyncio
+    async def test_revert_invalid_index_raises(self, sqlite_store):
+        sid = await sqlite_store.create()
+        await _populate_session(sqlite_store, sid, n_messages=3)
+
+        with pytest.raises(ValueError, match="out of range"):
+            await sqlite_store.revert(sid, to_message_index=10)
+
+
+# ---------------------------------------------------------------------------
+# Fork & Revert — NullSessionStore
+# ---------------------------------------------------------------------------
+
+
+class TestNullStoreForkAndRevert:
+
+    @pytest.mark.asyncio
+    async def test_null_store_fork_raises(self):
+        store = NullSessionStore()
+        with pytest.raises(NotImplementedError, match="NullSessionStore"):
+            await store.fork("any-session")
+
+    @pytest.mark.asyncio
+    async def test_null_store_revert_raises(self):
+        store = NullSessionStore()
+        with pytest.raises(NotImplementedError, match="NullSessionStore"):
+            await store.revert("any-session", to_message_index=0)
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+
 class TestCreateSessionStore:
     def test_null(self):
         store = create_session_store(None)
