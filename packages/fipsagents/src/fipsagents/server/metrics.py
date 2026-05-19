@@ -11,6 +11,9 @@ import time
 from typing import Any, AsyncIterator
 
 from fipsagents.baseagent.events import (
+    EventFailed,
+    EventProcessed,
+    EventReceived,
     StreamComplete,
     StreamEvent,
     ToolResultEvent,
@@ -98,6 +101,24 @@ class MetricsCollector:
             labelnames=self._token_labelnames,
             registry=self._registry,
         )
+        self.events_received_total = Counter(
+            "agent_events_received_total",
+            "Total inbound events received",
+            labelnames=["source", "event_type"],
+            registry=self._registry,
+        )
+        self.events_processed_total = Counter(
+            "agent_events_processed_total",
+            "Total events processed",
+            labelnames=["source", "event_type", "status"],
+            registry=self._registry,
+        )
+        self.event_processing_duration = Histogram(
+            "agent_event_processing_duration_seconds",
+            "Event processing duration",
+            labelnames=["source", "event_type"],
+            registry=self._registry,
+        )
 
     def _token_labels(
         self,
@@ -137,6 +158,27 @@ class MetricsCollector:
                 self.tool_calls_total.labels(
                     tool_name=event.name,
                     status=status,
+                ).inc()
+            elif isinstance(event, EventReceived):
+                self.events_received_total.labels(
+                    source=event.source,
+                    event_type=event.event_type,
+                ).inc()
+            elif isinstance(event, EventProcessed):
+                self.events_processed_total.labels(
+                    source=event.source,
+                    event_type="",
+                    status="ok",
+                ).inc()
+                self.event_processing_duration.labels(
+                    source=event.source,
+                    event_type="",
+                ).observe(event.duration_ms / 1000.0)
+            elif isinstance(event, EventFailed):
+                self.events_processed_total.labels(
+                    source=event.source,
+                    event_type="",
+                    status="failed",
                 ).inc()
             elif isinstance(event, StreamComplete):
                 m = event.metrics

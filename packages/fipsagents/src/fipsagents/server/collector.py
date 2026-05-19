@@ -15,6 +15,7 @@ from typing import Any, AsyncIterator
 
 from fipsagents.baseagent.events import (
     ContentDelta,
+    EventReceived,
     ReasoningDelta,
     StreamComplete,
     StreamEvent,
@@ -214,6 +215,12 @@ class TraceCollector:
 
         elif isinstance(event, ToolResultEvent):
             self._handle_tool_result(event)
+
+        elif isinstance(event, EventReceived):
+            if self._request_span:
+                self._request_span.attributes["event_id"] = event.event_id
+                self._request_span.attributes["event_type"] = event.event_type
+                self._request_span.attributes["event_source"] = event.source
 
         elif isinstance(event, StreamComplete):
             self._handle_stream_complete(event)

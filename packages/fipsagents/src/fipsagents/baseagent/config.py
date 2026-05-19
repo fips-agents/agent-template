@@ -1085,6 +1085,96 @@ class BudgetConfig(BaseModel):
         )
 
 
+class EventRetryConfig(BaseModel):
+    """Retry parameters for event processing."""
+
+    max_attempts: int = Field(default=3, ge=1)
+    backoff_base: float = Field(default=2.0, gt=0)
+    backoff_max: float = Field(default=60.0, gt=0)
+    retriable_errors: list[str] = Field(
+        default_factory=lambda: ["TimeoutError"],
+    )
+
+
+class WebhookSourceConfig(BaseModel):
+    """Configuration for a webhook event source."""
+
+    type: Literal["webhook"]
+    source_id: str | None = None
+    path: str
+    secret: str | None = None
+    event_type_header: str = "X-GitHub-Event"
+    signature_header: str = "X-Hub-Signature-256"
+    session_ttl_hours: int = Field(default=168, ge=0)
+    max_events_per_second: float = Field(default=10.0, ge=0)
+    retry: EventRetryConfig = Field(default_factory=EventRetryConfig)
+
+    @field_validator("source_id", "secret", mode="before")
+    @classmethod
+    def _coerce_empty(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+
+class CronSourceConfig(BaseModel):
+    """Configuration for a cron event source."""
+
+    type: Literal["cron"]
+    source_id: str | None = None
+    schedule: str
+    event_type: str
+    session_ttl_hours: int = Field(default=168, ge=0)
+    max_events_per_second: float = Field(default=1.0, ge=0)
+    retry: EventRetryConfig = Field(default_factory=EventRetryConfig)
+
+    @field_validator("source_id", mode="before")
+    @classmethod
+    def _coerce_empty(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+
+class NullSourceConfig(BaseModel):
+    """Configuration for a null (no-op) event source."""
+
+    type: Literal["null"]
+    source_id: str = "null"
+
+
+class NullSinkConfig(BaseModel):
+    """Configuration for a null (no-op) event sink."""
+
+    type: Literal["null"]
+
+
+class LogSinkConfig(BaseModel):
+    """Configuration for a log event sink."""
+
+    type: Literal["log"]
+    level: str = "INFO"
+
+
+class HttpCallbackSinkConfig(BaseModel):
+    """Configuration for an HTTP callback event sink."""
+
+    type: Literal["http_callback"]
+    url: str
+    timeout_seconds: float = Field(default=30.0, gt=0)
+
+
+EventSourceConfig = Annotated[
+    Union[WebhookSourceConfig, CronSourceConfig, NullSourceConfig],
+    Field(discriminator="type"),
+]
+
+EventSinkConfig = Annotated[
+    Union[NullSinkConfig, LogSinkConfig, HttpCallbackSinkConfig],
+    Field(discriminator="type"),
+]
+
+
 class ServerConfig(BaseModel):
     """HTTP server binding and feature configuration."""
 
@@ -1098,6 +1188,8 @@ class ServerConfig(BaseModel):
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
+    event_sources: list[EventSourceConfig] = Field(default_factory=list)
+    event_sink: EventSinkConfig | None = None
 
     @field_validator("port", mode="before")
     @classmethod

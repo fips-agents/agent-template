@@ -245,6 +245,31 @@ class LoopBreakEvent:
     last_error: str | None = None
 
 
+@dataclass
+class EventReceived:
+    """Emitted when an inbound event arrives from a source."""
+    event_id: str
+    event_type: str
+    source: str
+
+
+@dataclass
+class EventProcessed:
+    """Emitted when event processing completes successfully."""
+    event_id: str
+    source: str
+    duration_ms: float
+
+
+@dataclass
+class EventFailed:
+    """Emitted when event processing fails."""
+    event_id: str
+    source: str
+    error: str
+    retriable: bool
+
+
 # Discriminated union of every event a stream can emit.
 StreamEvent = Union[
     ReasoningDelta,
@@ -265,4 +290,7 @@ StreamEvent = Union[
     QuestionAnswered,
     LimitExceeded,
     LoopBreakEvent,
+    EventReceived,
+    EventProcessed,
+    EventFailed,
 ]
