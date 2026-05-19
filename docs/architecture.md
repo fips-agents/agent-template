@@ -1053,3 +1053,62 @@ server:
 ```
 
 At `standard` fidelity, only `ToolResultEvent` is replayable. Reducers that need `ContentDelta` require `full` fidelity.
+
+## Agent Identity (Kagenti)
+
+### Overview
+
+fipsagents delegates agent identity to [kagenti](https://github.com/kagenti/kagenti) rather than implementing its own auth layer. kagenti provides zero-trust workload identity via SPIFFE/SPIRE and OAuth2/OIDC via Keycloak. This is an integration point, not a built-in feature -- agents opt in via Kubernetes labels and Helm chart annotations.
+
+### How It Works
+
+**Workload Identity.** The kagenti-operator watches for pods labeled `kagenti.io/type: agent`. When it finds one, it auto-registers the agent with Keycloak using the workload's SPIFFE ID (`spiffe://{trust-domain}/ns/{namespace}/sa/{service-account}`).
+
+**Credential Injection.** The operator creates a Kubernetes Secret containing `client-id` and `client-secret`, mounted into the agent pod at `/secrets/`.
+
+**Token Acquisition.** The agent reads credentials from `/secrets/client-id.txt` and `/secrets/client-secret.txt`, then uses the standard OAuth2 Client Credentials Grant to obtain bearer tokens.
+
+**Token Exchange (Agent-to-Tool).** For delegated access, agents use RFC 8693 token exchange -- presenting their SPIFFE JWT SVID to exchange a user token for a tool-scoped token. This is the mechanism behind `identity: service_account` on subagent configs (see [Subagent-as-tool](#subagent-as-tool)).
+
+### Helm Chart Integration
+
+Add the kagenti label to the agent's pod template so the operator discovers it:
+
+```yaml
+# chart/templates/deployment.yaml
+metadata:
+  labels:
+    kagenti.io/type: agent
+```
+
+Mount the operator-created credentials secret:
+
+```yaml
+volumeMounts:
+  - name: kagenti-creds
+    mountPath: /secrets
+    readOnly: true
+volumes:
+  - name: kagenti-creds
+    secret:
+      secretName: {{ .Release.Name }}-kagenti-client
+```
+
+### agent.yaml (Future)
+
+A future version may add identity config to `agent.yaml`:
+
+```yaml
+agent:
+  identity:
+    provider: kagenti
+    scopes: ["api.read", "api.write"]
+```
+
+This is not implemented yet -- identity is currently purely infrastructure-level (labels + secrets). The framework has no runtime awareness of kagenti beyond reading credentials from the mounted path.
+
+### Non-goals
+
+- fipsagents does not implement its own OAuth2 client, token refresh, or credential storage
+- fipsagents does not manage Keycloak or SPIFFE -- those are kagenti's responsibility
+- mTLS between agents is handled by the service mesh (Istio/SPIRE), not by the agent framework
