@@ -718,18 +718,15 @@ class BaseAgent(abc.ABC):
             # providers send these with streaming.
             usage = getattr(chunk, "usage", None)
             if usage is not None:
-                metrics.prompt_tokens = (
-                    getattr(usage, "prompt_tokens", None)
-                    or metrics.prompt_tokens
-                )
-                metrics.completion_tokens = (
-                    getattr(usage, "completion_tokens", None)
-                    or metrics.completion_tokens
-                )
-                metrics.total_tokens = (
-                    getattr(usage, "total_tokens", None)
-                    or metrics.total_tokens
-                )
+                pt = getattr(usage, "prompt_tokens", None)
+                ct = getattr(usage, "completion_tokens", None)
+                tt = getattr(usage, "total_tokens", None)
+                if pt is not None:
+                    metrics.prompt_tokens = pt
+                if ct is not None:
+                    metrics.completion_tokens = ct
+                if tt is not None:
+                    metrics.total_tokens = tt
 
             # Accumulate tokens for per-turn limit checks.
             if usage is not None:

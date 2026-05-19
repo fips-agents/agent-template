@@ -277,9 +277,11 @@ def _sync_response(
             }
         ],
         "usage": {
-            "prompt_tokens": m.prompt_tokens,
-            "completion_tokens": m.completion_tokens,
-            "total_tokens": m.total_tokens,
+            "prompt_tokens": m.prompt_tokens or 0,
+            "completion_tokens": m.completion_tokens or 0,
+            "total_tokens": m.total_tokens or (
+                (m.prompt_tokens or 0) + (m.completion_tokens or 0)
+            ),
         },
         "stream_metrics": {
             "time_to_first_reasoning": m.time_to_first_reasoning,
