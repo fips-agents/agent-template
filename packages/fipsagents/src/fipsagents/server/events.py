@@ -21,6 +21,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from fipsagents.baseagent.config import EventRetryConfig as RetryConfig  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,12 +50,6 @@ class OutboundEvent(BaseModel):
     source: str
     timestamp: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-
-# Canonical definition is EventRetryConfig in fipsagents.baseagent.config.
-# Re-exported here as RetryConfig for convenience.
-from fipsagents.baseagent.config import EventRetryConfig as RetryConfig
 
 
 

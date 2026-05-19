@@ -1712,7 +1712,9 @@ class OpenAIChatServer:
 
         try:
             async for event in source.consume():
-                now_fn = lambda: datetime.now(tz=UTC)
+                def _now() -> datetime:
+                    return datetime.now(tz=UTC)
+
                 for attempt in range(retry_cfg.max_attempts):
                     try:
                         content = await self._process_event(event, source)
@@ -1721,7 +1723,7 @@ class OpenAIChatServer:
                             event_type="response",
                             payload={"content": content},
                             source=event.source,
-                            timestamp=now_fn(),
+                            timestamp=_now(),
                         ))
                         await source.acknowledge(event.event_id)
                         break
@@ -1751,7 +1753,7 @@ class OpenAIChatServer:
                             event_type="processing_failed",
                             payload={"error": traceback.format_exc()},
                             source=event.source,
-                            timestamp=now_fn(),
+                            timestamp=_now(),
                         ))
                         await source.acknowledge(event.event_id)
                         break

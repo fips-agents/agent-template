@@ -15,8 +15,6 @@ from fipsagents.baseagent.events import (
     StreamEvent,
 )
 from fipsagents.server.events import (
-    EventSink,
-    EventSource,
     InboundEvent,
     OutboundEvent,
     RetryConfig,

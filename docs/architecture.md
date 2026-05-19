@@ -364,6 +364,40 @@ Multi-agent deployments (workflow graphs with `RemoteNode`) propagate trace cont
 
 The result is a single trace tree spanning all agents in a workflow, viewable in any W3C-compliant trace backend (Jaeger, Tempo, the OTEL collector).
 
+## Event-Triggered Mode
+
+Event-triggered mode allows agents to respond to external events (webhooks, cron schedules) rather than only serving synchronous HTTP requests. Configure one or more `EventSource`s in `agent.yaml` under `server.event_sources`; the server spawns one `asyncio.Task` per source at startup, each polling or listening for events and translating them to chat-completion requests.
+
+### Event Sources
+
+**`HttpWebhookSource`** listens on `POST /v1/events` with HMAC-SHA256 signature validation (`X-Signature-256` header). The caller POSTs JSON; the source validates the signature, extracts the event payload, and passes it to the configured translator function.
+
+**`CronSource`** runs on a POSIX cron schedule (5-field: minute, hour, day-of-month, month, day-of-week). At each trigger time, it invokes the translator with an empty event payload.
+
+Phase 1b event sources (Kafka, Redis Pub/Sub) are deferred behind pip extras for targeted dependency installs.
+
+### Event Sink
+
+The `EventSink` receives the agent's response after processing. Three implementations ship in Phase 1a:
+
+- **`NullSink`** — silent discard (useful for cron tasks that persist their own state)
+- **`LogSink`** — structured JSON log line at INFO level
+- **`HttpCallbackSink`** — POST to a configured URL with the response body and optional headers
+
+Configure the sink via `server.event_sink` (discriminated union on `type`).
+
+### Translation and Integration
+
+`default_translate_event(event_data)` is a server-layer function (not a BaseAgent method) that constructs a `ChatCompletionRequest` from the event payload. It lives in `fipsagents.server.events` and is the default translator for both sources. Custom translators can be registered per-source via the `translator` config field.
+
+The server integration reuses `_collect_sync()` — the same code path that handles HTTP requests — so all server-layer features (session lock, compaction, permissions, cost tracking) apply uniformly to event-triggered requests. Event-triggered sessions are keyed with an `event:` prefix (`event:{source_name}:{deterministic_id}`) to namespace them separately from user-initiated sessions.
+
+### Retry and Observability
+
+Transient failures (network errors, 5xx from the sink) retry with exponential backoff up to a configurable max attempts. Permanent failures (4xx, validation errors) are logged and dropped. Three `StreamEvent` variants surface event lifecycle: `EventReceived`, `EventProcessed`, `EventFailed`. Three Prometheus metrics track event volume, processing latency, and error rates.
+
+Full design in `planning/event-triggered-design.md`.
+
 ## Safety & Resilience
 
 Three features guard against runaway behavior in long-running or autonomous agent sessions. All are opt-in via `agent.yaml` and degrade to no-ops when unconfigured.
@@ -913,3 +947,13 @@ This is the least disruptive path that addresses the multi-agent rough edges wit
 - **Auth boundary between agents writing shared storage.** Needed if multi-tenant is in scope; otherwise punt and revisit when the second tenant arrives.
 - **Cross-agent session continuity** (a user's conversation following them across agents). Protocol question, not a storage question.
 - **Migrating traces to OTEL.** Already partially solved by `OTELTraceStore`; the platform's `TraceStore` can adopt it later without a topology change.
+
+## Session Fork and Revert
+
+`SessionStore.fork(session_id, from_message_index)` enables branch-point experimentation: copy messages `[0:from_message_index]` into a new session with `parent_session_id` lineage tracking, preserving the original session unchanged. `SessionStore.revert(session_id, to_message_index)` truncates in place, discarding messages after the specified index.
+
+REST endpoints: `POST /v1/sessions/{id}/fork` (returns the new session ID, 201 Created), `POST /v1/sessions/{id}/revert` (204 No Content). Both are server-layer operations — BaseAgent has no concept of forking or reverting.
+
+`NullSessionStore` raises `NotImplementedError` for both methods (sessions are ephemeral, no state to fork from). SQLite and Postgres implementations copy the messages list and metadata while resetting fork-specific fields (`parent_session_id`, `forked_at_message_id`, `created_at`, `updated_at`). Cost data is not inherited — the fork starts with fresh counters.
+
+Full design in `planning/session-state-compaction-design.md`.
