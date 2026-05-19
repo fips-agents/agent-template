@@ -246,6 +246,23 @@ class LoopBreakEvent:
 
 
 @dataclass
+class StateCheckpointed:
+    """Emitted when agent state is checkpointed to persistent storage."""
+    session_id: str
+    checkpoint_at: str
+    state_type: str
+
+
+@dataclass
+class StateRecovered:
+    """Emitted when agent state is recovered from checkpoint + replay."""
+    session_id: str
+    checkpoint_at: str
+    events_replayed: int
+    state_type: str
+
+
+@dataclass
 class EventReceived:
     """Emitted when an inbound event arrives from a source."""
     event_id: str
@@ -290,6 +307,8 @@ StreamEvent = Union[
     QuestionAnswered,
     LimitExceeded,
     LoopBreakEvent,
+    StateCheckpointed,
+    StateRecovered,
     EventReceived,
     EventProcessed,
     EventFailed,

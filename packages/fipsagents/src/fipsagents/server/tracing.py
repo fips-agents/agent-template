@@ -181,6 +181,20 @@ class TraceStore(ABC):
     async def delete_before(self, cutoff: datetime) -> int:
         """Remove old traces. Return count deleted."""
 
+    async def list_traces_for_session(
+        self,
+        session_id: str,
+        *,
+        after_trace_id: str | None = None,
+        limit: int = 100,
+    ) -> list[Trace]:
+        """Return full traces for a session, optionally after a given trace.
+
+        Used by state recovery to replay events since the last checkpoint.
+        Default returns empty list (backward compatible).
+        """
+        return []
+
     async def close(self) -> None:
         """Release resources. Default is a no-op."""
 
@@ -235,6 +249,10 @@ CREATE TABLE IF NOT EXISTS traces (
         "CREATE INDEX IF NOT EXISTS idx_traces_started "
         "ON traces (started_at)"
     )
+    _CREATE_SESSION_INDEX = (
+        "CREATE INDEX IF NOT EXISTS idx_traces_session "
+        "ON traces (session_id, started_at)"
+    )
 
     def __init__(self, db_path: str = "./agent.db", *, connection: Any = None) -> None:
         self._db_path = db_path
@@ -255,6 +273,7 @@ CREATE TABLE IF NOT EXISTS traces (
         db = self._db
         await db.execute(self._CREATE_TABLE)
         await db.execute(self._CREATE_INDEX)
+        await db.execute(self._CREATE_SESSION_INDEX)
         await db.commit()
         self._initialized = True
 
@@ -319,6 +338,50 @@ CREATE TABLE IF NOT EXISTS traces (
             summaries.append(_summary_from_dict(json.loads(summary_json)))
         return summaries
 
+    async def list_traces_for_session(
+        self,
+        session_id: str,
+        *,
+        after_trace_id: str | None = None,
+        limit: int = 100,
+    ) -> list[Trace]:
+        db = await self._get_db()
+        if after_trace_id:
+            cursor = await db.execute(
+                "SELECT started_at FROM traces WHERE trace_id = ?",
+                (after_trace_id,),
+            )
+            ref = await cursor.fetchone()
+            if ref is None:
+                return []
+            cursor = await db.execute(
+                "SELECT trace_id, started_at, ended_at, model, session_id, "
+                "status, spans FROM traces "
+                "WHERE session_id = ? AND started_at > ? "
+                "ORDER BY started_at ASC LIMIT ?",
+                (session_id, ref[0], limit),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT trace_id, started_at, ended_at, model, session_id, "
+                "status, spans FROM traces "
+                "WHERE session_id = ? ORDER BY started_at ASC LIMIT ?",
+                (session_id, limit),
+            )
+        rows = await cursor.fetchall()
+        traces: list[Trace] = []
+        for row in rows:
+            traces.append(Trace(
+                trace_id=row[0],
+                started_at=row[1],
+                ended_at=row[2],
+                model=row[3],
+                session_id=row[4],
+                status=row[5],
+                spans=_spans_from_dicts(json.loads(row[6])),
+            ))
+        return traces
+
     async def delete_before(self, cutoff: datetime) -> int:
         db = await self._get_db()
         cursor = await db.execute(
@@ -361,6 +424,10 @@ CREATE TABLE IF NOT EXISTS traces (
         "CREATE INDEX IF NOT EXISTS idx_traces_started "
         "ON traces (started_at)"
     )
+    _CREATE_SESSION_INDEX = (
+        "CREATE INDEX IF NOT EXISTS idx_traces_session "
+        "ON traces (session_id, started_at)"
+    )
 
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -379,6 +446,7 @@ CREATE TABLE IF NOT EXISTS traces (
         async with self._pool.acquire() as conn:
             await conn.execute(self._CREATE_TABLE)
             await conn.execute(self._CREATE_INDEX)
+            await conn.execute(self._CREATE_SESSION_INDEX)
         self._initialized = True
 
     async def save_trace(self, trace: Trace) -> None:
@@ -473,6 +541,62 @@ CREATE TABLE IF NOT EXISTS traces (
                 summary_data = json.loads(summary_data)
             summaries.append(_summary_from_dict(summary_data))
         return summaries
+
+    async def list_traces_for_session(
+        self,
+        session_id: str,
+        *,
+        after_trace_id: str | None = None,
+        limit: int = 100,
+    ) -> list[Trace]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            if after_trace_id:
+                ref = await conn.fetchrow(
+                    "SELECT started_at FROM traces WHERE trace_id = $1",
+                    after_trace_id,
+                )
+                if ref is None:
+                    return []
+                rows = await conn.fetch(
+                    "SELECT trace_id, started_at, ended_at, model, "
+                    "session_id, status, spans FROM traces "
+                    "WHERE session_id = $1 AND started_at > $2 "
+                    "ORDER BY started_at ASC LIMIT $3",
+                    session_id, ref["started_at"], limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT trace_id, started_at, ended_at, model, "
+                    "session_id, status, spans FROM traces "
+                    "WHERE session_id = $1 "
+                    "ORDER BY started_at ASC LIMIT $2",
+                    session_id, limit,
+                )
+        traces: list[Trace] = []
+        for row in rows:
+            spans_data = row["spans"]
+            if isinstance(spans_data, str):
+                spans_data = json.loads(spans_data)
+            traces.append(Trace(
+                trace_id=row["trace_id"],
+                started_at=(
+                    row["started_at"].isoformat()
+                    if hasattr(row["started_at"], "isoformat")
+                    else row["started_at"]
+                ),
+                ended_at=(
+                    row["ended_at"].isoformat()
+                    if row["ended_at"]
+                    and hasattr(row["ended_at"], "isoformat")
+                    else row["ended_at"]
+                ),
+                model=row["model"],
+                session_id=row["session_id"],
+                status=row["status"],
+                spans=_spans_from_dicts(spans_data),
+            ))
+        return traces
 
     async def delete_before(self, cutoff: datetime) -> int:
         pool = await self._get_pool()

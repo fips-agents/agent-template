@@ -216,6 +216,7 @@ CREATE TABLE IF NOT EXISTS sessions (
             "pending_subagent_calls": "TEXT NOT NULL DEFAULT '[]'",
             "permission_scope_active": "TEXT DEFAULT NULL",
             "compaction_state": "TEXT NOT NULL DEFAULT '{}'",
+            "checkpoint_state": "TEXT DEFAULT NULL",
         }
         cursor = await db.execute("PRAGMA table_info(sessions)")
         existing = {row[1] for row in await cursor.fetchall()}
@@ -351,7 +352,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 
     async def update_state(self, session_id: str, **fields: Any) -> bool:
         allowed = {"pending_question", "open_tool_calls", "pending_subagent_calls",
-                   "permission_scope_active", "compaction_state"}
+                   "permission_scope_active", "compaction_state",
+                   "checkpoint_state"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return False
@@ -375,6 +377,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     async def get_state(self, session_id: str) -> dict[str, Any]:
         state_cols = ["pending_question", "open_tool_calls", "pending_subagent_calls",
                       "permission_scope_active", "compaction_state",
+                      "checkpoint_state",
                       "parent_session_id", "forked_at_message_id"]
         db = await self._get_db()
         cols_str = ", ".join(state_cols)
@@ -472,6 +475,7 @@ CREATE TABLE IF NOT EXISTS sessions (
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_subagent_calls JSONB NOT NULL DEFAULT '[]'::jsonb",
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS permission_scope_active TEXT DEFAULT NULL",
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS compaction_state JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS checkpoint_state TEXT DEFAULT NULL",
     ]
 
     def __init__(self, database_url: str) -> None:
@@ -630,7 +634,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 
     async def update_state(self, session_id: str, **fields: Any) -> bool:
         allowed = {"pending_question", "open_tool_calls", "pending_subagent_calls",
-                   "permission_scope_active", "compaction_state"}
+                   "permission_scope_active", "compaction_state",
+                   "checkpoint_state"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return False
@@ -665,6 +670,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     async def get_state(self, session_id: str) -> dict[str, Any]:
         state_cols = ["pending_question", "open_tool_calls", "pending_subagent_calls",
                       "permission_scope_active", "compaction_state",
+                      "checkpoint_state",
                       "parent_session_id", "forked_at_message_id"]
         pool = await self._get_pool()
         async with pool.acquire() as conn:
