@@ -9,7 +9,6 @@ macros, a seconds field, or ``L``/``W``/``#`` extensions.
 from __future__ import annotations
 
 import asyncio
-import calendar
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone

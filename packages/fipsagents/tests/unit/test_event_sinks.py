@@ -200,9 +200,6 @@ class TestHttpCallbackSink:
         sink = HttpCallbackSink(config=cfg)
         assert sink._client is None
 
-        # Replace with mock after lazy creation would happen
-        original_emit = sink.emit
-
         async def patched_emit(event):
             # Trigger lazy creation, then swap the client
             if sink._client is None:

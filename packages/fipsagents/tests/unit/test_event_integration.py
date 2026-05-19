@@ -6,9 +6,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from fipsagents.baseagent.config import ServerConfig
 from fipsagents.server.events import (
