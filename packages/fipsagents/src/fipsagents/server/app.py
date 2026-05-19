@@ -1552,6 +1552,7 @@ class OpenAIChatServer:
         # Tracing: create collector if sampling says yes.
         collector: TraceCollector | None = None
         if self._should_trace():
+            traces_cfg = agent.config.server.traces
             collector = TraceCollector(
                 self._trace_store,
                 trace_id=trace_id,
@@ -1559,12 +1560,12 @@ class OpenAIChatServer:
                 model=model_name,
                 provider=getattr(agent.config.model, "provider", None),
                 parent_span_id=parent_ctx.parent_span_id if parent_ctx else None,
+                fidelity=traces_cfg.fidelity,
             )
-            collector.begin_request({
-                "model": model_name,
-                "stream": req.stream,
-                "session_id": req.session_id,
-            })
+            collector.begin_request(
+                {"model": model_name, "stream": req.stream, "session_id": req.session_id},
+                messages=list(incoming) if traces_cfg.fidelity != "minimal" else None,
+            )
 
         # Metrics: start timing.
         metrics_start: float | None = None

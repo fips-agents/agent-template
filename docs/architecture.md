@@ -354,6 +354,24 @@ server:
 pip install 'fipsagents[otel]'  # opentelemetry-sdk + opentelemetry-exporter-otlp-proto-grpc
 ```
 
+### Trace fidelity levels
+
+`server.traces.fidelity` controls how much detail `TraceCollector` records as OTEL span events on each span. Higher fidelity = more storage, better replay.
+
+| Level | What's recorded | Use case |
+|-------|----------------|----------|
+| `minimal` | Span attributes only (default) | Production with cost constraints |
+| `standard` | + message history snapshot, tool result content | Debugging, compliance audit |
+| `full` | + every streaming delta (content, reasoning, tool call args) | Replay, model behavior analysis |
+
+Span event schema:
+
+- **request** span: `messages_snapshot` event (JSON array of the full message history at turn start) at standard+
+- **model_call** span: `content_delta`, `reasoning_delta`, `tool_call_delta` events at full only
+- **tool:{name}** span: `tool_result` event (content + is_error) at standard+
+
+Each span event carries a monotonic timestamp for ordering. `OTELTraceStore` exports these as OTEL span events with the `body` attribute (capped at 64KB per event).
+
 ### Distributed Trace Propagation
 
 Multi-agent deployments (workflow graphs with `RemoteNode`) propagate trace context across HTTP boundaries using the W3C Trace Context specification. `propagation.py` provides two functions:
