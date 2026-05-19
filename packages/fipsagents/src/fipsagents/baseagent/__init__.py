@@ -3,7 +3,7 @@
 __version__ = "0.9.0"
 
 from fipsagents.baseagent.agent import BaseAgent, StepOutcome, StepResult
-from fipsagents.baseagent.config import AgentConfig, AgentIdentity, ConfigError, NodeConfig, SecurityConfig, ServerConfig, load_config, load_config_from_string
+from fipsagents.baseagent.config import AgentConfig, AgentIdentity, ConfigError, NodeConfig, SecurityConfig, ServerConfig, StateRecoveryConfig, load_config, load_config_from_string
 from fipsagents.baseagent.events import (
     ContentDelta,
     GuardrailFiredEvent,
@@ -28,6 +28,7 @@ from fipsagents.baseagent.skills import Skill, SkillLoader
 from fipsagents.baseagent.diagnostics import RoleProbeResult, probe_role_support
 from fipsagents.baseagent.tool_inspector import InspectionFinding, InspectionResult, ToolInspector
 from fipsagents.baseagent.question_tool import QuestionAnswer, QuestionOption
+from fipsagents.baseagent.state import AgentState
 from fipsagents.baseagent.tools import ToolCall, ToolRegistry, ToolResult, tool
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "NodeConfig",
     "SecurityConfig",
     "ServerConfig",
+    "StateRecoveryConfig",
     "load_config",
     "load_config_from_string",
     # events (streaming)
@@ -82,6 +84,8 @@ __all__ = [
     # question_tool
     "QuestionAnswer",
     "QuestionOption",
+    # state
+    "AgentState",
     # tools
     "tool",
     "ToolCall",

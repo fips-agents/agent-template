@@ -44,7 +44,7 @@ from .budget import BudgetExceededError, create_budget_enforcer
 from .collector import TraceCollector
 from .metrics import NullMetricsCollector, create_metrics_collector
 from .sessions import SessionStore, create_session_store
-from .tracing import TraceStore, create_trace_store
+from .tracing import NullTraceStore, TraceStore, create_trace_store
 from .feedback import (
     FeedbackRecord,
     FeedbackStore,
@@ -161,6 +161,7 @@ class OpenAIChatServer:
         self._event_sources: list[Any] = []
         self._event_sink: Any = None
         self._event_tasks: list[asyncio.Task] = []
+        self._state_recovery_cfg: Any = None
 
         app_title = title if title is not None else agent_class.__name__
         self.app = FastAPI(
@@ -420,6 +421,21 @@ class OpenAIChatServer:
                 "Event sources started: %s",
                 ", ".join(s.source_id for s in self._event_sources),
             )
+
+        # State recovery config.
+        recovery_cfg = getattr(server_cfg, "state_recovery", None)
+        if (
+            recovery_cfg is not None
+            and recovery_cfg.enabled
+            and getattr(self._agent, "state_type", None) is not None
+        ):
+            self._state_recovery_cfg = recovery_cfg
+            if not getattr(server_cfg, "traces", None) or not server_cfg.traces.enabled:
+                logger.warning(
+                    "state_recovery.enabled but traces are disabled; "
+                    "replay from event log not possible"
+                )
+            logger.info("State recovery enabled for %s", self._agent_class.__name__)
 
         # Run housekeeping only if at least one *locally persistent*
         # backend is in play.  HTTP-backed stores delegate housekeeping
@@ -1855,6 +1871,12 @@ class OpenAIChatServer:
             # Compaction check (before agent loop).
             await self._maybe_compact(agent, session_id=session_id)
 
+            # State recovery: load per-session state.
+            if self._state_recovery_cfg and agent.state_type is not None:
+                agent._agent_state = await self._load_or_recover_state(
+                    agent, session_id,
+                )
+
             events = agent.astep_stream(max_iterations=10, **(overrides or {}))
             if self._metrics_collector is not None:
                 events = self._metrics_collector.observe(
@@ -1863,6 +1885,9 @@ class OpenAIChatServer:
                     tenant_id=tenant_id,
                     session_id=session_id,
                 )
+            if getattr(agent, "_agent_state", None) is not None:
+                from fipsagents.baseagent.state import StateReducerObserver
+                events = StateReducerObserver(agent).observe(events)
             if collector:
                 events = collector.observe(events)
             async for event in events:
@@ -1871,6 +1896,13 @@ class OpenAIChatServer:
                 elif isinstance(event, StreamComplete):
                     metrics = event.metrics
                     finish_reason = event.finish_reason
+
+            # State recovery: checkpoint after turn completes.
+            if getattr(agent, "_agent_state", None) is not None and session_id:
+                await self._checkpoint_state(
+                    agent, session_id,
+                    trace_id=collector.trace_id if collector else "",
+                )
 
         content = "".join(parts)
 
@@ -1938,6 +1970,12 @@ class OpenAIChatServer:
                 self._agent, session_id=session_id,
             )
 
+            # State recovery: load per-session state.
+            if self._state_recovery_cfg and self._agent.state_type is not None:
+                self._agent._agent_state = await self._load_or_recover_state(
+                    self._agent, session_id,
+                )
+
             stream_status = "ok"
             captured_metrics: StreamMetrics | None = None
             try:
@@ -1949,6 +1987,9 @@ class OpenAIChatServer:
                         tenant_id=tenant_id,
                         session_id=session_id,
                     )
+                if getattr(self._agent, "_agent_state", None) is not None:
+                    from fipsagents.baseagent.state import StateReducerObserver
+                    events = StateReducerObserver(self._agent).observe(events)
                 if collector:
                     events = collector.observe(events)
 
@@ -2000,6 +2041,14 @@ class OpenAIChatServer:
                         session_id,
                         pending_question=_q_json.dumps(q_pending),
                     )
+
+            # State recovery: checkpoint after turn completes.
+            if getattr(self._agent, "_agent_state", None) is not None and session_id:
+                await self._checkpoint_state(
+                    self._agent, session_id,
+                    trace_id=collector.trace_id if collector else "",
+                )
+
             # Budget post-record (mirrors the sync path).
             if run_budget_post and self._budget_enforcer is not None:
                 try:
@@ -2085,6 +2134,57 @@ class OpenAIChatServer:
             logger.warning(
                 "Failed to persist cost_data for %s",
                 session_id,
+                exc_info=True,
+            )
+
+    # -- State recovery -------------------------------------------------------
+
+    async def _load_or_recover_state(
+        self,
+        agent: BaseAgent,
+        session_id: str | None,
+    ) -> Any:
+        """Load agent state from checkpoint, replaying missed events."""
+        if not session_id or not self._session_store:
+            return agent.state_type()  # type: ignore[union-attr]
+
+        from .recovery import recover_state
+
+        recovered = await recover_state(
+            agent, session_id,
+            self._session_store,
+            self._trace_store or NullTraceStore(),
+        )
+        return recovered if recovered is not None else agent.state_type()  # type: ignore[union-attr]
+
+    async def _checkpoint_state(
+        self,
+        agent: BaseAgent,
+        session_id: str,
+        *,
+        trace_id: str = "",
+    ) -> None:
+        """Persist a state checkpoint to the session store."""
+        if agent._agent_state is None or self._session_store is None:
+            return
+        import json as _ckpt_json
+        from datetime import datetime, timezone
+        from fipsagents.baseagent.state import state_schema_key
+
+        checkpoint_data = _ckpt_json.dumps({
+            "state": agent._agent_state.model_dump(),
+            "last_trace_id": trace_id,
+            "last_span_id": "",
+            "checkpoint_at": datetime.now(timezone.utc).isoformat(),
+            "schema_version": state_schema_key(type(agent._agent_state)),
+        })
+        try:
+            await self._session_store.update_state(
+                session_id, checkpoint_state=checkpoint_data,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to checkpoint state for %s", session_id,
                 exc_info=True,
             )
 

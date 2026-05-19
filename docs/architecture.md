@@ -993,3 +993,63 @@ REST endpoints: `POST /v1/sessions/{id}/fork` (returns the new session ID, 201 C
 `NullSessionStore` raises `NotImplementedError` for both methods (sessions are ephemeral, no state to fork from). SQLite and Postgres implementations copy the messages list and metadata while resetting fork-specific fields (`parent_session_id`, `forked_at_message_id`, `created_at`, `updated_at`). Cost data is not inherited — the fork starts with fresh counters.
 
 Full design in `planning/session-state-compaction-design.md`.
+
+## State Recovery
+
+Reducer-based state recovery enables long-running agents to survive pod restarts via event log replay. Agents that process event streams (Kafka, webhooks), run multi-step autonomous tasks, or have expensive warm-up can checkpoint their state and recover it from the trace log.
+
+### Opt-in model
+
+Subclasses declare a typed state and override the reducer:
+
+```python
+class MyState(AgentState):
+    documents_processed: list[str] = []
+    current_report: str = ""
+
+class MyAgent(BaseAgent):
+    state_type = MyState
+
+    def reduce(self, state: MyState, event: StreamEvent) -> MyState:
+        match event:
+            case ToolResultEvent(name="process_document", content=result):
+                return state.model_copy(update={
+                    "documents_processed": [*state.documents_processed, result],
+                })
+            case _:
+                return state
+
+    async def after_event(self, state: MyState, event: StreamEvent) -> None:
+        if isinstance(event, StreamComplete):
+            await self.use_tool("update_dashboard", report=state.current_report)
+```
+
+`AgentState` extends `BaseModel` with `extra="forbid"` (same as `WorkflowState`). `reduce()` must be pure and synchronous. `after_event()` runs side effects for new events only — never during replay.
+
+### Recovery flow
+
+1. Request arrives for a session with state recovery enabled
+2. Server loads checkpoint from `session_store.get_state()` (`checkpoint_state` column)
+3. Validates schema version against current `state_type` (discards on mismatch)
+4. Queries `trace_store.list_traces_for_session()` for traces after the checkpoint
+5. Reconstructs `StreamEvent` objects from span events and replays them through `reduce()`
+6. Sets `agent._agent_state` to the recovered state
+7. `StateReducerObserver` wraps the event stream — both `reduce()` and `after_event()` fire for new events
+8. After the turn completes, checkpoints the updated state
+
+Agents without `state_type` are completely unaffected — no state is initialized, no observer is wired, no checkpoint is saved.
+
+### Configuration
+
+```yaml
+server:
+  state_recovery:
+    enabled: true
+  traces:
+    enabled: true
+    fidelity: standard  # standard or full for replay data
+  sessions:
+    enabled: true
+```
+
+At `standard` fidelity, only `ToolResultEvent` is replayable. Reducers that need `ContentDelta` require `full` fidelity.

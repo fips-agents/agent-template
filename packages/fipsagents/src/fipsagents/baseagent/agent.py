@@ -117,6 +117,8 @@ class BaseAgent(abc.ABC):
     provided here.
     """
 
+    state_type: type | None = None
+
     def __init__(
         self,
         config_path: str | Path = "agent.yaml",
@@ -172,6 +174,9 @@ class BaseAgent(abc.ABC):
         self._permission_source: Any | None = None
         self._permission_mode: str = "enforce"
         self._permission_preapproved: set[str] = set()
+
+        # Reducer state — set per-session by the server layer.
+        self._agent_state: Any | None = None
 
         # Tracks whether setup has completed.
         self._setup_done = False
@@ -412,6 +417,22 @@ class BaseAgent(abc.ABC):
             return await self.run()
         finally:
             await self.shutdown()
+
+    # -- Reducer hooks -------------------------------------------------------
+
+    def reduce(self, state: Any, event: StreamEvent) -> Any:
+        """Pure synchronous reducer: ``(state, event) -> state``.
+
+        Override in subclasses to evolve state in response to events.
+        Must be pure: no I/O, no side effects, no mutation of *state*.
+        """
+        return state
+
+    async def after_event(self, state: Any, event: StreamEvent) -> None:
+        """Async side-effect hook.  Called for new events only, never
+        during replay.  Override to trigger notifications, external
+        API calls, or other effects that should happen exactly once.
+        """
 
     # -- Step: one iteration of agent logic ---------------------------------
 

@@ -1256,6 +1256,11 @@ EventSinkConfig = Annotated[
 ]
 
 
+class StateRecoveryConfig(BaseModel):
+    """Reducer-based state recovery settings."""
+    enabled: bool = False
+
+
 class ServerConfig(BaseModel):
     """HTTP server binding and feature configuration."""
 
@@ -1269,6 +1274,7 @@ class ServerConfig(BaseModel):
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
+    state_recovery: StateRecoveryConfig = Field(default_factory=StateRecoveryConfig)
     event_sources: list[EventSourceConfig] = Field(default_factory=list)
     event_sink: EventSinkConfig | None = None
 
