@@ -36,16 +36,27 @@ class EventSource(ABC):
     async def setup(self) -> None: ...
 
     @abstractmethod
-    async def consume(self) -> AsyncIterator[InboundEvent]: ...
+    async def consume(self) -> AsyncIterator[InboundEvent]:
+        """Yield events as they arrive.
+
+        Implementers must use ``async def`` with ``yield``.
+        Must be cancellation-safe -- the server cancels the
+        consuming task on shutdown.
+        """
+        ...
 
     async def acknowledge(self, event_id: str) -> None: ...  # default no-op
 
-    async def teardown(self) -> None: ...
+    async def close(self) -> None: ...
 ```
 
-`consume()` must be cancellation-safe -- the server cancels it on
-shutdown. `acknowledge()` commits offsets (Kafka) or XACKs (Redis);
-fire-and-forget sources leave the default no-op.
+`consume()` is an async generator -- subclasses implement it with
+`yield`. The server cancels it on shutdown, so implementations must
+be cancellation-safe. `acknowledge()` commits offsets (Kafka) or
+XACKs (Redis); fire-and-forget sources leave the default no-op.
+
+`NullEventSource` (never yields, returns immediately) is provided
+for testing and as a documentation example.
 
 ## InboundEvent Envelope
 
@@ -64,7 +75,7 @@ class InboundEvent(BaseModel):
 
 ```python
 class OutboundEvent(BaseModel):
-    event_id: str                            # correlation from InboundEvent
+    correlation_id: str                      # event_id of the InboundEvent that triggered this
     event_type: str                          # "response" | "processing_failed"
     payload: dict[str, Any]
     source: str
@@ -75,7 +86,7 @@ class EventSink(ABC):
     async def setup(self) -> None: ...
     @abstractmethod
     async def emit(self, event: OutboundEvent) -> None: ...
-    async def teardown(self) -> None: ...
+    async def close(self) -> None: ...
 ```
 
 Implementations: `NullSink` (default, discard), `LogSink` (structured
@@ -113,33 +124,54 @@ via `XPENDING` provide retry visibility.
 ## Server Integration
 
 The server starts one `asyncio.Task` per configured source during
-lifespan startup. Each task runs a processing loop:
+lifespan startup. Each task runs a processing loop with retry:
 
 ```python
 async def _event_loop(self, source: EventSource, sink: EventSink) -> None:
     async for event in source.consume():
-        try:
-            response = await self._process_event(event)
-            await sink.emit(OutboundEvent(
-                event_id=event.event_id, event_type="response",
-                payload={"content": response}, source=event.source,
-                timestamp=datetime.utcnow(),
-            ))
-            await source.acknowledge(event.event_id)
-        except Exception:
-            await sink.emit(OutboundEvent(
-                event_id=event.event_id, event_type="processing_failed",
-                payload={"error": traceback.format_exc()},
-                source=event.source, timestamp=datetime.utcnow(),
-            ))
-            await source.acknowledge(event.event_id)
+        now = lambda: datetime.now(tz=UTC)
+        retry = source.config.retry  # RetryConfig
+        for attempt in range(retry.max_attempts):
+            try:
+                response = await self._process_event(event)
+                await sink.emit(OutboundEvent(
+                    correlation_id=event.event_id, event_type="response",
+                    payload={"content": response}, source=event.source,
+                    timestamp=now(),
+                ))
+                await source.acknowledge(event.event_id)
+                break
+            except tuple(retry.retriable_errors):
+                if attempt + 1 < retry.max_attempts:
+                    delay = min(retry.backoff_base ** attempt, retry.backoff_max)
+                    await asyncio.sleep(delay)
+                    continue
+                await sink.emit(OutboundEvent(
+                    correlation_id=event.event_id,
+                    event_type="processing_failed",
+                    payload={"error": traceback.format_exc()},
+                    source=event.source, timestamp=now(),
+                ))
+                await source.acknowledge(event.event_id)
+            except Exception:
+                await sink.emit(OutboundEvent(
+                    correlation_id=event.event_id,
+                    event_type="processing_failed",
+                    payload={"error": traceback.format_exc()},
+                    source=event.source, timestamp=now(),
+                ))
+                await source.acknowledge(event.event_id)
+                break
 ```
+
+`acknowledge()` is only called after successful processing **or**
+after all retries are exhausted / a non-retriable error occurs.
 
 ### How events enter `astep_stream()`
 
 `_process_event` follows the same pattern as `_run_agent_sync`:
 
-1. Call `agent.translate_event(event)` to build messages.
+1. Call `translate_event(event)` to build messages (see below).
 2. Resolve session: key is `event.session_key or source.source_id`.
    Load or create via session store (upsert semantics).
 3. Run `_maybe_compact()` if threshold is reached.
@@ -149,10 +181,35 @@ async def _event_loop(self, source: EventSource, sink: EventSink) -> None:
 6. Drain events, accumulate response from `ContentDelta`.
 7. Save session, emit to sink, acknowledge event.
 
+### Lock serialisation and starvation
+
+Event processing and chat completions share `_agent_lock`. This
+means a long-running event (multi-step tool use) blocks chat
+requests, and vice versa. This is intentional for v1 — the agent
+has one conversation history and interleaving would corrupt state.
+
+**Starvation risk:** A cron source firing every minute or a webhook
+burst can starve the chat endpoint. Mitigations, in order of
+recommendation:
+
+1. **Deploy event-only agents.** The recommended pattern for
+   production: event-triggered agents run in separate pods without
+   the chat endpoint exposed. This eliminates contention entirely.
+2. **Priority queue (v2).** A future enhancement could use a
+   priority asyncio queue where chat requests preempt pending
+   events. Not in Phase 1a scope.
+3. **Source-level rate limiting.** `max_events_per_second` (see
+   Security section) bounds throughput per source. Default: 10/s
+   for webhooks, 1/s for cron.
+
+The design does not attempt concurrent event processing in v1.
+Concurrent access to `agent.messages` would require a fundamentally
+different session model.
+
 ### Lifecycle wiring
 
 Event sources and sinks are set up after `agent.setup()` in the
-lifespan, and torn down (with task cancellation) before
+lifespan, and closed (with task cancellation) before
 `agent.shutdown()`. New instance attributes on `OpenAIChatServer`:
 
 ```python
@@ -190,16 +247,18 @@ unbounded tokens. Per-session budget accumulates across events.
 malformed events. `LoopBreakEvent` is emitted, response packaged
 as `processing_failed`, event acknowledged to prevent redelivery.
 
-## BaseAgent Change
+## Event Translation
 
-One optional method -- the only BaseAgent change:
+`translate_event()` lives in `fipsagents.server.events`, **not** on
+BaseAgent. BaseAgent must not import server-layer types (the
+dependency flows server → baseagent, never the reverse).
 
 ```python
-def translate_event(self, event: InboundEvent) -> list[dict[str, str]]:
+def default_translate_event(event: InboundEvent) -> list[dict[str, str]]:
     """Convert an inbound event into conversation messages.
 
     Default: system message with event context + user message
-    with JSON payload. Override to specialise.
+    with JSON payload.
     """
     return [
         {"role": "system", "content": (
@@ -213,33 +272,59 @@ def translate_event(self, event: InboundEvent) -> list[dict[str, str]]:
     ]
 ```
 
+Customisation: pass a `translate_fn` parameter to
+`OpenAIChatServer` (or override `_translate_event()` on a server
+subclass). Agent subclasses that need custom translation should
+register a translate function during server construction, not
+override a BaseAgent method.
+
 ## Configuration
 
 ```yaml
 server:
   event_sources:
     - type: webhook
+      source_id: github-prs          # optional; default: "event:{path}"
       path: /events/github
       secret: ${GITHUB_WEBHOOK_SECRET}
       event_type_header: X-GitHub-Event
       session_ttl_hours: 720
+      max_events_per_second: 10       # token-bucket rate limit (default: 10)
 
     - type: kafka
+      source_id: doc-ingest           # optional; default: "event:kafka:{topic}:{group}"
       bootstrap_servers: ${KAFKA_BOOTSTRAP}
       topic: document-ingestion
       consumer_group: my-agent
 
     - type: cron
-      schedule: "0 9 * * 1-5"
+      schedule: "0 9 * * 1-5"         # 5-field POSIX cron (no @macros)
       event_type: daily-check
+      max_events_per_second: 1        # default for cron: 1
 
   event_sink:
     type: http_callback
     url: ${CALLBACK_URL}
 ```
 
+**`source_id` derivation:** If `source_id` is omitted, it is derived
+from the source type and identifying fields (see session model table
+above). Explicit `source_id` overrides the default.
+
+**`session_ttl_hours`** overrides the global `server.sessions.max_age_hours`
+for sessions created by this source. If both are set, the source-level
+value wins. If neither is set, sessions have no expiry.
+
+**Cron expression subset:** 5-field POSIX cron (`minute hour day-of-month
+month day-of-week`). Supports ranges (`1-5`), lists (`1,3,5`), steps
+(`*/15`), and wildcards (`*`). No `@yearly`/`@reboot` macros, no
+seconds field, no `L`/`W`/`#` extensions.
+
 Parsed into `EventSourceConfig` (discriminated union on `type`)
-and `EventSinkConfig` in `fipsagents.server.models`.
+and `EventSinkConfig` in `fipsagents.server.models`. Factory
+functions `create_event_source(config)` and `create_event_sink(config)`
+in `fipsagents.server.events` follow the same pattern as
+`create_compactor()` and `create_permission_source()`.
 
 ## Error Handling
 
@@ -265,7 +350,8 @@ always produce a `processing_failed` `OutboundEvent` for audit.
 - **Webhook HMAC-SHA256** per source, `hmac.compare_digest()`,
   configurable signature header.
 - **Rate limiting** per source via `max_events_per_second` with
-  token-bucket limiter. Excess events buffered, not dropped.
+  token-bucket limiter. Defaults: 10/s for webhooks, 1/s for cron.
+  Excess events buffered, not dropped. Disabled when set to `0`.
 - **Payload validation** via optional `payload_schema` (JSON Schema).
   Invalid payloads: 400 for webhooks, `validation_failed` event
   for async sources.
@@ -318,11 +404,15 @@ All three prerequisites are shipped. #188 is unblocked.
 
 ```
 fipsagents/server/
-  events.py             # ABCs, models, stream events, factories
+  events.py             # ABCs (EventSource, EventSink), models
+                        # (InboundEvent, OutboundEvent), stream events,
+                        # default_translate_event(),
+                        # create_event_source(), create_event_sink()
   sources/
     __init__.py
+    null.py             # NullEventSource (never yields, for testing)
     webhook.py          # HttpWebhookSource
-    cron.py             # CronSource
+    cron.py             # CronSource + minimal 5-field POSIX parser
     kafka.py            # KafkaSource (1b)
     redis.py            # RedisStreamSource (1b)
   sinks/
@@ -334,5 +424,6 @@ fipsagents/server/
     redis.py            # RedisStreamSink (1b)
 ```
 
-ABCs and models in `events.py`. Transports split into subdirectories
-to keep files small and avoid pulling optional deps at import time.
+ABCs, models, and factories in `events.py`. Transports split into
+subdirectories to keep files small and avoid pulling optional deps
+at import time.
