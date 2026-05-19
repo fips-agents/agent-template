@@ -155,6 +155,9 @@ class OpenAIChatServer:
         self._permission_source: Any = None  # Set in lifespan
         self._housekeeping_task: asyncio.Task | None = None
         self._sqlite_mgr: Any = None
+        self._event_sources: list[Any] = []
+        self._event_sink: Any = None
+        self._event_tasks: list[asyncio.Task] = []
 
         app_title = title if title is not None else agent_class.__name__
         self.app = FastAPI(
@@ -387,6 +390,34 @@ class OpenAIChatServer:
         else:
             self._permission_source = create_permission_source(None)
 
+        # Initialize event sources and sink.
+        from .events import create_event_source, create_event_sink
+        event_src_configs = getattr(server_cfg, "event_sources", None) or []
+        event_sink_config = getattr(server_cfg, "event_sink", None)
+
+        if event_sink_config is not None:
+            self._event_sink = create_event_sink(event_sink_config)
+            await self._event_sink.setup()
+        else:
+            from .sinks.null import NullSink
+            self._event_sink = NullSink()
+
+        for src_cfg in event_src_configs:
+            source = create_event_source(src_cfg)
+            await source.setup(app=self.app)
+            self._event_sources.append(source)
+            task = asyncio.create_task(
+                self._event_loop(source, self._event_sink),
+                name=f"event_loop_{source.source_id}",
+            )
+            self._event_tasks.append(task)
+
+        if self._event_sources:
+            logger.info(
+                "Event sources started: %s",
+                ", ".join(s.source_id for s in self._event_sources),
+            )
+
         # Run housekeeping only if at least one *locally persistent*
         # backend is in play.  HTTP-backed stores delegate housekeeping
         # to the platform service.
@@ -406,6 +437,17 @@ class OpenAIChatServer:
                     await self._housekeeping_task
                 except asyncio.CancelledError:
                     pass
+            # Cancel and drain event tasks.
+            for task in self._event_tasks:
+                task.cancel()
+            if self._event_tasks:
+                await asyncio.gather(*self._event_tasks, return_exceptions=True)
+            self._event_tasks.clear()
+            for source in self._event_sources:
+                await source.close()
+            self._event_sources.clear()
+            if self._event_sink is not None:
+                await self._event_sink.close()
             await self._agent.shutdown()
             # Drain any in-flight async chunking tasks before tearing
             # down the stores they're writing to.
@@ -1599,6 +1641,123 @@ class OpenAIChatServer:
                 )
         else:
             logger.debug("Compaction skipped: %s", result.skip_reason)
+
+    # -- Event loop ------------------------------------------------------------
+
+    async def _event_loop(
+        self,
+        source: Any,
+        sink: Any,
+    ) -> None:
+        """Process events from a source, serialised through _agent_lock."""
+        import traceback
+        from datetime import UTC, datetime
+
+        from .events import OutboundEvent, RetryConfig
+
+        logger.info("Event loop started: source=%s", source.source_id)
+        retry_cfg = getattr(source.config, "retry", None)
+        if retry_cfg is None:
+            retry_cfg = RetryConfig()
+
+        try:
+            async for event in source.consume():
+                now_fn = lambda: datetime.now(tz=UTC)
+                for attempt in range(retry_cfg.max_attempts):
+                    try:
+                        content = await self._process_event(event, source)
+                        await sink.emit(OutboundEvent(
+                            correlation_id=event.event_id,
+                            event_type="response",
+                            payload={"content": content},
+                            source=event.source,
+                            timestamp=now_fn(),
+                        ))
+                        await source.acknowledge(event.event_id)
+                        break
+                    except Exception as exc:
+                        is_retriable = (
+                            type(exc).__name__ in retry_cfg.retriable_errors
+                        )
+                        if is_retriable and attempt + 1 < retry_cfg.max_attempts:
+                            delay = min(
+                                retry_cfg.backoff_base ** attempt,
+                                retry_cfg.backoff_max,
+                            )
+                            logger.warning(
+                                "Event %s: retriable error (attempt %d/%d), "
+                                "retrying in %.1fs: %s",
+                                event.event_id, attempt + 1,
+                                retry_cfg.max_attempts, delay, exc,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        logger.error(
+                            "Event %s: processing failed: %s",
+                            event.event_id, exc,
+                        )
+                        await sink.emit(OutboundEvent(
+                            correlation_id=event.event_id,
+                            event_type="processing_failed",
+                            payload={"error": traceback.format_exc()},
+                            source=event.source,
+                            timestamp=now_fn(),
+                        ))
+                        await source.acknowledge(event.event_id)
+                        break
+        except asyncio.CancelledError:
+            logger.info("Event loop cancelled: source=%s", source.source_id)
+        except Exception:
+            logger.exception(
+                "Event loop crashed: source=%s", source.source_id,
+            )
+
+    async def _process_event(
+        self,
+        event: Any,
+        source: Any,
+    ) -> str:
+        """Process a single inbound event through the agent.
+
+        Reuses _collect_sync which handles _agent_lock, compaction,
+        permissions, and the observer chain (metrics, tracing).
+        """
+        from fipsagents.baseagent.agent import _stamp_message_id
+
+        from .events import default_translate_event
+
+        assert self._agent is not None
+        agent = self._agent
+
+        # Translate event to messages.
+        messages = default_translate_event(event)
+        for msg in messages:
+            _stamp_message_id(msg)
+
+        # Resolve session key.
+        session_key = event.session_key or source.source_id
+
+        # Load session if store available.
+        if self._session_store:
+            stored = await self._session_store.load(session_key)
+            if stored:
+                for msg in stored:
+                    _stamp_message_id(msg)
+                messages = stored + messages
+
+        # Run agent via _collect_sync (handles lock, compaction, etc).
+        content, metrics, finish_reason = await self._collect_sync(
+            agent,
+            messages,
+            model_name=agent.config.model.name,
+            session_id=session_key,
+        )
+
+        # Save session.
+        if self._session_store:
+            await self._session_store.save(session_key, agent.messages)
+
+        return content
 
     # -- Sync ----------------------------------------------------------------
 
