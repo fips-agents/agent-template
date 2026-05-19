@@ -123,6 +123,23 @@ class OTELTraceStore(TraceStore):
                 if isinstance(value, (str, int, float, bool)):
                     otel_span.set_attribute(key, value)
 
+            # Export span events.
+            for evt in span.events:
+                evt_attrs: dict[str, object] = {}
+                if "body" in evt:
+                    body_val = evt["body"]
+                    if isinstance(body_val, str) and len(body_val) <= 65536:
+                        evt_attrs["body"] = body_val
+                    elif isinstance(body_val, str):
+                        evt_attrs["body"] = body_val[:65536]
+                evt_ts = evt.get("timestamp")
+                ts_ns = _wall_ns(evt_ts) if evt_ts is not None else None
+                otel_span.add_event(
+                    evt.get("name", "unknown"),
+                    attributes=evt_attrs,
+                    timestamp=ts_ns,
+                )
+
             # Set status.
             if span.status == "error":
                 otel_span.set_status(

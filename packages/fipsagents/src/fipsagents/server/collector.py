@@ -8,6 +8,7 @@ pure observer that adds no latency to the response stream.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
@@ -53,6 +54,7 @@ class TraceCollector:
         session_id: str | None = None,
         model: str | None = None,
         provider: str | None = None,
+        fidelity: str = "minimal",
     ) -> None:
         self.store = store
         # If a parent trace context is provided, use its trace ID
@@ -65,6 +67,7 @@ class TraceCollector:
         # provider (eg "openai", "anthropic", "vllm") so trace consumers
         # can group spans across providers without parsing model names.
         self._provider = provider
+        self._fidelity = fidelity
 
         self._spans: list[Span] = []
         self._request_span: Span | None = None
@@ -98,11 +101,24 @@ class TraceCollector:
         if span.end_time is None:
             span.end_time = time.monotonic()
 
+    def _record_span_event(self, span: Span, name: str, body: Any) -> None:
+        """Append an event to span.events with a monotonic timestamp."""
+        span.events.append({
+            "name": name,
+            "timestamp": time.monotonic(),
+            "body": body if isinstance(body, str) else json.dumps(body, default=str),
+        })
+
     # ------------------------------------------------------------------
     # Request lifecycle
     # ------------------------------------------------------------------
 
-    def begin_request(self, attributes: dict[str, Any] | None = None) -> None:
+    def begin_request(
+        self,
+        attributes: dict[str, Any] | None = None,
+        *,
+        messages: list[dict[str, Any]] | None = None,
+    ) -> None:
         """Open the root request span and the first step.
 
         Stamps OTEL GenAI semantic-convention attributes on the request
@@ -120,6 +136,10 @@ class TraceCollector:
         self._request_span = self._make_span(
             "request", parent_id=self._parent_span_id, **attrs,
         )
+        if self._fidelity != "minimal" and messages is not None:
+            self._record_span_event(
+                self._request_span, "messages_snapshot", messages,
+            )
         self._begin_step()
 
     def _begin_step(self) -> None:
@@ -208,12 +228,31 @@ class TraceCollector:
         """Dispatch a single event to the appropriate span logic."""
         if isinstance(event, (ContentDelta, ReasoningDelta)):
             self._maybe_start_new_step()
+            if self._fidelity == "full" and self._current_model_span is not None:
+                if isinstance(event, ContentDelta):
+                    self._record_span_event(self._current_model_span, "content_delta", event.content)
+                else:
+                    self._record_span_event(self._current_model_span, "reasoning_delta", event.content)
 
         elif isinstance(event, ToolCallDelta):
             self._maybe_start_new_step()
             self._handle_tool_call_delta(event)
+            if self._fidelity == "full" and self._current_model_span is not None:
+                self._record_span_event(self._current_model_span, "tool_call_delta", {
+                    "index": event.index,
+                    "call_id": event.call_id,
+                    "name": event.name,
+                    "arguments_delta": event.arguments_delta,
+                })
 
         elif isinstance(event, ToolResultEvent):
+            if self._fidelity != "minimal":
+                tool_span = self._pending_tool_spans.get(event.call_id)
+                if tool_span is not None:
+                    self._record_span_event(tool_span, "tool_result", {
+                        "content": event.content[:16384],
+                        "is_error": event.is_error,
+                    })
             self._handle_tool_result(event)
 
         elif isinstance(event, EventReceived):

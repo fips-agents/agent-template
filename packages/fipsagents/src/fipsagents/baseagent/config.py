@@ -735,6 +735,7 @@ class TracesConfig(_PerStoreBackendMixin):
     enabled: bool = False
     max_age_hours: int = Field(default=168, ge=0)
     sampling_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    fidelity: Literal["minimal", "standard", "full"] = "minimal"
     exporter: Literal["store", "otel"] | None = None
     otel_endpoint: str | None = None
     service_name: str = "fipsagents"

@@ -124,6 +124,18 @@ class TestOTELTraceStore:
         await store.close()
 
     @pytest.mark.asyncio
+    async def test_span_events_exported(self):
+        """Span events should be exported as OTEL span events."""
+        inner = NullTraceStore()
+        store = OTELTraceStore(inner=inner, service_name="test")
+        trace = self._make_trace()
+        trace.spans[1].events = [
+            {"name": "messages_snapshot", "timestamp": 0.15, "body": '[{"role":"user"}]'},
+        ]
+        await store.save_trace(trace)
+        await store.close()
+
+    @pytest.mark.asyncio
     async def test_empty_trace_no_export(self):
         """A trace with no spans should not crash."""
         inner = NullTraceStore()

@@ -82,6 +82,7 @@ class _StubAgent(BaseAgent):
                     otel_endpoint=None,
                     service_name="fipsagents",
                     backend=None,
+                    fidelity="minimal",
                 ),
                 metrics=types.SimpleNamespace(
                     enabled=False,
