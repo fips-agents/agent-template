@@ -138,6 +138,12 @@ class _StubAgent(BaseAgent):
                         retrieval_min_score=0.0,
                     ),
                 ),
+                graph=types.SimpleNamespace(
+                    enabled=False,
+                    backend="null",
+                    database_url="",
+                    graph_name="agent_knowledge",
+                ),
             ),
         )
 

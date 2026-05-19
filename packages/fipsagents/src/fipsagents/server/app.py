@@ -68,6 +68,11 @@ from .chunk_store import (
     NullChunkStore,
     create_pgvector_chunk_store,
 )
+from .graph_store import (
+    GraphStore,
+    NullGraphStore,
+    create_age_graph_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +156,7 @@ class OpenAIChatServer:
         self._virus_scanner: VirusScanner | None = None
         self._chunker: Chunker | None = None
         self._chunk_store: ChunkStore | None = None
+        self._graph_store: GraphStore | None = None
         self._chunking_tasks: set[asyncio.Task] = set()
         self._metrics_collector: Any = None  # Set in lifespan
         self._budget_enforcer: Any = None  # Set in lifespan
@@ -327,6 +333,19 @@ class OpenAIChatServer:
         else:
             self._chunk_store = NullChunkStore()
 
+        # Graph store (Apache AGE).
+        graph_cfg = server_cfg.graph
+        if graph_cfg.enabled and graph_cfg.backend == "age":
+            self._graph_store = await create_age_graph_store(
+                database_url=(
+                    graph_cfg.database_url
+                    or server_cfg.storage.database_url
+                ),
+                graph_name=graph_cfg.graph_name,
+            )
+        else:
+            self._graph_store = NullGraphStore()
+
         # Initialize metrics collector.
         self._metrics_collector = create_metrics_collector(
             enabled=server_cfg.metrics.enabled,
@@ -480,6 +499,8 @@ class OpenAIChatServer:
             await self._file_store.close()
             if self._chunk_store is not None:
                 await self._chunk_store.close()
+            if self._graph_store is not None:
+                await self._graph_store.close()
             if self._bytes_store is not None:
                 await self._bytes_store.close()
             await self._virus_scanner.close()

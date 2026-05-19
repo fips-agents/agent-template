@@ -117,6 +117,9 @@ chunking = [
     "asyncpg>=0.29.0",
     "pgvector>=0.3.0",
 ]
+graph = [
+    "asyncpg>=0.29.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
@@ -144,4 +147,5 @@ markers = [
     "minio: Tests against a live MinIO/S3 endpoint (skipped when unreachable)",
     "chunking_live: Tests against a live Postgres+pgvector and embedding endpoint (skipped when env unset)",
     "platform_live: Tests against a live OGX (LlamaStack) endpoint (skipped when OGX_ENDPOINT unset)",
+    "age_live: Tests against a live Postgres+AGE endpoint (skipped when AGE_DATABASE_URL unset)",
 ]

@@ -783,6 +783,22 @@ class CompactionConfig(BaseModel):
         return v
 
 
+class GraphConfig(BaseModel):
+    """Apache AGE property-graph store settings."""
+
+    enabled: bool = False
+    backend: Literal["null", "age"] = "null"
+    database_url: str = ""
+    graph_name: str = "agent_knowledge"
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _coerce_empty_backend(cls, v: Any) -> Any:
+        if isinstance(v, str) and v.strip() == "":
+            return "null"
+        return v
+
+
 class PermissionRuleConfig(BaseModel):
     """A single declarative permission rule."""
     id: str | None = None
@@ -1277,6 +1293,7 @@ class ServerConfig(BaseModel):
     state_recovery: StateRecoveryConfig = Field(default_factory=StateRecoveryConfig)
     event_sources: list[EventSourceConfig] = Field(default_factory=list)
     event_sink: EventSinkConfig | None = None
+    graph: GraphConfig = Field(default_factory=GraphConfig)
 
     @field_validator("port", mode="before")
     @classmethod
