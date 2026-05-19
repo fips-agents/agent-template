@@ -50,15 +50,11 @@ class OutboundEvent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class RetryConfig(BaseModel):
-    """Retry parameters for event processing."""
 
-    max_attempts: int = Field(default=3, ge=1)
-    backoff_base: float = Field(default=2.0, gt=0)
-    backoff_max: float = Field(default=60.0, gt=0)
-    retriable_errors: list[str] = Field(
-        default_factory=lambda: ["TimeoutError"],
-    )
+# Canonical definition is EventRetryConfig in fipsagents.baseagent.config.
+# Re-exported here as RetryConfig for convenience.
+from fipsagents.baseagent.config import EventRetryConfig as RetryConfig
+
 
 
 # -- ABCs ------------------------------------------------------------------

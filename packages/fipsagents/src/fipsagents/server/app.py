@@ -1653,12 +1653,13 @@ class OpenAIChatServer:
         import traceback
         from datetime import UTC, datetime
 
-        from .events import OutboundEvent, RetryConfig
+        from fipsagents.baseagent.config import EventRetryConfig
+        from .events import OutboundEvent
 
         logger.info("Event loop started: source=%s", source.source_id)
         retry_cfg = getattr(source.config, "retry", None)
         if retry_cfg is None:
-            retry_cfg = RetryConfig()
+            retry_cfg = EventRetryConfig()
 
         try:
             async for event in source.consume():
