@@ -149,6 +149,26 @@ class CreateFeedbackRequest(BaseModel):
         return v
 
 
+class ForkSessionRequest(BaseModel):
+    """Request body for POST /v1/sessions/{session_id}/fork."""
+
+    from_message_index: int | None = None
+
+
+class ForkSessionResponse(BaseModel):
+    """Response body for POST /v1/sessions/{session_id}/fork."""
+
+    session_id: str
+    parent_session_id: str
+    message_count: int
+
+
+class RevertSessionRequest(BaseModel):
+    """Request body for POST /v1/sessions/{session_id}/revert."""
+
+    to_message_index: int = Field(ge=0)
+
+
 class UpdateFeedbackRequest(BaseModel):
     """Request body for PATCH /v1/feedback/{feedback_id}.
 

@@ -99,6 +99,30 @@ class SessionStore(ABC):
         """Return session state fields. Default returns empty dict."""
         return {}
 
+    async def fork(
+        self,
+        session_id: str,
+        from_message_index: int | None = None,
+    ) -> str:
+        """Branch a session at the given message index.
+
+        Returns a new session_id with messages[0:from_message_index] copied.
+        None means fork at the current end (full copy).
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support fork"
+        )
+
+    async def revert(
+        self,
+        session_id: str,
+        to_message_index: int,
+    ) -> None:
+        """Truncate the session's messages to the given index."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support revert"
+        )
+
     async def close(self) -> None:
         """Release resources. Default is a no-op."""
 
@@ -370,6 +394,50 @@ CREATE TABLE IF NOT EXISTS sessions (
                 result[col] = val
         return result
 
+    async def fork(
+        self, session_id: str, from_message_index: int | None = None,
+    ) -> str:
+        messages = await self.load(session_id)
+        if messages is None:
+            raise ValueError(f"Session {session_id!r} not found")
+
+        if from_message_index is not None:
+            if from_message_index < 0 or from_message_index > len(messages):
+                raise ValueError(
+                    f"from_message_index {from_message_index} out of range "
+                    f"(session has {len(messages)} messages)"
+                )
+            forked_messages = messages[:from_message_index]
+        else:
+            forked_messages = list(messages)
+
+        forked_at_msg_id = None
+        if forked_messages:
+            forked_at_msg_id = forked_messages[-1].get("id")
+
+        new_id = await self.create(
+            parent_session_id=session_id,
+            forked_at_message_id=forked_at_msg_id,
+        )
+
+        if forked_messages:
+            await self.save(new_id, forked_messages)
+
+        return new_id
+
+    async def revert(self, session_id: str, to_message_index: int) -> None:
+        messages = await self.load(session_id)
+        if messages is None:
+            raise ValueError(f"Session {session_id!r} not found")
+
+        if to_message_index < 0 or to_message_index > len(messages):
+            raise ValueError(
+                f"to_message_index {to_message_index} out of range "
+                f"(session has {len(messages)} messages)"
+            )
+
+        await self.save(session_id, messages[:to_message_index])
+
     async def close(self) -> None:
         if self._db is not None and not self._managed:
             await self._db.close()
@@ -619,6 +687,50 @@ CREATE TABLE IF NOT EXISTS sessions (
             else:
                 result[col] = val
         return result
+
+    async def fork(
+        self, session_id: str, from_message_index: int | None = None,
+    ) -> str:
+        messages = await self.load(session_id)
+        if messages is None:
+            raise ValueError(f"Session {session_id!r} not found")
+
+        if from_message_index is not None:
+            if from_message_index < 0 or from_message_index > len(messages):
+                raise ValueError(
+                    f"from_message_index {from_message_index} out of range "
+                    f"(session has {len(messages)} messages)"
+                )
+            forked_messages = messages[:from_message_index]
+        else:
+            forked_messages = list(messages)
+
+        forked_at_msg_id = None
+        if forked_messages:
+            forked_at_msg_id = forked_messages[-1].get("id")
+
+        new_id = await self.create(
+            parent_session_id=session_id,
+            forked_at_message_id=forked_at_msg_id,
+        )
+
+        if forked_messages:
+            await self.save(new_id, forked_messages)
+
+        return new_id
+
+    async def revert(self, session_id: str, to_message_index: int) -> None:
+        messages = await self.load(session_id)
+        if messages is None:
+            raise ValueError(f"Session {session_id!r} not found")
+
+        if to_message_index < 0 or to_message_index > len(messages):
+            raise ValueError(
+                f"to_message_index {to_message_index} out of range "
+                f"(session has {len(messages)} messages)"
+            )
+
+        await self.save(session_id, messages[:to_message_index])
 
     async def close(self) -> None:
         if self._pool is not None:
