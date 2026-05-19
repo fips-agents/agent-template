@@ -198,6 +198,16 @@ def create_event_source(config: Any) -> EventSource:
 
         source_id = config.source_id or f"event:cron:{config.event_type}"
         return CronSource(source_id, config=config)
+    elif source_type == "kafka":
+        from .sources.kafka import KafkaSource
+
+        source_id = config.source_id or f"event:kafka:{config.topic}:{config.consumer_group}"
+        return KafkaSource(source_id, config=config)
+    elif source_type == "redis":
+        from .sources.redis import RedisStreamSource
+
+        source_id = config.source_id or f"event:redis:{config.stream}:{config.consumer_group}"
+        return RedisStreamSource(source_id, config=config)
     else:
         raise ValueError(f"Unknown event source type: {source_type!r}")
 
@@ -226,5 +236,13 @@ def create_event_sink(config: Any) -> EventSink:
         from .sinks.http_callback import HttpCallbackSink
 
         return HttpCallbackSink(config=config)
+    elif sink_type == "kafka":
+        from .sinks.kafka import KafkaSink
+
+        return KafkaSink(config=config)
+    elif sink_type == "redis":
+        from .sinks.redis import RedisStreamSink
+
+        return RedisStreamSink(config=config)
     else:
         raise ValueError(f"Unknown event sink type: {sink_type!r}")

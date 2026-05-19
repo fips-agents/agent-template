@@ -111,15 +111,21 @@ attacks. Missing/invalid signatures receive 401.
 5-field cron expression, sleeps via `asyncio.sleep()`, and yields
 an `InboundEvent`. Minimal cron parser, stdlib only.
 
-### Phase 1b (optional extras)
+### Phase 1b (optional extras, implemented)
 
 **KafkaSource** -- `fipsagents[kafka]` extra (`aiokafka`). Wraps
-`AIOKafkaConsumer`. `acknowledge()` commits offsets. Consumer
-group membership handles load balancing across replicas.
+`AIOKafkaConsumer` with consumer group semantics. Auto-commit is
+disabled; `acknowledge()` commits offsets after successful event
+processing. Consumer group membership handles load balancing across
+replicas. SASL/SSL configuration via `security_protocol`, `sasl_mechanism`,
+`sasl_username`, `sasl_password`.
 
 **RedisStreamSource** -- `fipsagents[redis]` extra (`redis[hiredis]`).
-Wraps `XREADGROUP`. `acknowledge()` calls `XACK`. Pending entries
-via `XPENDING` provide retry visibility.
+Wraps `XREADGROUP` for Redis Streams. Consumer groups are auto-created
+with `MKSTREAM` on setup. `acknowledge()` calls `XACK` to remove
+messages from the pending-entries list. Configurable block time
+controls polling latency. Pending entries via `XPENDING` provide
+retry visibility.
 
 ## Server Integration
 
@@ -221,16 +227,17 @@ self._event_tasks: list[asyncio.Task] = []
 ## Session Model
 
 | Source type | Default session key |
-|------------|-------------------|
+|-------------|-------------------|
 | `webhook` | `event:{path}` |
 | `cron` | `event:cron:{event_type}` |
-| `kafka` | `event:kafka:{topic}:{group}` |
-| `redis` | `event:redis:{stream}:{group}` |
+| `kafka` | `event:kafka:{topic}:{consumer_group}` |
+| `redis` | `event:redis:{stream}:{consumer_group}` |
 
 The `event:` prefix distinguishes event sessions from chat sessions.
 Session expiry is source-configurable via `session_ttl_hours`
 (default: 168). Long-lived event sessions make compaction (#166)
-practically required.
+practically required. Explicit `source_id` on any source config
+overrides the default derivation.
 
 ## Interaction with Safety Features
 
@@ -292,10 +299,21 @@ server:
       max_events_per_second: 10       # token-bucket rate limit (default: 10)
 
     - type: kafka
-      source_id: doc-ingest           # optional; default: "event:kafka:{topic}:{group}"
+      source_id: doc-ingest           # optional; default: "event:kafka:{topic}:{consumer_group}"
       bootstrap_servers: ${KAFKA_BOOTSTRAP}
       topic: document-ingestion
       consumer_group: my-agent
+      security_protocol: SASL_SSL
+      sasl_mechanism: PLAIN
+      sasl_username: ${KAFKA_USER}
+      sasl_password: ${KAFKA_PASSWORD}
+
+    - type: redis
+      source_id: task-queue           # optional; default: "event:redis:{stream}:{consumer_group}"
+      redis_url: ${REDIS_URL}         # supports rediss:// for TLS
+      stream: task-stream
+      consumer_group: my-agent
+      block_ms: 1000                  # polling timeout in milliseconds
 
     - type: cron
       schedule: "0 9 * * 1-5"         # 5-field POSIX cron (no @macros)
@@ -303,8 +321,17 @@ server:
       max_events_per_second: 1        # default for cron: 1
 
   event_sink:
-    type: http_callback
-    url: ${CALLBACK_URL}
+    type: kafka
+    bootstrap_servers: ${KAFKA_BOOTSTRAP}
+    topic: agent-responses
+    # OR:
+    # type: redis
+    # redis_url: ${REDIS_URL}
+    # stream: agent-responses
+    # maxlen: 10000                     # optional, approximate trimming
+    # OR:
+    # type: http_callback
+    # url: ${CALLBACK_URL}
 ```
 
 **`source_id` derivation:** If `source_id` is omitted, it is derived
@@ -398,7 +425,7 @@ Three new Prometheus metrics (requires `[metrics]` extra):
 #166 (compaction)     ─┘
 ```
 
-All three prerequisites are shipped. #188 is unblocked.
+All prerequisites are shipped. Phase 1a (#188 base) and Phase 1b (Kafka, Redis) are both implemented.
 
 ## Module Layout
 
@@ -411,19 +438,20 @@ fipsagents/server/
   sources/
     __init__.py
     null.py             # NullEventSource (never yields, for testing)
-    webhook.py          # HttpWebhookSource
-    cron.py             # CronSource + minimal 5-field POSIX parser
-    kafka.py            # KafkaSource (1b)
-    redis.py            # RedisStreamSource (1b)
+    webhook.py          # HttpWebhookSource (Phase 1a)
+    cron.py             # CronSource + minimal 5-field POSIX parser (Phase 1a)
+    kafka.py            # KafkaSource (Phase 1b)
+    redis.py            # RedisStreamSource (Phase 1b)
   sinks/
     __init__.py
-    null.py             # NullSink
-    log.py              # LogSink
-    http_callback.py    # HttpCallbackSink
-    kafka.py            # KafkaSink (1b)
-    redis.py            # RedisStreamSink (1b)
+    null.py             # NullSink (Phase 1a)
+    log.py              # LogSink (Phase 1a)
+    http_callback.py    # HttpCallbackSink (Phase 1a)
+    kafka.py            # KafkaSink (Phase 1b)
+    redis.py            # RedisStreamSink (Phase 1b)
 ```
 
 ABCs, models, and factories in `events.py`. Transports split into
 subdirectories to keep files small and avoid pulling optional deps
-at import time.
+at import time. Phase 1b (Kafka, Redis) imports only when their
+respective extras are installed.

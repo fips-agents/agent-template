@@ -284,6 +284,6 @@ class TestCreateEventSinkFactory:
         assert isinstance(sink, NullSink)
 
     def test_unknown_type_raises(self):
-        cfg = SimpleNamespace(type="kafka")
+        cfg = SimpleNamespace(type="foobar")
         with pytest.raises(ValueError, match="Unknown event sink type"):
             create_event_sink(cfg)

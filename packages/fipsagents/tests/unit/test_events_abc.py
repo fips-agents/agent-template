@@ -198,7 +198,7 @@ class TestCreateEventSource:
         assert isinstance(source, NullEventSource)
 
     def test_unknown_type_raises(self):
-        cfg = SimpleNamespace(type="kafka")
+        cfg = SimpleNamespace(type="foobar")
         with pytest.raises(ValueError, match="Unknown event source type"):
             create_event_source(cfg)
 
@@ -219,9 +219,124 @@ class TestCreateEventSink:
         assert isinstance(sink, NullSink)
 
     def test_unknown_type_raises(self):
-        cfg = SimpleNamespace(type="kafka")
+        cfg = SimpleNamespace(type="foobar")
         with pytest.raises(ValueError, match="Unknown event sink type"):
             create_event_sink(cfg)
+
+
+class TestCreateKafkaSource:
+    def test_kafka_source_creates(self):
+        cfg = SimpleNamespace(
+            type="kafka",
+            source_id="test-kafka",
+            bootstrap_servers="localhost:9092",
+            topic="test",
+            consumer_group="grp",
+            auto_offset_reset="latest",
+            security_protocol=None,
+            sasl_mechanism=None,
+            sasl_username=None,
+            sasl_password=None,
+            max_events_per_second=10.0,
+            retry=SimpleNamespace(
+                max_attempts=3, backoff_base=2.0,
+                backoff_max=60.0, retriable_errors=[],
+            ),
+        )
+        source = create_event_source(cfg)
+        from fipsagents.server.sources.kafka import KafkaSource
+        assert isinstance(source, KafkaSource)
+        assert source.source_id == "test-kafka"
+
+    def test_kafka_source_default_id(self):
+        cfg = SimpleNamespace(
+            type="kafka",
+            source_id=None,
+            bootstrap_servers="localhost:9092",
+            topic="my-topic",
+            consumer_group="my-group",
+            auto_offset_reset="latest",
+            security_protocol=None,
+            sasl_mechanism=None,
+            sasl_username=None,
+            sasl_password=None,
+            max_events_per_second=10.0,
+            retry=SimpleNamespace(
+                max_attempts=3, backoff_base=2.0,
+                backoff_max=60.0, retriable_errors=[],
+            ),
+        )
+        source = create_event_source(cfg)
+        assert source.source_id == "event:kafka:my-topic:my-group"
+
+
+class TestCreateRedisSource:
+    def test_redis_source_creates(self):
+        cfg = SimpleNamespace(
+            type="redis",
+            source_id="test-redis",
+            url="redis://localhost",
+            stream="test-stream",
+            consumer_group="grp",
+            consumer_name="w0",
+            block_ms=5000,
+            max_events_per_second=10.0,
+            retry=SimpleNamespace(
+                max_attempts=3, backoff_base=2.0,
+                backoff_max=60.0, retriable_errors=[],
+            ),
+        )
+        source = create_event_source(cfg)
+        from fipsagents.server.sources.redis import RedisStreamSource
+        assert isinstance(source, RedisStreamSource)
+        assert source.source_id == "test-redis"
+
+    def test_redis_source_default_id(self):
+        cfg = SimpleNamespace(
+            type="redis",
+            source_id=None,
+            url="redis://localhost",
+            stream="my-stream",
+            consumer_group="my-group",
+            consumer_name="w0",
+            block_ms=5000,
+            max_events_per_second=10.0,
+            retry=SimpleNamespace(
+                max_attempts=3, backoff_base=2.0,
+                backoff_max=60.0, retriable_errors=[],
+            ),
+        )
+        source = create_event_source(cfg)
+        assert source.source_id == "event:redis:my-stream:my-group"
+
+
+class TestCreateKafkaSink:
+    def test_kafka_sink_creates(self):
+        cfg = SimpleNamespace(
+            type="kafka",
+            bootstrap_servers="localhost:9092",
+            topic="results",
+            security_protocol=None,
+            sasl_mechanism=None,
+            sasl_username=None,
+            sasl_password=None,
+        )
+        sink = create_event_sink(cfg)
+        from fipsagents.server.sinks.kafka import KafkaSink
+        assert isinstance(sink, KafkaSink)
+
+
+class TestCreateRedisSink:
+    def test_redis_sink_creates(self):
+        cfg = SimpleNamespace(
+            type="redis",
+            url="redis://localhost",
+            stream="results",
+            maxlen=None,
+        )
+        sink = create_event_sink(cfg)
+        from fipsagents.server.sinks.redis import RedisStreamSink
+        assert isinstance(sink, RedisStreamSink)
 
 
 # -- Rate limiter tests ----------------------------------------------------
