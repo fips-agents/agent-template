@@ -31,6 +31,9 @@ from .models import (
     ChatCompletionRequest,
     CreateFeedbackRequest,
     CreateSessionRequest,
+    ForkSessionRequest,
+    ForkSessionResponse,
+    RevertSessionRequest,
     UpdateFeedbackRequest,
     _SESSION_ID_RE,
     _extract_overrides,
@@ -494,6 +497,10 @@ class OpenAIChatServer:
         self.app.get("/v1/sessions/{session_id}")(self._get_session)
         self.app.get("/v1/sessions/{session_id}/usage")(self._get_session_usage)
         self.app.delete("/v1/sessions/{session_id}")(self._delete_session)
+        self.app.post("/v1/sessions/{session_id}/fork")(self._fork_session)
+        self.app.post(
+            "/v1/sessions/{session_id}/revert", status_code=204,
+        )(self._revert_session)
         self.app.get("/v1/traces")(self._list_traces)
         self.app.get("/v1/traces/{trace_id}")(self._get_trace)
         self.app.post("/v1/feedback")(self._create_feedback)
@@ -583,6 +590,48 @@ class OpenAIChatServer:
         if not existed:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         return JSONResponse({"deleted": True})
+
+    async def _fork_session(
+        self,
+        session_id: str,
+        body: ForkSessionRequest = Body(default_factory=ForkSessionRequest),
+    ):
+        """Branch a session, copying messages up to *from_message_index*."""
+        if self._session_store is None:
+            raise HTTPException(status_code=501, detail="Session persistence not configured")
+        if not await self._session_store.exists(session_id):
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        try:
+            new_id = await self._session_store.fork(session_id, body.from_message_index)
+        except NotImplementedError as exc:
+            raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        forked_messages = await self._session_store.load(new_id)
+        message_count = len(forked_messages) if forked_messages else 0
+
+        return JSONResponse(
+            ForkSessionResponse(
+                session_id=new_id,
+                parent_session_id=session_id,
+                message_count=message_count,
+            ).model_dump(),
+            status_code=201,
+        )
+
+    async def _revert_session(self, session_id: str, body: RevertSessionRequest):
+        """Truncate a session's messages to *to_message_index*."""
+        if self._session_store is None:
+            raise HTTPException(status_code=501, detail="Session persistence not configured")
+        if not await self._session_store.exists(session_id):
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        try:
+            await self._session_store.revert(session_id, body.to_message_index)
+        except NotImplementedError as exc:
+            raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     async def _get_session_usage(self, session_id: str):
         """Return computed token + dollar usage for a session.
