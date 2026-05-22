@@ -186,6 +186,9 @@ class BaseAgent(abc.ABC):
         self._work_item_actor_id: str | None = None
         self._work_item_events: list[Any] = []
 
+        # Self-healing events buffer — drained by astep_stream.
+        self._self_healing_events: list[Any] = []
+
         # Capability auto-discovery — populated by _discover_capabilities()
         # at the end of setup(). Used for work-item matching.
         self._discovered_capabilities: list[Any] = []
@@ -283,6 +286,14 @@ class BaseAgent(abc.ABC):
             logger.info("Discovered %d skill stub(s)", len(stubs))
         else:
             logger.debug("Skills directory does not exist: %s", skills_dir)
+
+        # 6a. Learned skills (when self_healing is enabled).
+        if self.config.self_healing.enabled:
+            learned_dir = base / self.config.self_healing.learned_skills_dir
+            if learned_dir.is_dir():
+                loaded_learned = self.skills.load_learned(learned_dir)
+                if loaded_learned:
+                    logger.info("Loaded %d learned skill(s)", len(loaded_learned))
 
         # 7. Rules
         rules_dir = base / "rules"
@@ -1113,6 +1124,11 @@ class BaseAgent(abc.ABC):
                     _wi_events = getattr(self, "_work_item_events", None)
                     while _wi_events:
                         yield _wi_events.pop(0)
+
+                    # Drain self-healing events.
+                    _sh_events = getattr(self, "_self_healing_events", None)
+                    while _sh_events:
+                        yield _sh_events.pop(0)
 
                     is_err = result.is_error
                     content_str = (

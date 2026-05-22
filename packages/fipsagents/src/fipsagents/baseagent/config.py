@@ -355,6 +355,18 @@ class PromptAssemblyConfig(BaseModel):
     capabilities_enabled: bool = True
 
 
+class SelfHealingConfig(BaseModel):
+    """Self-healing configuration: learned skills and trust-scoped writes."""
+
+    enabled: bool = False
+    trust_level: int = Field(default=0, ge=0, le=4)
+    trust_domains: list[str] = Field(default_factory=list)
+    review_policy: Literal["audit_only", "peer_review", "human_review"] = (
+        "human_review"
+    )
+    learned_skills_dir: str = "./learned_skills"
+
+
 class BackoffConfig(BaseModel):
     """Exponential backoff parameters for the agent loop."""
 
@@ -1381,6 +1393,7 @@ class AgentConfig(BaseModel):
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)
     subagents: list[SubagentConfig] = Field(default_factory=list)
     prompt_assembly: PromptAssemblyConfig | None = None
+    self_healing: SelfHealingConfig = Field(default_factory=SelfHealingConfig)
 
     @model_validator(mode="after")
     def _no_duplicate_subagent_names(self) -> "AgentConfig":
