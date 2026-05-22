@@ -230,6 +230,21 @@ Only frontmatter is loaded at startup (~100 tokens per skill). Full content load
 
 Plain Markdown in `rules/`. No frontmatter. Filename is the identifier. One constraint per file. All rules load at startup and are injected into the system prompt.
 
+## Prompt Assembly (Layered Mode)
+
+When `prompt_assembly:` is present in `agent.yaml`, `build_system_prompt()` assembles the system message from four named layers in precedence order:
+
+| Layer | Precedence | Source | Purpose |
+|-------|-----------|--------|---------|
+| Identity | 0 (highest) | `identity.md` or inline in config | Who the agent IS |
+| Personality | 1 | `personality.md` (optional, off by default) | HOW the agent behaves |
+| Governance | 2 | `rules/` directory | Non-negotiable policies |
+| Capabilities | 3 | `skills/` directory | What the agent can do |
+
+When `prompt_assembly:` is absent, the legacy flat concatenation (system prompt + rules + skills) is used. All existing agents work without changes.
+
+A structured audit log is emitted at assembly time showing which layers loaded, which were skipped, and token counts per layer. Set `LOG_LEVEL=DEBUG` to see per-layer detail.
+
 ## Configuration (`agent.yaml`)
 
 Uses `${VAR:-default}` for env var substitution. All deployment-variable values should use this pattern. Key env vars:

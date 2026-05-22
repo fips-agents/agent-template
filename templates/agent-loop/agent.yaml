@@ -140,6 +140,30 @@ prompts:
   dir: ./prompts
   system: system          # prompt file to load as the system prompt (prompts/system.md)
 
+# -- Prompt assembly (optional, layered mode) ----------------------------------
+#
+# When present, replaces the flat system-prompt concatenation with named
+# layers: identity (who the agent IS), personality (HOW it behaves),
+# governance (rules/), and capabilities (skills/).  Each layer has
+# explicit precedence and is tracked in an audit log.
+#
+# When absent, the current behavior is preserved:
+#   1. prompts/system.md as the system prompt
+#   2. rules/*.md concatenated
+#   3. skill manifests appended
+#
+# prompt_assembly:
+#   identity:
+#     source: identity.md           # file at project root
+#     # inline: |                   # or provide identity inline (takes precedence)
+#     #   You are DocBot, a document processing agent.
+#     enabled: true
+#   personality:
+#     source: personality.md        # file at project root
+#     enabled: false                # optional, off by default
+#   governance_enabled: true        # layer 2 (rules/ directory)
+#   capabilities_enabled: true      # layer 3 (skills/ directory)
+
 # -- Agent loop ----------------------------------------------------------------
 #
 # max_iterations: hard ceiling on step() calls per run() invocation.
