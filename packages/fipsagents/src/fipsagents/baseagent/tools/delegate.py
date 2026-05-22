@@ -298,3 +298,15 @@ def make_delegate_tool(
         return await _delegate(agent, agent_name, task, context, _factory)
 
     return delegate_to_agent
+
+
+# ---------------------------------------------------------------------------
+# Stock tool registration
+# ---------------------------------------------------------------------------
+
+from fipsagents.baseagent.tools._stock import StockToolSpec
+
+STOCK_TOOL_SPEC = StockToolSpec(
+    factory=make_delegate_tool,
+    condition=lambda agent: bool(getattr(agent, "subagents", {})),
+)

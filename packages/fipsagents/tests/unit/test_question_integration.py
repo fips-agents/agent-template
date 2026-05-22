@@ -6,7 +6,7 @@ import pytest
 
 from fipsagents.baseagent.agent import BaseAgent
 from fipsagents.baseagent.events import QuestionAsked, ToolResultEvent, StreamComplete
-from fipsagents.baseagent.question_tool import make_question_tool
+from fipsagents.baseagent.tools.question import make_question_tool
 from fipsagents.baseagent.tools import ToolRegistry, tool
 
 

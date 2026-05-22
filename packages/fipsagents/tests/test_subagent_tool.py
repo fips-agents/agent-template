@@ -26,7 +26,7 @@ from fipsagents.baseagent.config import (
     SubagentConfig,
 )
 from fipsagents.baseagent.events import SubagentCompleted, SubagentFailed, SubagentInvoked
-from fipsagents.baseagent.subagent_tool import (
+from fipsagents.baseagent.tools.delegate import (
     _warned_permission_scope,
     make_delegate_tool,
 )

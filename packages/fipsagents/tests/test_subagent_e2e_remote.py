@@ -28,7 +28,7 @@ from fipsagents.baseagent.events import (  # noqa: E402
     SubagentCompleted,
     SubagentInvoked,
 )
-from fipsagents.baseagent.subagent_tool import make_delegate_tool  # noqa: E402
+from fipsagents.baseagent.tools.delegate import make_delegate_tool  # noqa: E402
 from fipsagents.baseagent.tools import ToolRegistry  # noqa: E402
 from fipsagents.server import OpenAIChatServer  # noqa: E402
 from fipsagents.subagents.transport import RemoteSubagentTransport  # noqa: E402

@@ -371,6 +371,43 @@ class ToolRegistry:
 
         return discovered
 
+    def discover_stock(self, agent: Any) -> list[ToolMeta]:
+        """Import stock tool modules from this package and register them.
+
+        Stock tools are framework-provided tools that need the agent
+        instance (e.g. ``delegate_to_agent``, ``ask_user``).  Each stock
+        tool module exports a ``STOCK_TOOL_SPEC`` constant describing its
+        factory and optional registration condition.
+
+        Returns the list of newly registered ``ToolMeta`` instances.
+        """
+        stock_dir = Path(__file__).parent
+        discovered: list[ToolMeta] = []
+
+        for py_file in sorted(stock_dir.glob("*.py")):
+            if py_file.name.startswith("_") or py_file.name == "__init__.py":
+                continue
+            module = self._import_module(py_file)
+            if module is None:
+                continue
+            spec = getattr(module, "STOCK_TOOL_SPEC", None)
+            if spec is None:
+                continue
+            if spec.condition is not None and not spec.condition(agent):
+                logger.debug(
+                    "Skipping stock tool from %s — condition not met",
+                    py_file.name,
+                )
+                continue
+            tool_fn = spec.factory(agent)
+            meta = self.register(tool_fn)
+            discovered.append(meta)
+            logger.debug(
+                "Registered stock tool %r from %s", meta.name, py_file.name
+            )
+
+        return discovered
+
     @staticmethod
     def _import_module(path: Path) -> types.ModuleType | None:
         """Import a Python file as a module, returning None on failure."""

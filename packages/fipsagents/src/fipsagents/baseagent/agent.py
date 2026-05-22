@@ -233,17 +233,14 @@ class BaseAgent(abc.ABC):
         discovered = self.tools.discover(tools_dir)
         logger.info("Discovered %d local tool(s)", len(discovered))
 
-        # 4a. Subagent registry + delegate_to_agent tool
+        # 4a. Subagent registry (must precede stock tool discovery)
         self.subagents = {sa.name: sa for sa in self.config.subagents}
-        if self.subagents:
-            from fipsagents.baseagent.subagent_tool import make_delegate_tool
-            self.tools.register(make_delegate_tool(self))
-            logger.info(
-                "Registered delegate_to_agent tool with %d subagent(s)",
-                len(self.subagents),
-            )
 
-        # 4b. Tool inspection
+        # 4b. Stock framework tools (delegate_to_agent, ask_user, etc.)
+        stock = self.tools.discover_stock(self)
+        logger.info("Registered %d stock tool(s)", len(stock))
+
+        # 4c. Tool inspection
         if self.config.security.tool_inspection.enabled:
             from fipsagents.baseagent.tool_inspector import ToolInspector
 
@@ -256,11 +253,6 @@ class BaseAgent(abc.ABC):
             logger.info(
                 "Tool inspection enabled (mode=%s)", effective_mode
             )
-
-        # 4c. Question tool (ask_user)
-        from fipsagents.baseagent.question_tool import make_question_tool
-        self.tools.register(make_question_tool(self))
-        logger.info("Registered ask_user question tool")
 
         # 5. Prompts
         prompts_dir = base / self.config.prompts.dir

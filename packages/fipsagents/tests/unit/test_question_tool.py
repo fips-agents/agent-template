@@ -20,7 +20,7 @@ import types
 import pytest
 
 from fipsagents.baseagent.events import QuestionAsked
-from fipsagents.baseagent.question_tool import (
+from fipsagents.baseagent.tools.question import (
     QuestionAnswer,
     QuestionOption,
     _emit_question,

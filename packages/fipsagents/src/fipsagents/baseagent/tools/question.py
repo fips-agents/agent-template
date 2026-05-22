@@ -143,3 +143,14 @@ def make_question_tool(agent: object) -> Callable:
         )
 
     return ask_user
+
+
+# ---------------------------------------------------------------------------
+# Stock tool registration
+# ---------------------------------------------------------------------------
+
+from fipsagents.baseagent.tools._stock import StockToolSpec
+
+STOCK_TOOL_SPEC = StockToolSpec(
+    factory=make_question_tool,
+)
