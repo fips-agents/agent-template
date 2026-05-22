@@ -175,6 +175,12 @@ def make_work_item_tools(agent: object) -> list:
         )
         agent._checked_out_work_item = None
         _emit(WorkItemCompleted(item_id=item.id, actor_id=actor, title=item.title))
+
+        # Record successful completion in the trust manager.
+        trust = getattr(agent, "_trust_manager", None)
+        if trust is not None:
+            trust.record_completion(reason=f"completed work item {item_id}")
+
         return json.dumps(
             {"id": item.id, "status": item.status.value, "title": item.title}
         )

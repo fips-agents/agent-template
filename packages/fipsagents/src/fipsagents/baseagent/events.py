@@ -336,6 +336,15 @@ class HandoffRequired:
 
 
 @dataclass
+class TrustLevelChanged:
+    """Emitted when an agent's trust level changes (promotion or demotion)."""
+    from_level: int
+    to_level: int
+    score: float
+    reason: str
+
+
+@dataclass
 class SkillLearned:
     """Emitted when an agent creates or updates a learned skill."""
     skill_name: str
@@ -399,6 +408,7 @@ StreamEvent = Union[
     WorkItemFailed,
     BudgetHeadroomWarning,
     HandoffRequired,
+    TrustLevelChanged,
     SkillLearned,
     SkillEdited,
     SkillRolledBack,

@@ -189,6 +189,9 @@ class BaseAgent(abc.ABC):
         # Self-healing events buffer — drained by astep_stream.
         self._self_healing_events: list[Any] = []
 
+        # Trust manager — initialized in setup() when self_healing is enabled.
+        self._trust_manager: Any = None
+
         # Capability auto-discovery — populated by _discover_capabilities()
         # at the end of setup(). Used for work-item matching.
         self._discovered_capabilities: list[Any] = []
@@ -294,6 +297,18 @@ class BaseAgent(abc.ABC):
                 loaded_learned = self.skills.load_learned(learned_dir)
                 if loaded_learned:
                     logger.info("Loaded %d learned skill(s)", len(loaded_learned))
+
+        # 6b. Trust manager (when self_healing is enabled).
+        if self.config.self_healing.enabled:
+            from fipsagents.baseagent.trust import TrustManager
+
+            th = self.config.self_healing.trust_thresholds
+            self._trust_manager = TrustManager(
+                thresholds=(th.level_1, th.level_2, th.level_3, th.level_4),
+            )
+            logger.info(
+                "Trust manager initialized (level=%d)", self._trust_manager.level
+            )
 
         # 7. Rules
         rules_dir = base / "rules"

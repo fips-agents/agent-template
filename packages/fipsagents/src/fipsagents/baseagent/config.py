@@ -355,6 +355,15 @@ class PromptAssemblyConfig(BaseModel):
     capabilities_enabled: bool = True
 
 
+class TrustThresholdsConfig(BaseModel):
+    """Score thresholds for trust level promotions (levels 1-4)."""
+
+    level_1: float = 10.0
+    level_2: float = 50.0
+    level_3: float = 200.0
+    level_4: float = 500.0
+
+
 class SelfHealingConfig(BaseModel):
     """Self-healing configuration: learned skills and trust-scoped writes."""
 
@@ -365,6 +374,9 @@ class SelfHealingConfig(BaseModel):
         "human_review"
     )
     learned_skills_dir: str = "./learned_skills"
+    trust_thresholds: TrustThresholdsConfig = Field(
+        default_factory=TrustThresholdsConfig
+    )
 
 
 class BackoffConfig(BaseModel):
