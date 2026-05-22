@@ -15,6 +15,10 @@ Read these before making any architectural decisions:
 - `planning/requirements.md` -- What the system must do.
 - `planning/scope.md` -- What is and is not in scope.
 - `planning/constraints.md` -- Non-negotiable technical constraints.
+- `planning/work-item-coordination-design.md` -- Multi-agent work coordination: WorkItemStore ABC, lease-based checkout, capability matching, budget headroom, acceptance patterns. Ref: issue #214.
+- `planning/enterprise-multi-agent-coordination.md` -- Enterprise vision: marketplace metaphor, KSA capability profiles, trust accumulation, acceptance patterns, fleet coordination, kagenti interface contracts.
+- `planning/session-continuity-patterns.md` -- Session continuity for long-running agents: resume protocol, handoff notes, incremental progress discipline, compaction/memory/state composition. Generalizes Anthropic's coding-agent patterns to non-coding use cases.
+- `planning/prompt-assembly-and-agent-maturation.md` -- Layered prompt assembly (identity, personality, governance, capabilities, knowledge, context, ephemeral), selective mutability with trust-scoped self-healing, agent maturation lifecycle (proto-agent → apprentice → journeyman → specialist), DSPy integration for iterative prompt development, parent-agent lineage.
 
 ## Architecture Decisions (Quick Reference)
 

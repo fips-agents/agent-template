@@ -79,3 +79,6 @@ NEXT_SESSION.md
 
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
+
+# Scratch design docs
+agent-mesh-concepts.md
