@@ -650,6 +650,10 @@ class OpenAIChatServer:
         from .work_item_routes import register_work_item_routes
         register_work_item_routes(self.app, lambda: self._work_item_store)
 
+        # Trust/scoreboard endpoints (separate module).
+        from .trust_routes import register_trust_routes
+        register_trust_routes(self.app, lambda: self._agent)
+
     # -- Endpoint handlers ---------------------------------------------------
 
     async def _healthz(self) -> dict[str, str]:
