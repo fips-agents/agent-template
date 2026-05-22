@@ -1079,6 +1079,47 @@ When `prompt_assembly:` config is absent, legacy flat concatenation runs unchang
 
 Structured logging at the `fipsagents.baseagent.prompt_assembly` logger records which layers were assembled, their lengths, and any resolution failures (missing files, parse errors). This is for debugging prompt composition, not runtime decisions.
 
+## Human-in-the-Loop Tool Approval
+
+Tools can declare `requires_approval=True` (or a callable predicate) on the `@tool` decorator. When the LLM calls such a tool, the agent pauses via the existing permission "ask" flow:
+
+1. `astep_stream` checks `ToolMeta.requires_approval` before the server-layer `_permission_source`
+2. If approval needed and not pre-approved: emits `QuestionAsked`, appends `__permission_pending__` sentinel
+3. Server persists `pending_question` in session state, returns HTTP 409 on subsequent requests
+4. Client sends `answers_to_question_id` to approve/deny; server re-executes or injects denial
+
+Predicate form enables conditional gates: `@tool(requires_approval=lambda **kw: kw["amount"] > 1000)`.
+
+## Self-Healing and Trust
+
+Opt-in via `self_healing:` in `agent.yaml`. When enabled:
+
+**Learned Skills** — Three stock LLM tools auto-register:
+
+| Tool | Trust Required | Disk Write | Purpose |
+|------|---------------|------------|---------|
+| `learn_skill` | >= 1 | Yes (`learned_skills/`) | Create/update versioned skill |
+| `suggest_skill` | any | No | Propose skill for review |
+| `rollback_skill` | >= 3 | Yes | Restore archived version |
+
+Skills are versioned in `.versions/` subdirectories. Domain validation enforces `trust_domains` (trust 4+ bypasses). Review policy (`audit_only`, `peer_review`, `human_review`) controls gating.
+
+**Trust Accumulation** — `TrustManager` tracks a continuous score:
+
+- Completions: +1.0 per successful work-item completion
+- Failures: -5.0 per failure (proportional to severity)
+- Violations: -50.0 per violation
+
+Level transitions at configurable thresholds (default: 10/50/200/500 for levels 1-4). Demotion at 50% of current threshold. `TrustLevelChanged` stream event emitted on transitions.
+
+**Scoreboard Endpoints:**
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /v1/agent/trust` | Trust level, score, history |
+| `GET /v1/agent/skills` | All skills (bundled + learned) |
+| `GET /v1/agent/capabilities` | Discovered capabilities |
+
 ## Cross-Agent Platform Service
 
 The v0.12.0 enterprise feature track added four stateful surfaces to BaseAgent's server layer — sessions (`/v1/sessions`), traces (`/v1/traces`), feedback (`/v1/feedback`), and metrics (`/metrics`). All four follow the same pattern: BaseAgent owns a pluggable store (Null / SQLite / Postgres) and the server exposes REST endpoints. This was the right call when most deployments had one or two agents.
