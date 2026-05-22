@@ -139,6 +139,7 @@ class BaseAgent(abc.ABC):
         self.skills: SkillLoader = SkillLoader()
         self.rules: RuleLoader = RuleLoader()
         self.memory: MemoryClientBase = NullMemoryClient()
+        self._assembler: Any = None
 
         # Conversation state.
         self.messages: list[dict[str, Any]] = []
@@ -283,6 +284,28 @@ class BaseAgent(abc.ABC):
             logger.info("Loaded %d rule(s)", len(loaded_rules))
         else:
             logger.debug("Rules directory does not exist: %s", rules_dir)
+
+        # 7a. Prompt assembler (when prompt_assembly config is present).
+        if self.config.prompt_assembly is not None:
+            from fipsagents.baseagent.prompt_assembly import PromptAssembler
+            pa = self.config.prompt_assembly
+            self._assembler = PromptAssembler(
+                identity_source=pa.identity.source,
+                identity_inline=pa.identity.inline,
+                identity_enabled=pa.identity.enabled,
+                personality_source=pa.personality.source,
+                personality_enabled=pa.personality.enabled,
+                governance_enabled=pa.governance_enabled,
+                capabilities_enabled=pa.capabilities_enabled,
+                base_dir=base,
+                prompts=self.prompts,
+                rules=self.rules,
+                skills=self.skills,
+                system_prompt_name=(
+                    self.config.prompts.system if self.config else "system"
+                ),
+            )
+            logger.info("Prompt assembler initialized (layered mode)")
 
         # 8. Memory
         memory_cfg_path = base / self.config.memory.config_path
@@ -1455,10 +1478,13 @@ class BaseAgent(abc.ABC):
     # -- System prompt assembly -----------------------------------------------
 
     def build_system_prompt(self) -> str:
-        """Assemble system prompt from main prompt, rules, and skills."""
+        """Assemble system prompt from named layers (or legacy flat mode)."""
+        if self._assembler is not None:
+            return self._assembler.assemble()
+
+        # --- Legacy path (backward compatible) ---
         sections: list[str] = []
 
-        # 1. Main system prompt.
         try:
             prompt_name = self.config.prompts.system if self.config else "system"
             system_prompt = self.prompts.get(prompt_name)
@@ -1466,12 +1492,10 @@ class BaseAgent(abc.ABC):
         except PromptNotFoundError:
             logger.debug("No 'system' prompt found — skipping")
 
-        # 2. Rules.
         rules_text = self.rules.get_combined_content()
         if rules_text:
             sections.append(rules_text)
 
-        # 3. Activated skill manifests.
         manifest = self.skills.get_manifest()
         if manifest:
             skill_lines = ["# Available Skills", ""]

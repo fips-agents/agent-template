@@ -318,6 +318,43 @@ class PromptsConfig(BaseModel):
     system: str = "system"
 
 
+class IdentityConfig(BaseModel):
+    """Identity layer (precedence 0): who the agent IS.
+
+    Loaded from ``identity.md`` at the project root, or provided inline
+    via the ``inline`` field.  Inline takes precedence over file.
+    """
+
+    source: str = "identity.md"
+    inline: str | None = None
+    enabled: bool = True
+
+
+class PersonalityConfig(BaseModel):
+    """Personality layer (precedence 1): HOW the agent behaves.
+
+    Optional — off by default.  When enabled, loaded from
+    ``personality.md`` at the project root.
+    """
+
+    source: str = "personality.md"
+    enabled: bool = False
+
+
+class PromptAssemblyConfig(BaseModel):
+    """Named-layer prompt assembly configuration.
+
+    When present on ``AgentConfig``, ``build_system_prompt()`` assembles
+    the system message from four explicit layers (identity, personality,
+    governance, capabilities) instead of the legacy flat concatenation.
+    """
+
+    identity: IdentityConfig = Field(default_factory=IdentityConfig)
+    personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
+    governance_enabled: bool = True
+    capabilities_enabled: bool = True
+
+
 class BackoffConfig(BaseModel):
     """Exponential backoff parameters for the agent loop."""
 
@@ -1343,6 +1380,7 @@ class AgentConfig(BaseModel):
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)
     subagents: list[SubagentConfig] = Field(default_factory=list)
+    prompt_assembly: PromptAssemblyConfig | None = None
 
     @model_validator(mode="after")
     def _no_duplicate_subagent_names(self) -> "AgentConfig":
