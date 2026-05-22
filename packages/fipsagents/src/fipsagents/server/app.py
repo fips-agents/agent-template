@@ -646,6 +646,10 @@ class OpenAIChatServer:
         self.app.post("/v1/chat/completions")(self._chat_completions)
         self.app.get("/metrics")(self._metrics_endpoint)
 
+        # Work-item management endpoints (separate module).
+        from .work_item_routes import register_work_item_routes
+        register_work_item_routes(self.app, lambda: self._work_item_store)
+
     # -- Endpoint handlers ---------------------------------------------------
 
     async def _healthz(self) -> dict[str, str]:
