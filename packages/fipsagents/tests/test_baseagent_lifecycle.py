@@ -708,7 +708,7 @@ class TestMCPIntegration:
 
         mock_client = AsyncMock()
         mock_client.close = AsyncMock()
-        agent._mcp_clients.append(mock_client)
+        agent._mcp_clients.append((mock_client, "test-server"))
 
         await agent.shutdown()
 

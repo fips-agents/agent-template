@@ -144,8 +144,8 @@ class BaseAgent(abc.ABC):
         # Conversation state.
         self.messages: list[dict[str, Any]] = []
 
-        # MCP client references for cleanup.
-        self._mcp_clients: list[Any] = []
+        # MCP client references for cleanup; each entry is (client, label).
+        self._mcp_clients: list[tuple[Any, str]] = []
 
         # MCP prompts, resources, and resource templates — populated by connect_mcp().
         self._mcp_prompts: dict[str, tuple[Any, Any]] = {}      # name → (client, mcp.types.Prompt)
@@ -184,6 +184,11 @@ class BaseAgent(abc.ABC):
         self._work_item_store: Any = None
         self._work_item_actor_id: str | None = None
         self._work_item_events: list[Any] = []
+
+        # Capability auto-discovery — populated by _discover_capabilities()
+        # at the end of setup(). Used for work-item matching.
+        self._discovered_capabilities: list[Any] = []
+        self._checked_out_work_item: Any = None
 
         # Tracks whether setup has completed.
         self._setup_done = False
@@ -361,6 +366,8 @@ class BaseAgent(abc.ABC):
                 self.config.model.name,
             )
 
+        self._discover_capabilities()
+
         self._setup_done = True
         logger.info("Agent setup complete")
 
@@ -414,7 +421,7 @@ class BaseAgent(abc.ABC):
     async def shutdown(self) -> None:
         """Clean up resources: close MCP connections and any open handles."""
         logger.info("Shutting down agent")
-        for client in self._mcp_clients:
+        for client, _label in self._mcp_clients:
             try:
                 if hasattr(client, "close"):
                     await client.close()
@@ -1367,7 +1374,7 @@ class BaseAgent(abc.ABC):
             except Exception:
                 logger.debug("MCP server %s does not expose resource templates (or error listing them)", label, exc_info=True)
 
-            self._mcp_clients.append(client)
+            self._mcp_clients.append((client, label))
             logger.info(
                 "Connected to MCP server %s — %d tool(s), %d prompt(s), %d resource(s), %d template(s)",
                 label, registered, prompt_count, resource_count, template_count,
@@ -1474,6 +1481,47 @@ class BaseAgent(abc.ABC):
                 "mimeType": getattr(template, "mimeType", None),
             })
         return result
+
+    # -- Capability auto-discovery ---------------------------------------------
+
+    def _discover_capabilities(self) -> None:
+        """Scan loaded subsystems and build a discovered capability list.
+
+        Called at the end of setup() to introspect MCP servers, skills,
+        and tools into Capability objects for work-item matching.
+        """
+        from fipsagents.server.work_items import Capability
+
+        caps: list[Capability] = []
+
+        # MCP server capabilities.
+        for _client, label in self._mcp_clients:
+            caps.append(Capability(name=f"mcp:{label}", value=1.0))
+
+        # Skill capabilities.
+        for skill_name in self.skills._skills:
+            caps.append(Capability(name=f"skill:{skill_name}", value=1.0))
+
+        # Explicit config capabilities (merge, don't duplicate).
+        seen = {c.name for c in caps}
+        wi_cfg = getattr(
+            getattr(getattr(self, "config", None), "server", None),
+            "work_items",
+            None,
+        )
+        if wi_cfg is not None:
+            for c in wi_cfg.capabilities:
+                if c.name not in seen:
+                    caps.append(Capability(name=c.name, value=c.value))
+                    seen.add(c.name)
+
+        self._discovered_capabilities = caps
+        if caps:
+            logger.info(
+                "Discovered %d capabilities: %s",
+                len(caps),
+                [c.name for c in caps],
+            )
 
     # -- System prompt assembly -----------------------------------------------
 

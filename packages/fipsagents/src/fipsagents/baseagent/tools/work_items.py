@@ -79,15 +79,7 @@ def make_work_item_tools(agent: object) -> list:
             and handoff_note.
         """
         store = _get_store()
-        caps = None
-        cfg = getattr(agent, "config", None)
-        if cfg and hasattr(cfg, "server") and hasattr(cfg.server, "work_items"):
-            from fipsagents.server.work_items import Capability
-
-            caps = [
-                Capability(name=c.name, value=c.value)
-                for c in cfg.server.work_items.capabilities
-            ]
+        caps = getattr(agent, "_discovered_capabilities", None) or None
         items = await store.list_available(capabilities=caps, max_results=max_results)
         return json.dumps(
             [
@@ -133,6 +125,7 @@ def make_work_item_tools(agent: object) -> list:
         item = await store.checkout(
             item_id, actor, lease_duration_seconds=lease_duration_seconds
         )
+        agent._checked_out_work_item = item
         _emit(WorkItemCheckedOut(item_id=item.id, actor_id=actor, title=item.title))
         result = {
             "id": item.id,
@@ -180,6 +173,7 @@ def make_work_item_tools(agent: object) -> list:
             handoff_note=handoff,
             review_required=review_required,
         )
+        agent._checked_out_work_item = None
         _emit(WorkItemCompleted(item_id=item.id, actor_id=actor, title=item.title))
         return json.dumps(
             {"id": item.id, "status": item.status.value, "title": item.title}
@@ -221,6 +215,7 @@ def make_work_item_tools(agent: object) -> list:
             context=context,
         )
         item = await store.release(item_id, handoff_note=handoff)
+        agent._checked_out_work_item = None
         _emit(WorkItemReleased(item_id=item.id, actor_id=actor, title=item.title))
         return json.dumps(
             {"id": item.id, "status": item.status.value, "title": item.title}
