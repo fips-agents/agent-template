@@ -96,9 +96,16 @@ class TestCreateWorkItemStore:
         store = create_work_item_store("sqlite", sqlite_path=str(tmp_path / "test.db"))
         assert isinstance(store, SqliteWorkItemStore)
 
-    def test_postgres_raises(self):
-        with pytest.raises(NotImplementedError, match="postgres"):
+    def test_postgres_requires_url(self):
+        with pytest.raises(ValueError, match="database_url"):
             create_work_item_store("postgres")
+
+    def test_postgres_returns_postgres_store(self):
+        from fipsagents.server.work_item_stores.postgres import PostgresWorkItemStore
+        store = create_work_item_store(
+            "postgres", database_url="postgresql://localhost/test",
+        )
+        assert isinstance(store, PostgresWorkItemStore)
 
 
 # ---------------------------------------------------------------------------

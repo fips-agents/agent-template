@@ -362,6 +362,7 @@ class OpenAIChatServer:
                 work_items_backend,
                 sqlite_path=server_cfg.storage.sqlite_path,
                 sqlite_connection=sqlite_conn,
+                database_url=server_cfg.storage.database_url,
             )
             self._lease_expiry_task = asyncio.create_task(
                 self._run_lease_expiry(

@@ -287,12 +287,13 @@ def create_work_item_store(
     *,
     sqlite_path: str = "./agent.db",
     sqlite_connection: Any = None,
+    database_url: str = "",
 ) -> WorkItemStore:
     """Create a work-item store from config values.
 
     Supported backends:
       - ``sqlite``   — :class:`SqliteWorkItemStore` (single-replica, dev / edge)
-      - ``postgres`` — :class:`PostgresWorkItemStore` (enterprise, not yet implemented)
+      - ``postgres`` — :class:`PostgresWorkItemStore` (enterprise)
       - ``http``     — platform-routed (not yet implemented)
       - ``None``     — :class:`NullWorkItemStore` (no-op default)
     """
@@ -303,10 +304,13 @@ def create_work_item_store(
             connection=sqlite_connection,
         )
     if backend == "postgres":
-        raise NotImplementedError(
-            "WorkItemStore backend 'postgres' is not yet implemented; "
-            "use 'sqlite' or leave unset (Null)."
-        )
+        from .work_item_stores.postgres import PostgresWorkItemStore
+        if not database_url:
+            raise ValueError(
+                "PostgresWorkItemStore requires database_url; "
+                "set server.storage.database_url in agent.yaml"
+            )
+        return PostgresWorkItemStore(database_url)
     if backend == "http":
         raise NotImplementedError(
             "WorkItemStore backend 'http' is not yet implemented; "
