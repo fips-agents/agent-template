@@ -17,6 +17,7 @@ from pydantic import BaseModel, model_validator
 
 from fipsagents.baseagent.events import QuestionAsked
 from fipsagents.baseagent.tools import tool
+from fipsagents.baseagent.tools._stock import StockToolSpec
 
 logger = logging.getLogger("fipsagents.question_tool")
 
@@ -148,8 +149,6 @@ def make_question_tool(agent: object) -> Callable:
 # ---------------------------------------------------------------------------
 # Stock tool registration
 # ---------------------------------------------------------------------------
-
-from fipsagents.baseagent.tools._stock import StockToolSpec
 
 STOCK_TOOL_SPEC = StockToolSpec(
     factory=make_question_tool,

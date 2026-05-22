@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Callable
 
 from fipsagents.baseagent.events import SubagentCompleted, SubagentFailed, SubagentInvoked
 from fipsagents.baseagent.tools import tool
+from fipsagents.baseagent.tools._stock import StockToolSpec
 from fipsagents.subagents.transport import (
     InProcessSubagentTransport,
     RemoteSubagentTransport,
@@ -303,8 +304,6 @@ def make_delegate_tool(
 # ---------------------------------------------------------------------------
 # Stock tool registration
 # ---------------------------------------------------------------------------
-
-from fipsagents.baseagent.tools._stock import StockToolSpec
 
 STOCK_TOOL_SPEC = StockToolSpec(
     factory=make_delegate_tool,

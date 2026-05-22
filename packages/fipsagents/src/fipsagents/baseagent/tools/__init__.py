@@ -7,7 +7,7 @@ that all tool calls flow through (enabling logging, RBAC, and retry hooks).
 
 from __future__ import annotations
 
-from ._registry import (
+from ._registry import (  # noqa: F401 — re-exported for external consumers
     ToolCall,
     ToolMeta,
     ToolRegistry,
@@ -20,7 +20,7 @@ from ._registry import (
     _type_to_schema,
     tool,
 )
-from ._stock import StockToolSpec
+from ._stock import StockToolSpec  # noqa: F401
 
 __all__ = [
     "tool",
