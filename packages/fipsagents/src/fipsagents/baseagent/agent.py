@@ -27,6 +27,7 @@ from fipsagents.baseagent.config import (
     _OFF_PLATFORM_PROVIDERS,
 )
 from fipsagents.baseagent.events import (
+    BudgetHeadroomWarning,
     ContentDelta,
     LimitExceeded,
     LoopBreakEvent,
@@ -189,6 +190,7 @@ class BaseAgent(abc.ABC):
         # at the end of setup(). Used for work-item matching.
         self._discovered_capabilities: list[Any] = []
         self._checked_out_work_item: Any = None
+        self._headroom_warned: bool = False
 
         # Tracks whether setup has completed.
         self._setup_done = False
@@ -592,6 +594,9 @@ class BaseAgent(abc.ABC):
         """
         self._require_llm()
 
+        # Reset per-turn headroom flag so we warn at most once per turn.
+        self._headroom_warned = False
+
         # Deferred memory injection — runs before the first model call.
         await self._inject_deferred_memory()
 
@@ -812,6 +817,60 @@ class BaseAgent(abc.ABC):
                     finish_reason = "limit"
                     _loop_broken = True
                     break
+
+            # Budget headroom check for checked-out work items.
+            # Use getattr defensively for agents constructed via __new__
+            # in tests that bypass __init__.
+            _wi = getattr(self, "_checked_out_work_item", None)
+            if not _loop_broken and _wi is not None:
+                if _wi.max_cost_usd is not None and _wi.max_cost_usd > 0:
+                    _wi_cfg = getattr(
+                        getattr(getattr(self, "config", None), "server", None),
+                        "work_items", None,
+                    )
+                    _headroom_pct = (
+                        _wi_cfg.budget_headroom_pct
+                        if _wi_cfg is not None
+                        else 10.0
+                    )
+                    _wi_turn_cost = compute_cost(
+                        self.config.model.model,
+                        input_tokens=_cumulative_prompt,
+                        output_tokens=_cumulative_completion,
+                        pricing=self.config.pricing,
+                    )
+                    _remaining = _wi.max_cost_usd - _wi_turn_cost
+                    _threshold = _wi.max_cost_usd * (_headroom_pct / 100.0)
+                    if _remaining <= _threshold and not getattr(
+                        self, "_headroom_warned", False
+                    ):
+                        yield BudgetHeadroomWarning(
+                            item_id=_wi.id,
+                            remaining_pct=max(
+                                0.0,
+                                (_remaining / _wi.max_cost_usd) * 100.0,
+                            ),
+                        )
+                        self._append_message({
+                            "role": "system",
+                            "content": (
+                                f"Budget headroom warning: ${_remaining:.4f} "
+                                f"remaining of ${_wi.max_cost_usd:.4f} for "
+                                f"work item {_wi.id!r}. Complete or release "
+                                f"the work item now."
+                            ),
+                        })
+                        self._headroom_warned = True
+                        logger.warning(
+                            "Budget headroom reached for work item %s: "
+                            "%.1f%% remaining (threshold: %.1f%%)",
+                            _wi.id,
+                            max(
+                                0.0,
+                                (_remaining / _wi.max_cost_usd) * 100.0,
+                            ),
+                            _headroom_pct,
+                        )
 
             # If the model decided to call tools, execute them and loop.
             if tool_buf:
