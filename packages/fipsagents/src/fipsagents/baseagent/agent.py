@@ -916,11 +916,82 @@ class BaseAgent(abc.ABC):
                     except _json.JSONDecodeError:
                         args = {}
 
+                    # Tool-level approval check (@tool requires_approval).
+                    # Runs before the server-layer permission source so
+                    # per-tool metadata takes precedence over policy rules.
+                    _preapproved = getattr(self, "_permission_preapproved", set())
+                    _tool_meta = self.tools.get(fn_name)
+                    _approval_handled = False
+                    if (
+                        _tool_meta is not None
+                        and _tool_meta.requires_approval
+                        and call["id"] not in _preapproved
+                    ):
+                        _needs_approval = True
+                        if callable(_tool_meta.requires_approval):
+                            if asyncio.iscoroutinefunction(_tool_meta.requires_approval):
+                                _needs_approval = await _tool_meta.requires_approval(**args)
+                            else:
+                                _needs_approval = _tool_meta.requires_approval(**args)
+
+                        if _needs_approval:
+                            import json as _approval_json
+                            _approval_q_id = _generate_message_id().replace(
+                                "msg_", "perm_"
+                            )
+                            _approval_pending = {
+                                "question_id": _approval_q_id,
+                                "prompt": (
+                                    f"Tool '{fn_name}' requires approval. "
+                                    f"Arguments: {args}. Approve?"
+                                ),
+                                "options": [
+                                    {"label": "Allow", "value": "allow"},
+                                    {"label": "Deny", "value": "deny"},
+                                ],
+                                "multiple": False,
+                                "allow_custom": False,
+                                "permission_ask": True,
+                                "tool_name": fn_name,
+                                "tool_args": args,
+                                "tool_call_id": call["id"],
+                            }
+                            self._question_pending = _approval_pending
+
+                            yield QuestionAsked(
+                                question_id=_approval_q_id,
+                                question_text=_approval_pending["prompt"],
+                                options=_approval_pending["options"],
+                                multiple=False,
+                                allow_custom=False,
+                            )
+
+                            _sentinel = _approval_json.dumps({
+                                "__permission_pending__": True,
+                                "question_id": _approval_q_id,
+                                "tool_name": fn_name,
+                            })
+                            self._append_message({
+                                "role": "tool",
+                                "content": _sentinel,
+                                "tool_call_id": call["id"],
+                            })
+                            yield ToolResultEvent(
+                                call_id=call["id"],
+                                name=fn_name,
+                                content=_sentinel,
+                                is_error=False,
+                            )
+
+                            self._question_pending["tool_call_id"] = call["id"]
+                            finish_reason = "question"
+                            _approval_handled = True
+                            break
+
                     # Permission check (before tool execution).
                     _perm_src = getattr(self, "_permission_source", None)
-                    if _perm_src is not None:
+                    if not _approval_handled and _perm_src is not None:
                         _perm_mode = getattr(self, "_permission_mode", "enforce")
-                        _preapproved = getattr(self, "_permission_preapproved", set())
 
                         if call["id"] not in _preapproved:
                             _perm_ctx = {"args": args, "tool_call_id": call["id"]}

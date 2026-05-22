@@ -16,7 +16,7 @@ import sys
 import types
 import uuid
 from pathlib import Path
-from typing import Any, Literal, Optional, Union, get_args, get_origin
+from typing import Any, Callable, Literal, Optional, Union, get_args, get_origin
 
 from pydantic import BaseModel, Field
 
@@ -70,6 +70,7 @@ class ToolMeta(BaseModel):
     fn: Any  # the actual callable (sync or async)
     is_async: bool
     parameters: dict[str, Any] = Field(default_factory=dict)
+    requires_approval: bool | Callable[..., Any] = False
 
     def matches_plane(self, plane: Visibility) -> bool:
         """Return True if this tool is accessible from *plane*."""
@@ -88,6 +89,7 @@ def tool(
     visibility: Visibility,
     *,
     name: str | None = None,
+    requires_approval: bool | Callable[..., Any] = False,
 ) -> Any:
     """Decorator that marks a function as a BaseAgent tool.
 
@@ -99,6 +101,9 @@ def tool(
         Which plane(s) may invoke this tool.
     name:
         Override the tool name (defaults to the function name).
+    requires_approval:
+        Whether this tool requires user approval before execution.
+        Can be a bool or a callable that evaluates at runtime.
 
     Usage::
 
@@ -133,6 +138,7 @@ def tool(
             fn=fn,
             is_async=is_async,
             parameters=params,
+            requires_approval=requires_approval,
         )
         setattr(fn, _TOOL_MARKER, meta)
         return fn
@@ -432,6 +438,10 @@ class ToolRegistry:
 
     def get(self, name: str) -> ToolMeta | None:
         """Look up a tool by name.  Returns ``None`` if not found."""
+        return self._tools.get(name)
+
+    def get_meta(self, name: str) -> ToolMeta | None:
+        """Return the ToolMeta for a registered tool, or None."""
         return self._tools.get(name)
 
     def get_llm_tools(self) -> list[ToolMeta]:
