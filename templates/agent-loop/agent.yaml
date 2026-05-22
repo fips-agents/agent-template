@@ -51,6 +51,21 @@ model:
   temperature: 0.7
   max_tokens: 4096
 
+  # -- Per-turn resource limits (optional) --------------------------------------
+  #
+  # Hard ceilings checked after each model call in astep_stream(). When a limit
+  # is reached, the turn completes with finish_reason="limit" and an audit log
+  # event is emitted. All limits are optional; omit or set to null to disable.
+  #
+  # Production env vars:
+  #   LIMITS_MAX_TOKENS_PER_TURN      -- token cap per turn
+  #   LIMITS_MAX_ITERATIONS_PER_TURN  -- iteration cap per turn
+  #   LIMITS_MAX_COST_PER_TURN_USD    -- cost cap per turn (USD)
+  # limits:
+  #   max_tokens_per_turn: ${LIMITS_MAX_TOKENS_PER_TURN:-}
+  #   max_iterations_per_turn: ${LIMITS_MAX_ITERATIONS_PER_TURN:-}
+  #   max_cost_per_turn_usd: ${LIMITS_MAX_COST_PER_TURN_USD:-}
+
 # -- Platform mode (optional, OGX / LlamaStack delegation) -------------------
 #
 # Opt in to OGX's /v1/responses endpoint instead of /v1/chat/completions.
@@ -604,3 +619,66 @@ nodes: {}
 #
 # Production env vars:
 #   SANDBOX_URL -- override the sidecar URL (default: http://localhost:8000)
+
+# -- Pricing (optional) --------------------------------------------------------
+#
+# Token cost lookup table.  Defaults to zero for all models (self-hosted vLLM).
+# Set non-zero rates when billing is metered (hosted providers, usage chargebacks).
+#
+# `default` applies to any model not listed in `models`. `models` keys must
+# match the model identifier exactly as it appears on completion requests
+# (typically `model.name` from this file). All rates are USD per 1,000 tokens.
+#
+# `cached_input_per_1k` is the reduced rate for prompt-cache hits when the
+# provider returns `prompt_tokens_details.cached_tokens` (OpenAI semantics).
+# Omit or set to `null` to charge the full `input_per_1k` rate for cached tokens.
+#
+# Production env vars:
+#   PRICING_INPUT_PER_1K          -- default input rate
+#   PRICING_OUTPUT_PER_1K         -- default output rate
+#   PRICING_CACHED_INPUT_PER_1K   -- default cached input rate
+#   PRICING_PER_REQUEST           -- default per-request fee
+# pricing:
+#   default:
+#     input_per_1k: ${PRICING_INPUT_PER_1K:-0.0}
+#     output_per_1k: ${PRICING_OUTPUT_PER_1K:-0.0}
+#     cached_input_per_1k: ${PRICING_CACHED_INPUT_PER_1K:-}
+#     per_request: ${PRICING_PER_REQUEST:-0.0}
+#   # Example model-specific override:
+#   # models:
+#   #   meta-llama/Llama-3.3-70B-Instruct:
+#   #     input_per_1k: 0.0005
+#   #     output_per_1k: 0.002
+#   #     cached_input_per_1k: 0.0001
+
+# -- Budget (optional) ---------------------------------------------------------
+#
+# Per-session and per-tenant cost limits. Session limits read cumulative cost
+# from the session store; tenant limits aggregate in-process (accurate for
+# single-replica deployments; multi-replica tenant totals require external
+# aggregation).
+#
+# mode:
+#   observe -- log warnings + limit crossings, never raise
+#   enforce -- raise HTTP 402 when hard limit is reached (default)
+#
+# For each limit tier (per_session, per_tenant):
+#   warn_usd  -- log when running total crosses this threshold
+#   limit_usd -- raise BudgetExceededError (when mode: enforce) at this threshold
+#
+# Setting a limit to 0 disables that threshold.
+#
+# Production env vars:
+#   BUDGET_MODE                   -- observe | enforce
+#   BUDGET_SESSION_WARN_USD       -- per-session soft limit
+#   BUDGET_SESSION_LIMIT_USD      -- per-session hard limit
+#   BUDGET_TENANT_WARN_USD        -- per-tenant soft limit
+#   BUDGET_TENANT_LIMIT_USD       -- per-tenant hard limit
+# budget:
+#   mode: ${BUDGET_MODE:-enforce}
+#   per_session:
+#     warn_usd: ${BUDGET_SESSION_WARN_USD:-0.0}
+#     limit_usd: ${BUDGET_SESSION_LIMIT_USD:-0.0}
+#   per_tenant:
+#     warn_usd: ${BUDGET_TENANT_WARN_USD:-0.0}
+#     limit_usd: ${BUDGET_TENANT_LIMIT_USD:-0.0}

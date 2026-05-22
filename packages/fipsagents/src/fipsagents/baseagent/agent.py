@@ -48,6 +48,7 @@ from fipsagents.baseagent.llm import (
 from fipsagents.baseagent.reasoning import ThinkTagParser, create_reasoning_parser
 from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, create_memory_client
 from fipsagents.baseagent.prompts import PromptLoader, PromptNotFoundError
+from fipsagents.baseagent.pricing import compute_cost
 from fipsagents.baseagent.rules import RuleLoader
 from fipsagents.baseagent.skills import SkillLoader
 from fipsagents.baseagent.tools import ToolRegistry, ToolResult
@@ -748,6 +749,19 @@ class BaseAgent(abc.ABC):
                         threshold=float(_limits.max_iterations_per_turn),
                         actual=float(metrics.model_calls),
                     )
+                elif _limits.max_cost_per_turn_usd is not None:
+                    _turn_cost = compute_cost(
+                        self.config.model.model,
+                        input_tokens=_cumulative_prompt,
+                        output_tokens=_cumulative_completion,
+                        pricing=self.config.pricing,
+                    )
+                    if _turn_cost > _limits.max_cost_per_turn_usd:
+                        _exceeded = LimitExceeded(
+                            limit_type="cost",
+                            threshold=float(_limits.max_cost_per_turn_usd),
+                            actual=float(_turn_cost),
+                        )
 
                 if _exceeded is not None:
                     _limit_audit = logging.getLogger(

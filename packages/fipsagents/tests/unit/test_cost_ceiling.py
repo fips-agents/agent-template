@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from fipsagents.baseagent.agent import BaseAgent
-from fipsagents.baseagent.config import LimitsConfig
+from fipsagents.baseagent.config import LimitsConfig, PricingConfig, PricingRate
 from fipsagents.baseagent.events import (
     LimitExceeded,
     StreamComplete,
@@ -61,21 +61,28 @@ class _StubLLM:
 
 
 class _StubAgent(BaseAgent):
-    def __init__(self, *, llm, limits=None, extra_tools=None):
+    def __init__(self, *, llm, limits=None, extra_tools=None, pricing=None):
         self.llm = llm
-        self.config = SimpleNamespace(
-            model=SimpleNamespace(limits=limits),
-            tools=SimpleNamespace(enabled=True),
-            memory=SimpleNamespace(
-                loading_pattern="eager",
-                prefix_role="system",
-                max_prefix_chars=8000,
-                injection_mode="prefix",
-                injection_tag="user_memories",
-                max_results=50,
-                min_weight=0.0,
-            ),
-        ) if limits is not None else None
+        if limits is not None or pricing is not None:
+            self.config = SimpleNamespace(
+                model=SimpleNamespace(
+                    limits=limits,
+                    model="test-model",
+                ),
+                tools=SimpleNamespace(enabled=True),
+                memory=SimpleNamespace(
+                    loading_pattern="eager",
+                    prefix_role="system",
+                    max_prefix_chars=8000,
+                    injection_mode="prefix",
+                    injection_tag="user_memories",
+                    max_results=50,
+                    min_weight=0.0,
+                ),
+                pricing=pricing if pricing is not None else PricingConfig(),
+            )
+        else:
+            self.config = None
         self.messages = []
         self.tools = ToolRegistry()
         self._question_pending = None
@@ -272,3 +279,112 @@ async def test_token_limit_under_threshold_no_trigger():
     complete = [e for e in events if isinstance(e, StreamComplete)]
     assert len(complete) == 1
     assert complete[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_cost_limit_triggers():
+    """LLM reports usage exceeding max_cost_per_turn_usd -> LimitExceeded emitted."""
+    # Set pricing: $0.10 per 1K input tokens, $0.20 per 1K output tokens
+    # Turn uses 500 input + 500 output = $0.05 + $0.10 = $0.15 total
+    pricing = PricingConfig(
+        default=PricingRate(
+            input_per_1k=0.10,
+            output_per_1k=0.20,
+        )
+    )
+    limits = LimitsConfig(max_cost_per_turn_usd=0.10)  # Set limit below the actual cost
+    llm = _StubLLM([
+        [
+            _chunk(content="Hello world"),
+            _chunk(finish_reason="stop", usage=_usage(prompt=500, completion=500)),
+        ],
+    ])
+    agent = _StubAgent(llm=llm, limits=limits, pricing=pricing)
+
+    events = []
+    async for ev in agent.astep_stream(max_iterations=5):
+        events.append(ev)
+
+    limit_events = [e for e in events if isinstance(e, LimitExceeded)]
+    assert len(limit_events) == 1
+    assert limit_events[0].limit_type == "cost"
+    assert limit_events[0].threshold == 0.10
+    assert limit_events[0].actual == 0.15  # (500/1000)*0.10 + (500/1000)*0.20
+
+    complete = [e for e in events if isinstance(e, StreamComplete)]
+    assert len(complete) == 1
+    assert complete[0].finish_reason == "limit"
+
+
+@pytest.mark.asyncio
+async def test_cost_limit_under_threshold_no_trigger():
+    """Cost exactly at or below the threshold does not trigger the limit."""
+    pricing = PricingConfig(
+        default=PricingRate(
+            input_per_1k=0.10,
+            output_per_1k=0.20,
+        )
+    )
+    limits = LimitsConfig(max_cost_per_turn_usd=0.20)  # Set limit above the actual cost
+    llm = _StubLLM([
+        [
+            _chunk(content="Under budget"),
+            _chunk(finish_reason="stop", usage=_usage(prompt=500, completion=500)),
+        ],
+    ])
+    agent = _StubAgent(llm=llm, limits=limits, pricing=pricing)
+
+    events = []
+    async for ev in agent.astep_stream(max_iterations=5):
+        events.append(ev)
+
+    limit_events = [e for e in events if isinstance(e, LimitExceeded)]
+    assert len(limit_events) == 0
+
+    complete = [e for e in events if isinstance(e, StreamComplete)]
+    assert len(complete) == 1
+    assert complete[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_cost_limit_prevents_tool_dispatch():
+    """When cost limit is exceeded after a model call that also has tool_calls,
+    the tools should NOT be dispatched."""
+    pricing = PricingConfig(
+        default=PricingRate(
+            input_per_1k=0.10,
+            output_per_1k=0.20,
+        )
+    )
+    limits = LimitsConfig(max_cost_per_turn_usd=0.05)  # Very low limit
+    llm = _StubLLM([
+        # Model returns a tool call AND usage that exceeds the cost limit.
+        [
+            _chunk(tool_calls=[_tc_delta(0, call_id="c1", name="echo")]),
+            _chunk(tool_calls=[_tc_delta(0, arguments='{"msg": "blocked"}')]),
+            _chunk(finish_reason="tool_calls", usage=_usage(prompt=500, completion=500)),
+        ],
+    ])
+    agent = _StubAgent(llm=llm, limits=limits, pricing=pricing, extra_tools=[echo])
+
+    events = []
+    async for ev in agent.astep_stream(max_iterations=10):
+        events.append(ev)
+
+    # Limit should fire.
+    limit_events = [e for e in events if isinstance(e, LimitExceeded)]
+    assert len(limit_events) == 1
+    assert limit_events[0].limit_type == "cost"
+
+    # Tool should NOT have been dispatched.
+    tool_results = [e for e in events if isinstance(e, ToolResultEvent)]
+    assert len(tool_results) == 0
+
+    # The tool call deltas are still emitted (they happen during streaming
+    # before usage is known), but the actual execution is prevented.
+    tc_deltas = [e for e in events if isinstance(e, ToolCallDelta)]
+    assert len(tc_deltas) > 0
+
+    complete = [e for e in events if isinstance(e, StreamComplete)]
+    assert len(complete) == 1
+    assert complete[0].finish_reason == "limit"
