@@ -17,6 +17,8 @@ from fipsagents.baseagent.events import (
     StreamComplete,
     StreamEvent,
     ToolResultEvent,
+    WorkItemCheckedOut,
+    WorkItemCompleted,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,6 +121,26 @@ class MetricsCollector:
             labelnames=["source", "event_type"],
             registry=self._registry,
         )
+        self.work_items_checked_out = Counter(
+            "agent_work_items_checked_out_total",
+            "Total work items checked out",
+            registry=self._registry,
+        )
+        self.work_items_completed = Counter(
+            "agent_work_items_completed_total",
+            "Total work items completed",
+            registry=self._registry,
+        )
+        self.work_item_duration = Histogram(
+            "agent_work_item_duration_seconds",
+            "Work item processing duration",
+            registry=self._registry,
+        )
+        self.work_item_lease_expiries = Counter(
+            "agent_work_item_lease_expiries_total",
+            "Total work item lease expiries",
+            registry=self._registry,
+        )
 
     def _token_labels(
         self,
@@ -180,6 +202,10 @@ class MetricsCollector:
                     event_type="",
                     status="failed",
                 ).inc()
+            elif isinstance(event, WorkItemCheckedOut):
+                self.work_items_checked_out.inc()
+            elif isinstance(event, WorkItemCompleted):
+                self.work_items_completed.inc()
             elif isinstance(event, StreamComplete):
                 m = event.metrics
                 if m.prompt_tokens is not None:

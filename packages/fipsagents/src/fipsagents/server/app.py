@@ -157,6 +157,8 @@ class OpenAIChatServer:
         self._chunker: Chunker | None = None
         self._chunk_store: ChunkStore | None = None
         self._graph_store: GraphStore | None = None
+        self._work_item_store: Any = None
+        self._lease_expiry_task: asyncio.Task[None] | None = None
         self._chunking_tasks: set[asyncio.Task] = set()
         self._metrics_collector: Any = None  # Set in lifespan
         self._budget_enforcer: Any = None  # Set in lifespan
@@ -214,8 +216,15 @@ class OpenAIChatServer:
             if server_cfg.files.enabled else None
         )
 
+        work_items_cfg = getattr(server_cfg, "work_items", None)
+        work_items_backend = (
+            work_items_cfg.backend or server_cfg.storage.backend
+            if work_items_cfg is not None and work_items_cfg.enabled else None
+        )
+
         has_sqlite_feature = "sqlite" in {
             sessions_backend, traces_backend, feedback_backend, files_backend,
+            work_items_backend,
         }
         if has_sqlite_feature:
             from .sqlite import SqliteConnectionManager
@@ -345,6 +354,23 @@ class OpenAIChatServer:
             )
         else:
             self._graph_store = NullGraphStore()
+
+        # Work-item store.
+        if work_items_cfg is not None and work_items_cfg.enabled:
+            from .work_items import create_work_item_store
+            self._work_item_store = create_work_item_store(
+                work_items_backend,
+                sqlite_path=server_cfg.storage.sqlite_path,
+                sqlite_connection=sqlite_conn,
+            )
+            self._lease_expiry_task = asyncio.create_task(
+                self._run_lease_expiry(
+                    work_items_cfg.expire_check_interval_seconds,
+                ),
+            )
+            logger.info(
+                "WorkItemStore initialized (backend=%s)", work_items_backend,
+            )
 
         # Initialize metrics collector.
         self._metrics_collector = create_metrics_collector(
@@ -501,6 +527,14 @@ class OpenAIChatServer:
                 await self._chunk_store.close()
             if self._graph_store is not None:
                 await self._graph_store.close()
+            if self._lease_expiry_task is not None:
+                self._lease_expiry_task.cancel()
+                try:
+                    await self._lease_expiry_task
+                except asyncio.CancelledError:
+                    pass
+            if self._work_item_store is not None:
+                await self._work_item_store.close()
             if self._bytes_store is not None:
                 await self._bytes_store.close()
             await self._virus_scanner.close()
@@ -524,6 +558,24 @@ class OpenAIChatServer:
                 break
             except Exception:
                 logger.warning("Housekeeping error", exc_info=True)
+
+    async def _run_lease_expiry(self, interval: int = 60) -> None:
+        """Periodically expire stale work-item leases."""
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                if self._work_item_store is not None:
+                    expired = await self._work_item_store.expire_leases()
+                    if expired:
+                        logger.info(
+                            "Expired %d work-item leases", len(expired),
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.warning(
+                    "Lease expiry sweep failed", exc_info=True,
+                )
 
     async def _do_housekeeping(self) -> None:
         """Run one housekeeping pass."""
@@ -1888,6 +1940,9 @@ class OpenAIChatServer:
                 getattr(_perm_cfg, "mode", "enforce") if _perm_cfg else "enforce"
             )
             agent._permission_preapproved = set()
+            agent._work_item_store = self._work_item_store
+            agent._work_item_actor_id = session_id or "anonymous"
+            agent._work_item_events = []
 
             # Compaction check (before agent loop).
             await self._maybe_compact(agent, session_id=session_id)
@@ -1985,6 +2040,9 @@ class OpenAIChatServer:
                 getattr(_perm_cfg, "mode", "enforce") if _perm_cfg else "enforce"
             )
             self._agent._permission_preapproved = set()
+            self._agent._work_item_store = self._work_item_store
+            self._agent._work_item_actor_id = session_id or "anonymous"
+            self._agent._work_item_events = []
 
             # Compaction check (before agent loop).
             await self._maybe_compact(

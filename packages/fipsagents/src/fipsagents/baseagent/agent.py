@@ -179,6 +179,11 @@ class BaseAgent(abc.ABC):
         # Reducer state — set per-session by the server layer.
         self._agent_state: Any | None = None
 
+        # Work-item store — set by the server before astep_stream().
+        self._work_item_store: Any = None
+        self._work_item_actor_id: str | None = None
+        self._work_item_events: list[Any] = []
+
         # Tracks whether setup has completed.
         self._setup_done = False
 
@@ -943,6 +948,11 @@ class BaseAgent(abc.ABC):
                     _q_events = getattr(self, "_question_events", None)
                     while _q_events:
                         yield _q_events.pop(0)
+
+                    # Drain work-item events.
+                    _wi_events = getattr(self, "_work_item_events", None)
+                    while _wi_events:
+                        yield _wi_events.pop(0)
 
                     is_err = result.is_error
                     content_str = (
