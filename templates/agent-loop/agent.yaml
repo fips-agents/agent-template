@@ -447,6 +447,27 @@ server:
       # retrieval_top_k: 5
       # retrieval_min_score: 0.0
 
+  # -- Work-item pool (multi-agent coordination) ---------------------------------
+  #
+  # Enables lease-based work-item coordination between agents. Agents can
+  # check out, complete, and release work items from a shared pool.
+  #
+  # When enabled, five stock LLM tools are auto-registered:
+  #   check_available_work, checkout_work_item, complete_work_item,
+  #   release_work_item, update_work_progress
+  #
+  # work_items:
+  #   enabled: ${WORK_ITEMS_ENABLED:-false}
+  #   # backend: ${WORK_ITEMS_BACKEND:-}  # inherits storage.backend
+  #   lease_duration_seconds: 300
+  #   budget_headroom_pct: 10.0
+  #   expire_check_interval_seconds: 60
+  #   capabilities: []
+  #     # - name: "mcp:web_search"
+  #     # - name: "skill:code_review"
+  #     # - name: "trust"
+  #     #   value: 3
+
 # -- Memory backend (optional) -----------------------------------------------
 #
 # Controls which memory backend the agent uses.

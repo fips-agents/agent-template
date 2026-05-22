@@ -399,12 +399,14 @@ class ToolRegistry:
                     py_file.name,
                 )
                 continue
-            tool_fn = spec.factory(agent)
-            meta = self.register(tool_fn)
-            discovered.append(meta)
-            logger.debug(
-                "Registered stock tool %r from %s", meta.name, py_file.name
-            )
+            result = spec.factory(agent)
+            tools_to_register = result if isinstance(result, list) else [result]
+            for tool_fn in tools_to_register:
+                meta = self.register(tool_fn)
+                discovered.append(meta)
+                logger.debug(
+                    "Registered stock tool %r from %s", meta.name, py_file.name
+                )
 
         return discovered
 

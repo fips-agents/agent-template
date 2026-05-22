@@ -382,6 +382,101 @@ Multi-agent deployments (workflow graphs with `RemoteNode`) propagate trace cont
 
 The result is a single trace tree spanning all agents in a workflow, viewable in any W3C-compliant trace backend (Jaeger, Tempo, the OTEL collector).
 
+## Work-Item Coordination
+
+Multi-agent work distribution via a shared pool with lease-based checkout.
+Agents check out discrete work items, process them within a lease window,
+and either complete or release them back to the pool with structured
+handoff notes. The design targets ambient-agent patterns where multiple
+replicas wake periodically, claim available work, and hand off cleanly on
+budget exhaustion or failure.
+
+### Store Interface
+
+`WorkItemStore` in `fipsagents.server.work_items` follows the same ABC
+pattern as sessions, traces, and files. Phase 1 ships `NullWorkItemStore`
+(default no-op) and `SqliteWorkItemStore` (atomic checkout via
+`BEGIN IMMEDIATE`). Postgres and HTTP-routed backends are deferred.
+
+The store manages the full work-item lifecycle: create → checkout →
+progress updates → complete/release/fail. Review gates (accept/reject)
+support adversarial or human-in-the-loop acceptance. Lease expiry sweeps
+run as a periodic `asyncio.Task` in the server's lifespan.
+
+### Data Model
+
+`WorkItem` carries identity (id, title, description), lifecycle state
+(`WorkItemStatus`: available, checked_out, completed, failed,
+review_pending, blocked), priority, budget constraints (max_tokens,
+max_cost_usd, max_duration_seconds), capability requirements, dependency
+links (parent_id, depends_on), acceptance criteria, and an append-only
+`attempt_history` of `Attempt` records.
+
+`HandoffNote` is a structured bridge between attempts: accomplished,
+attempted (with failure reasons), remaining, blockers, artifacts (label →
+reference), and free-form context. The framework preserves handoff notes
+on lease expiry so the next agent inherits context without searching.
+
+### Capability Matching
+
+Each agent declares capabilities in `agent.yaml` under
+`server.work_items.capabilities`. When listing available work, the store
+filters items whose `required_capabilities` are a subset of the agent's
+offered capabilities. Matching is conjunctive (all required must be met)
+with ordinal comparison (offered value ≥ required value).
+
+```yaml
+server:
+  work_items:
+    enabled: true
+    capabilities:
+      - name: "mcp:web_search"
+      - name: "skill:code_review"
+      - name: "trust"
+        value: 3
+```
+
+Auto-discovery of capabilities from connected MCP servers and loaded
+skills is deferred to Phase 2.
+
+### Stock LLM Tools
+
+Five tools are auto-registered when `work_items.enabled: true`, using the
+`StockToolSpec` pattern from the tool registry. The `discover_stock()`
+method was extended to support factories returning a list of tools.
+
+| Tool | Purpose |
+|------|---------|
+| `check_available_work` | Query pool for capability-matched items |
+| `checkout_work_item` | Claim item, set lease |
+| `complete_work_item` | Mark done with result summary |
+| `release_work_item` | Return to pool with structured handoff |
+| `update_work_progress` | Progress update + implicit lease renewal |
+
+Tools close over `agent._work_item_store`, which the server injects
+before each `astep_stream()` call — matching the permission-source
+injection pattern.
+
+### Observability
+
+Six stream events flow through the existing observer chain:
+`WorkItemCheckedOut`, `WorkItemCompleted`, `WorkItemReleased`,
+`WorkItemFailed`, `BudgetHeadroomWarning`, `HandoffRequired`. Four
+Prometheus metrics track checkout/completion counts, processing duration,
+and lease expiries.
+
+### Session Continuity
+
+The agent-loop template includes a session-continuity rule
+(`rules/session-continuity.md`) and skill
+(`skills/session-continuity/SKILL.md`) that guide agents through a
+resume/handoff protocol. The protocol enforces incremental progress
+discipline: pick ONE work item per session, verify results before
+completing, and write a structured handoff note if unable to finish.
+
+Full design: `planning/work-item-coordination-design.md` and
+`planning/session-continuity-patterns.md`.
+
 ## Event-Triggered Mode
 
 Event-triggered mode allows agents to respond to external events (webhooks, cron schedules, message queues) rather than only serving synchronous HTTP requests. Configure one or more `EventSource`s in `agent.yaml` under `server.event_sources`; the server spawns one `asyncio.Task` per source at startup, each polling or listening for events and translating them to chat-completion requests.
