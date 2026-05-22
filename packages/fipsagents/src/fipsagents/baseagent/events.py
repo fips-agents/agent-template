@@ -287,6 +287,54 @@ class EventFailed:
     retriable: bool
 
 
+@dataclass
+class WorkItemCheckedOut:
+    """Emitted when an agent checks out a work item."""
+    item_id: str
+    actor_id: str
+    title: str
+
+
+@dataclass
+class WorkItemCompleted:
+    """Emitted when an agent completes a work item."""
+    item_id: str
+    actor_id: str
+    title: str
+
+
+@dataclass
+class WorkItemReleased:
+    """Emitted when an agent releases a work item back to the pool."""
+    item_id: str
+    actor_id: str
+    title: str
+
+
+@dataclass
+class WorkItemFailed:
+    """Emitted when an agent fails a work item."""
+    item_id: str
+    actor_id: str
+    title: str
+    error: str
+
+
+@dataclass
+class BudgetHeadroomWarning:
+    """Emitted when budget is approaching the headroom threshold."""
+    item_id: str
+    remaining_pct: float
+
+
+@dataclass
+class HandoffRequired:
+    """Emitted when a handoff is needed before lease expiry."""
+    item_id: str
+    actor_id: str
+    expires_at: str
+
+
 # Discriminated union of every event a stream can emit.
 StreamEvent = Union[
     ReasoningDelta,
@@ -312,4 +360,10 @@ StreamEvent = Union[
     EventReceived,
     EventProcessed,
     EventFailed,
+    WorkItemCheckedOut,
+    WorkItemCompleted,
+    WorkItemReleased,
+    WorkItemFailed,
+    BudgetHeadroomWarning,
+    HandoffRequired,
 ]

@@ -799,6 +799,21 @@ class GraphConfig(BaseModel):
         return v
 
 
+class CapabilityConfig(BaseModel):
+    """A capability this agent possesses for work-item matching."""
+    name: str
+    value: float = Field(default=1.0, ge=0.0)
+
+
+class WorkItemsConfig(_PerStoreBackendMixin):
+    """Work-item pool coordination settings."""
+    enabled: bool = False
+    lease_duration_seconds: int = Field(default=300, ge=30)
+    budget_headroom_pct: float = Field(default=10.0, ge=0.0, le=100.0)
+    expire_check_interval_seconds: int = Field(default=60, ge=10)
+    capabilities: list[CapabilityConfig] = Field(default_factory=list)
+
+
 class PermissionRuleConfig(BaseModel):
     """A single declarative permission rule."""
     id: str | None = None
@@ -1294,6 +1309,7 @@ class ServerConfig(BaseModel):
     event_sources: list[EventSourceConfig] = Field(default_factory=list)
     event_sink: EventSinkConfig | None = None
     graph: GraphConfig = Field(default_factory=GraphConfig)
+    work_items: WorkItemsConfig = Field(default_factory=WorkItemsConfig)
 
     @field_validator("port", mode="before")
     @classmethod
