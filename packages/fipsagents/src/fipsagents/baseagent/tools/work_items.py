@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from fipsagents.baseagent.events import (
@@ -185,6 +186,21 @@ def make_work_item_tools(agent: object) -> list:
                 sh_buf = getattr(agent, "_self_healing_events", None)
                 if sh_buf is not None:
                     sh_buf.extend(trust_events)
+                # On demotion, quarantine out-of-scope learned skills.
+                for ev in trust_events:
+                    if hasattr(ev, "from_level") and ev.to_level < ev.from_level:
+                        cfg = getattr(getattr(agent, "config", None), "self_healing", None)
+                        if cfg is not None and cfg.enabled:
+                            from fipsagents.baseagent.maturation import quarantine_out_of_scope_skills
+
+                            learned_dir = Path(cfg.learned_skills_dir)
+                            if not learned_dir.is_absolute():
+                                learned_dir = getattr(agent, "_base_dir", Path(".")) / learned_dir
+                            q_events = quarantine_out_of_scope_skills(
+                                learned_dir, ev.to_level, cfg.trust_domains,
+                            )
+                            if q_events and sh_buf is not None:
+                                sh_buf.extend(q_events)
 
         return json.dumps(
             {"id": item.id, "status": item.status.value, "title": item.title}
@@ -241,6 +257,21 @@ def make_work_item_tools(agent: object) -> list:
                 sh_buf = getattr(agent, "_self_healing_events", None)
                 if sh_buf is not None:
                     sh_buf.extend(trust_events)
+                # On demotion, quarantine out-of-scope learned skills.
+                for ev in trust_events:
+                    if hasattr(ev, "from_level") and ev.to_level < ev.from_level:
+                        cfg = getattr(getattr(agent, "config", None), "self_healing", None)
+                        if cfg is not None and cfg.enabled:
+                            from fipsagents.baseagent.maturation import quarantine_out_of_scope_skills
+
+                            learned_dir = Path(cfg.learned_skills_dir)
+                            if not learned_dir.is_absolute():
+                                learned_dir = getattr(agent, "_base_dir", Path(".")) / learned_dir
+                            q_events = quarantine_out_of_scope_skills(
+                                learned_dir, ev.to_level, cfg.trust_domains,
+                            )
+                            if q_events and sh_buf is not None:
+                                sh_buf.extend(q_events)
 
         return json.dumps(
             {"id": item.id, "status": item.status.value, "title": item.title}

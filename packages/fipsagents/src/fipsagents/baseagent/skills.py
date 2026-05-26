@@ -183,6 +183,17 @@ class SkillLoader:
                 )
                 continue
 
+            # Skip quarantined skills.
+            try:
+                post = frontmatter.load(str(skill_file))
+                if post.metadata.get("quarantined", False):
+                    logger.info(
+                        "Skipping quarantined learned skill: %s", skill.name,
+                    )
+                    continue
+            except Exception:
+                pass  # frontmatter parse errors already handled above
+
             if skill.name in self._skills:
                 logger.warning(
                     "Learned skill %r conflicts with bundled skill — skipping "

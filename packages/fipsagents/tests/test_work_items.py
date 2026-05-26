@@ -4,12 +4,15 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import frontmatter
 import pytest
 import pytest_asyncio
 
 from fipsagents.baseagent.events import (
+    SkillQuarantined,
     TrustLevelChanged,
     WorkItemCheckedOut,
     WorkItemReleased,
@@ -622,6 +625,72 @@ class TestWorkItemStockTools:
         assert len(trust_events) == 1
         assert trust_events[0].from_level == 1
         assert trust_events[0].to_level == 0
+
+    @pytest.mark.asyncio
+    async def test_demotion_quarantines_out_of_scope_skills(self, tmp_path):
+        """Trust demotion during release quarantines learned skills outside scope."""
+        from fipsagents.baseagent.config import AgentConfig, SelfHealingConfig
+        from fipsagents.baseagent.tools.work_items import make_work_item_tools
+        from fipsagents.baseagent.trust import TrustManager
+
+        agent = _make_mock_agent()
+        agent._self_healing_events = []
+        agent._base_dir = tmp_path
+
+        # Configure self-healing with restricted trust domains.
+        agent.config = AgentConfig(
+            self_healing=SelfHealingConfig(
+                enabled=True,
+                trust_level=1,
+                trust_domains=["document_processing"],
+                learned_skills_dir=str(tmp_path / "learned_skills"),
+            ),
+        )
+        agent.config.server.work_items.enabled = True
+
+        # Create a learned skill in an out-of-scope domain.
+        skill_dir = tmp_path / "learned_skills" / "nlp-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: nlp-skill\ndomain: nlp\nversion: 1\n"
+            "description: NLP skill\n---\nContent\n"
+        )
+
+        # Set up trust manager at level 1, score just above demotion threshold.
+        agent._trust_manager = TrustManager(
+            thresholds=(10.0, 50.0, 200.0, 500.0),
+        )
+        agent._trust_manager._state.level = 1
+        agent._trust_manager._state.score = 5.0
+
+        agent._work_item_store.release = AsyncMock(return_value=WorkItem(
+            id="wi_q", title="Quarantine trigger", status=WorkItemStatus.available,
+        ))
+
+        tools = make_work_item_tools(agent)
+        release_tool = next(
+            t for t in tools
+            if getattr(t, "__base_agent_tool__").name == "release_work_item"
+        )
+
+        await release_tool(
+            item_id="wi_q",
+            accomplished=["partial"],
+            remaining=["rest"],
+        )
+
+        # Verify quarantine event was emitted.
+        q_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, SkillQuarantined)
+        ]
+        assert len(q_events) == 1
+        assert q_events[0].skill_name == "nlp-skill"
+        assert "nlp" in q_events[0].reason
+
+        # Verify the skill file was actually marked quarantined.
+        post = frontmatter.load(str(skill_dir / "SKILL.md"))
+        assert post.metadata["quarantined"] is True
 
 
 # ---------------------------------------------------------------------------

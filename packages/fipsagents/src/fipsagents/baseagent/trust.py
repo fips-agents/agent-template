@@ -142,6 +142,44 @@ class TrustManager:
         self._pending_events = []
         return events
 
+    def seed_from_parent(
+        self,
+        *,
+        parent_trust_level: int,
+        capability_overlap: list[str],
+        seed_level: int | None = None,
+    ) -> TrustState:
+        """Seed initial trust from a parent agent's lineage.
+
+        If the parent has trust level >= 3 and there is capability overlap,
+        the child starts at trust level 1.  An explicit ``seed_level``
+        overrides the automatic logic.
+        """
+        if seed_level is not None:
+            target = min(seed_level, 4)
+        elif parent_trust_level >= 3 and capability_overlap:
+            target = 1
+        else:
+            return self._state
+
+        if target > 0 and target <= 4:
+            self._state.level = target
+            self._state.score = self._thresholds[target - 1]
+            self._add_event(
+                "seeded",
+                0,
+                f"trust seeded to level {target} from parent "
+                f"(trust={parent_trust_level}, "
+                f"overlap={len(capability_overlap)} capabilities)",
+            )
+            self._pending_events.append(TrustLevelChanged(
+                from_level=0,
+                to_level=target,
+                score=self._state.score,
+                reason=f"seeded from parent agent (trust level {parent_trust_level})",
+            ))
+        return self._state
+
     # -- Internal helpers ----------------------------------------------------
 
     def _add_event(self, event_type: str, delta: float, reason: str) -> None:

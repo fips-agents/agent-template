@@ -74,6 +74,19 @@ def make_self_healing_tools(agent: object) -> list:
                 "current": cfg.trust_level,
             })
 
+        # Stage-aware gating: proto-agents can only suggest, not learn.
+        maturation = getattr(agent, "_maturation_manager", None)
+        if maturation is not None:
+            from fipsagents.baseagent.maturation import MaturationStage
+
+            stage = maturation.current_stage()
+            perms = maturation.get_permissions(stage)
+            if not perms.can_create_skills:
+                return json.dumps({
+                    "error": f"Agent at {stage.value} stage cannot create skills. "
+                    "Use suggest_skill instead.",
+                })
+
         if not _KEBAB_RE.match(name):
             return json.dumps({
                 "error": "Invalid skill name",

@@ -509,6 +509,69 @@ class TestWorkItemTrustIntegration:
         )
         assert "wi_1" in result
 
+# ---------------------------------------------------------------------------
+# TrustManager — trust seeding from parent lineage
+# ---------------------------------------------------------------------------
+
+
+class TestTrustSeeding:
+    def test_seed_from_trusted_parent_with_overlap(self):
+        tm = TrustManager()
+        tm.seed_from_parent(parent_trust_level=3, capability_overlap=["nlp", "extraction"])
+        assert tm.level == 1
+        assert tm.score == 10.0  # default level-1 threshold
+
+    def test_seed_no_overlap_stays_at_zero(self):
+        tm = TrustManager()
+        tm.seed_from_parent(parent_trust_level=4, capability_overlap=[])
+        assert tm.level == 0
+        assert tm.score == 0.0
+
+    def test_seed_low_parent_trust_no_seed(self):
+        tm = TrustManager()
+        tm.seed_from_parent(parent_trust_level=2, capability_overlap=["nlp"])
+        assert tm.level == 0
+
+    def test_seed_explicit_level_override(self):
+        tm = TrustManager()
+        tm.seed_from_parent(parent_trust_level=1, capability_overlap=[], seed_level=2)
+        assert tm.level == 2
+        assert tm.score == 50.0  # default level-2 threshold
+
+    def test_seed_explicit_level_capped_at_4(self):
+        tm = TrustManager()
+        tm.seed_from_parent(parent_trust_level=4, capability_overlap=["nlp"], seed_level=7)
+        assert tm.level == 4
+        assert tm.score == 500.0  # default level-4 threshold
+
+    def test_seed_records_history_event(self):
+        tm = TrustManager()
+        tm.seed_from_parent(parent_trust_level=3, capability_overlap=["doc_processing"])
+        assert any(e.event_type == "seeded" for e in tm.get_state().history)
+
+    def test_seed_emits_trust_level_changed(self):
+        tm = TrustManager()
+        tm.seed_from_parent(parent_trust_level=3, capability_overlap=["nlp"])
+        events = tm.drain_events()
+        assert len(events) == 1
+        assert events[0].from_level == 0
+        assert events[0].to_level == 1
+
+    def test_seed_explicit_zero_is_noop(self):
+        """seed_level=0 should not change anything (target <= 0 guard)."""
+        tm = TrustManager()
+        tm.seed_from_parent(parent_trust_level=4, capability_overlap=["nlp"], seed_level=0)
+        assert tm.level == 0
+        assert tm.score == 0.0
+        assert tm.drain_events() == []
+
+
+# ---------------------------------------------------------------------------
+# Work-item integration — release (continued from TestWorkItemTrustIntegration)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkItemTrustRelease:
     @pytest.mark.asyncio
     async def test_release_does_not_record_trust(self):
         """release_work_item should NOT record trust (release is handoff, not failure)."""

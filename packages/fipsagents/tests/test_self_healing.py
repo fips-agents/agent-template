@@ -306,6 +306,29 @@ class TestLearnSkill:
         assert edited_events[0].to_version == 2
 
     @pytest.mark.asyncio
+    async def test_maturation_proto_agent_blocks_learn(self, tmp_path):
+        """Maturation gate blocks learn_skill even if trust_level config passes."""
+        agent = _make_agent_stub(tmp_path, trust_level=1)  # passes static check
+        from fipsagents.baseagent.maturation import MaturationManager
+        from fipsagents.baseagent.trust import TrustManager, TrustState
+
+        tm = TrustManager(state=TrustState(level=0, score=0.0))
+        agent._maturation_manager = MaturationManager(tm)
+
+        tools = make_self_healing_tools(agent)
+        learn = tools[0]
+        result = json.loads(await learn(
+            name="blocked-skill",
+            description="Should fail",
+            content="Content",
+            domain="document_processing",
+            trigger="test",
+        ))
+        assert "error" in result
+        assert "suggest_skill" in result["error"]
+        assert "proto_agent" in result["error"]
+
+    @pytest.mark.asyncio
     async def test_max_skills_cap_rejects_new_skill(self, tmp_path):
         agent = _make_agent_stub(tmp_path, max_skills=2)
         tools = make_self_healing_tools(agent)
@@ -634,6 +657,33 @@ class TestSkillLoaderLearnedSkills:
 
         loaded = loader.load_learned(learned_dir)
         assert loaded == []
+
+
+class TestSkillLoaderQuarantine:
+    def test_quarantined_skills_excluded_from_load(self, tmp_path):
+        """Quarantined skills are not loaded by SkillLoader.load_learned()."""
+        learned_dir = tmp_path / "learned_skills"
+
+        # Active skill.
+        active_dir = learned_dir / "active-skill"
+        active_dir.mkdir(parents=True)
+        (active_dir / "SKILL.md").write_text(
+            "---\nname: active-skill\ndomain: nlp\nversion: 1\n"
+            "description: Active skill\n---\nActive content\n"
+        )
+
+        # Quarantined skill.
+        q_dir = learned_dir / "quarantined-skill"
+        q_dir.mkdir(parents=True)
+        (q_dir / "SKILL.md").write_text(
+            "---\nname: quarantined-skill\ndomain: nlp\nquarantined: true\n"
+            "version: 1\ndescription: Quarantined skill\n---\nQuarantined\n"
+        )
+
+        loader = SkillLoader()
+        loaded = loader.load_learned(learned_dir)
+        assert "active-skill" in loaded
+        assert "quarantined-skill" not in loaded
 
 
 class TestSkillLoaderManifest:
