@@ -180,6 +180,11 @@ def make_work_item_tools(agent: object) -> list:
         trust = getattr(agent, "_trust_manager", None)
         if trust is not None:
             trust.record_completion(reason=f"completed work item {item_id}")
+            trust_events = trust.drain_events()
+            if trust_events:
+                sh_buf = getattr(agent, "_self_healing_events", None)
+                if sh_buf is not None:
+                    sh_buf.extend(trust_events)
 
         return json.dumps(
             {"id": item.id, "status": item.status.value, "title": item.title}
@@ -223,6 +228,20 @@ def make_work_item_tools(agent: object) -> list:
         item = await store.release(item_id, handoff_note=handoff)
         agent._checked_out_work_item = None
         _emit(WorkItemReleased(item_id=item.id, actor_id=actor, title=item.title))
+
+        # Record release as a trust failure (agent couldn't finish the item).
+        reason = "; ".join(remaining[:3]) if remaining else "no details"
+        trust = getattr(agent, "_trust_manager", None)
+        if trust is not None:
+            trust.record_failure(
+                reason=f"released work item {item_id}: {reason}",
+            )
+            trust_events = trust.drain_events()
+            if trust_events:
+                sh_buf = getattr(agent, "_self_healing_events", None)
+                if sh_buf is not None:
+                    sh_buf.extend(trust_events)
+
         return json.dumps(
             {"id": item.id, "status": item.status.value, "title": item.title}
         )

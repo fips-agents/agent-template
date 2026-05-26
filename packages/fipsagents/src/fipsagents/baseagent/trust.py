@@ -12,6 +12,8 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from fipsagents.baseagent.events import TrustLevelChanged
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,6 +73,7 @@ class TrustManager:
     ) -> None:
         self._thresholds = thresholds
         self._state = state or TrustState()
+        self._pending_events: list[TrustLevelChanged] = []
 
     def record_completion(
         self, *, quality_score: float = 1.0, reason: str = ""
@@ -133,6 +136,12 @@ class TrustManager:
         """Current trust score."""
         return self._state.score
 
+    def drain_events(self) -> list[TrustLevelChanged]:
+        """Return and clear any pending trust-level-change events."""
+        events = self._pending_events
+        self._pending_events = []
+        return events
+
     # -- Internal helpers ----------------------------------------------------
 
     def _add_event(self, event_type: str, delta: float, reason: str) -> None:
@@ -158,6 +167,12 @@ class TrustManager:
             old_level = self._state.level
             self._state.level += 1
             self._state.last_promotion = datetime.now(timezone.utc).isoformat()
+            self._pending_events.append(TrustLevelChanged(
+                from_level=old_level,
+                to_level=self._state.level,
+                score=self._state.score,
+                reason=f"promoted from level {old_level} to {self._state.level}",
+            ))
             self._add_event(
                 "promotion",
                 0,
@@ -178,6 +193,12 @@ class TrustManager:
         if self._state.score < current_threshold * 0.5:
             old_level = self._state.level
             self._state.level -= 1
+            self._pending_events.append(TrustLevelChanged(
+                from_level=old_level,
+                to_level=self._state.level,
+                score=self._state.score,
+                reason=f"demoted from level {old_level} to {self._state.level}",
+            ))
             self._add_event(
                 "demotion",
                 0,

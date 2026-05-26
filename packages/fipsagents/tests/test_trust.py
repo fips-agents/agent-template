@@ -377,6 +377,64 @@ class TestTrustLevelChangedEvent:
 
 
 # ---------------------------------------------------------------------------
+# TrustManager — drain_events (buffered TrustLevelChanged emission)
+# ---------------------------------------------------------------------------
+
+
+class TestTrustManagerDrainEvents:
+    def test_promotion_emits_trust_level_changed(self):
+        """10 completions triggers promotion to level 1; drain_events returns it."""
+        tm = TrustManager()
+        for _ in range(10):
+            tm.record_completion()
+        assert tm.level == 1
+
+        events = tm.drain_events()
+        assert len(events) == 1
+        assert isinstance(events[0], TrustLevelChanged)
+        assert events[0].from_level == 0
+        assert events[0].to_level == 1
+        assert events[0].score == 10.0
+
+    def test_demotion_emits_trust_level_changed(self):
+        """Violation after promotion triggers demotion event."""
+        tm = TrustManager()
+        for _ in range(10):
+            tm.record_completion()
+        assert tm.level == 1
+        # Clear the promotion event.
+        tm.drain_events()
+
+        # Violation drops score by 50 (10 - 50 = 0, clamped), well below
+        # the demotion threshold of 5.0.
+        tm.record_violation()
+        assert tm.level == 0
+
+        events = tm.drain_events()
+        assert len(events) == 1
+        assert isinstance(events[0], TrustLevelChanged)
+        assert events[0].from_level == 1
+        assert events[0].to_level == 0
+
+    def test_drain_events_clears_buffer(self):
+        """Second drain_events call returns empty after the first consumed events."""
+        tm = TrustManager()
+        for _ in range(10):
+            tm.record_completion()
+        first = tm.drain_events()
+        assert len(first) == 1
+        second = tm.drain_events()
+        assert second == []
+
+    def test_no_transition_no_events(self):
+        """A single completion (no level change) produces no events."""
+        tm = TrustManager()
+        tm.record_completion()
+        assert tm.level == 0
+        assert tm.drain_events() == []
+
+
+# ---------------------------------------------------------------------------
 # Work-item integration — trust recording on completion
 # ---------------------------------------------------------------------------
 

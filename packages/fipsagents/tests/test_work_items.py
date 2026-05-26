@@ -10,7 +10,9 @@ import pytest
 import pytest_asyncio
 
 from fipsagents.baseagent.events import (
+    TrustLevelChanged,
     WorkItemCheckedOut,
+    WorkItemReleased,
 )
 from fipsagents.server.work_items import (
     Capability,
@@ -538,6 +540,88 @@ class TestWorkItemStockTools:
         assert isinstance(event, WorkItemCheckedOut)
         assert event.item_id == "wi_1"
         assert event.actor_id == "test-actor"
+
+    @pytest.mark.asyncio
+    async def test_complete_work_item_drains_trust_events(self):
+        """Promotion events from TrustManager surface in _self_healing_events."""
+        from fipsagents.baseagent.tools.work_items import make_work_item_tools
+        from fipsagents.baseagent.trust import TrustManager
+
+        agent = _make_mock_agent()
+        agent._self_healing_events = []
+
+        # Use a real TrustManager with a low promotion threshold so a single
+        # completion triggers a level 0 -> 1 transition.
+        agent._trust_manager = TrustManager(thresholds=(1.0, 50.0, 200.0, 500.0))
+
+        agent._work_item_store.complete = AsyncMock(return_value=WorkItem(
+            id="wi_promo", title="Promo task", status=WorkItemStatus.completed,
+        ))
+
+        tools = make_work_item_tools(agent)
+        complete_tool = next(
+            t for t in tools
+            if getattr(t, "__base_agent_tool__").name == "complete_work_item"
+        )
+
+        await complete_tool(
+            item_id="wi_promo",
+            result_summary="done",
+            accomplished=["everything"],
+        )
+
+        # Trust event should have been drained into _self_healing_events.
+        assert len(agent._self_healing_events) == 1
+        evt = agent._self_healing_events[0]
+        assert isinstance(evt, TrustLevelChanged)
+        assert evt.from_level == 0
+        assert evt.to_level == 1
+
+    @pytest.mark.asyncio
+    async def test_release_work_item_records_trust_failure(self):
+        """Releasing a work item records a trust failure and drains events."""
+        from fipsagents.baseagent.tools.work_items import make_work_item_tools
+        from fipsagents.baseagent.trust import TrustManager
+
+        agent = _make_mock_agent()
+        agent._self_healing_events = []
+
+        # Start at level 1 with score just above demotion threshold (5.0)
+        # so a single failure (-5.0) triggers demotion.
+        agent._trust_manager = TrustManager(
+            thresholds=(10.0, 50.0, 200.0, 500.0),
+        )
+        # Manually set level and score for the test scenario.
+        agent._trust_manager._state.level = 1
+        agent._trust_manager._state.score = 5.0
+
+        agent._work_item_store.release = AsyncMock(return_value=WorkItem(
+            id="wi_rel", title="Released task", status=WorkItemStatus.available,
+        ))
+
+        tools = make_work_item_tools(agent)
+        release_tool = next(
+            t for t in tools
+            if getattr(t, "__base_agent_tool__").name == "release_work_item"
+        )
+
+        await release_tool(
+            item_id="wi_rel",
+            accomplished=["step 1"],
+            remaining=["step 2", "step 3"],
+        )
+
+        # Trust failure should have been recorded.
+        assert agent._trust_manager._state.failures == 1
+
+        # Demotion event should be in _self_healing_events.
+        trust_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, TrustLevelChanged)
+        ]
+        assert len(trust_events) == 1
+        assert trust_events[0].from_level == 1
+        assert trust_events[0].to_level == 0
 
 
 # ---------------------------------------------------------------------------
