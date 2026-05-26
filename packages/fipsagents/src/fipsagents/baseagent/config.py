@@ -375,9 +375,23 @@ class SelfHealingConfig(BaseModel):
     )
     learned_skills_dir: str = "./learned_skills"
     max_skills: int = Field(default=50, ge=1)
+    parent_agent_id: str | None = None
+    parent_trust_level: int | None = None
+    parent_capability_overlap: list[str] = Field(default_factory=list)
+    seed_trust_level: int | None = None
     trust_thresholds: TrustThresholdsConfig = Field(
         default_factory=TrustThresholdsConfig
     )
+
+
+class MaturationConfig(BaseModel):
+    """Agent maturation lifecycle configuration."""
+
+    enabled: bool = False
+    apprentice_max_trust: int = Field(default=1, ge=0, le=4)
+    journeyman_max_trust: int = Field(default=3, ge=0, le=4)
+    specialist_min_trust: int = Field(default=4, ge=1, le=4)
+    promotion_requires: Literal["auto", "human_approval"] = "auto"
 
 
 class BackoffConfig(BaseModel):
@@ -1407,6 +1421,7 @@ class AgentConfig(BaseModel):
     subagents: list[SubagentConfig] = Field(default_factory=list)
     prompt_assembly: PromptAssemblyConfig | None = None
     self_healing: SelfHealingConfig = Field(default_factory=SelfHealingConfig)
+    maturation: MaturationConfig = Field(default_factory=MaturationConfig)
 
     @model_validator(mode="after")
     def _no_duplicate_subagent_names(self) -> "AgentConfig":

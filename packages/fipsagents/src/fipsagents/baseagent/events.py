@@ -377,6 +377,24 @@ class SkillQuarantined:
     reason: str
 
 
+@dataclass
+class StagePromoted:
+    """Emitted when an agent advances to a higher maturation stage."""
+    from_stage: str
+    to_stage: str
+    trust_level: int
+    reason: str
+
+
+@dataclass
+class StageDemoted:
+    """Emitted when an agent drops to a lower maturation stage."""
+    from_stage: str
+    to_stage: str
+    trust_level: int
+    reason: str
+
+
 # Discriminated union of every event a stream can emit.
 StreamEvent = Union[
     ReasoningDelta,
@@ -413,4 +431,6 @@ StreamEvent = Union[
     SkillEdited,
     SkillRolledBack,
     SkillQuarantined,
+    StagePromoted,
+    StageDemoted,
 ]

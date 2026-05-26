@@ -192,6 +192,9 @@ class BaseAgent(abc.ABC):
         # Trust manager — initialized in setup() when self_healing is enabled.
         self._trust_manager: Any = None
 
+        # Maturation manager — initialized in setup() when maturation is enabled.
+        self._maturation_manager: Any = None
+
         # Capability auto-discovery — populated by _discover_capabilities()
         # at the end of setup(). Used for work-item matching.
         self._discovered_capabilities: list[Any] = []
@@ -306,9 +309,41 @@ class BaseAgent(abc.ABC):
             self._trust_manager = TrustManager(
                 thresholds=(th.level_1, th.level_2, th.level_3, th.level_4),
             )
+
+            # Seed trust from parent lineage if configured.
+            sh = self.config.self_healing
+            if sh.parent_trust_level is not None:
+                self._trust_manager.seed_from_parent(
+                    parent_trust_level=sh.parent_trust_level,
+                    capability_overlap=sh.parent_capability_overlap,
+                    seed_level=sh.seed_trust_level,
+                )
+
             logger.info(
                 "Trust manager initialized (level=%d)", self._trust_manager.level
             )
+
+        # 6c. Maturation manager (when maturation is enabled).
+        if self.config.maturation.enabled:
+            from fipsagents.baseagent.maturation import MaturationManager
+
+            trust_mgr = getattr(self, "_trust_manager", None)
+            if trust_mgr is not None:
+                self._maturation_manager = MaturationManager(
+                    trust_mgr,
+                    apprentice_max_trust=self.config.maturation.apprentice_max_trust,
+                    journeyman_max_trust=self.config.maturation.journeyman_max_trust,
+                    specialist_min_trust=self.config.maturation.specialist_min_trust,
+                )
+                logger.info(
+                    "Maturation manager initialized (stage=%s)",
+                    self._maturation_manager.current_stage().value,
+                )
+            else:
+                logger.warning(
+                    "Maturation enabled but self_healing is disabled — "
+                    "maturation requires trust tracking"
+                )
 
         # 7. Rules
         rules_dir = base / "rules"
