@@ -526,3 +526,116 @@ class TestSkipReasons:
         layer = next(ly for ly in audit.layers if ly.name == layer_name)
         assert layer.skipped is True
         assert layer.skip_reason == skip_reason
+
+
+# ---------------------------------------------------------------------------
+# Learned skills in capabilities layer
+# ---------------------------------------------------------------------------
+
+
+def _write_learned_skill(
+    base_dir: Path, name: str, description: str, triggers: list[str],
+):
+    """Write a learned skill with ``author: agent`` frontmatter."""
+    skill_dir = base_dir / "learned_skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    trigger_str = "\n".join(f"  - {t}" for t in triggers) if triggers else "  - none"
+    (skill_dir / "SKILL.md").write_text(f"""---
+name: {name}
+description: {description}
+author: agent
+triggers:
+{trigger_str}
+---
+Learned skill body content.
+""")
+
+
+class TestLearnedSkillsInCapabilities:
+    """Verify that learned skills loaded via ``SkillLoader.load_learned()``
+    appear in the capabilities layer with the ``[learned]`` tag."""
+
+    @pytest.fixture
+    def base_dir_with_learned(self, tmp_path):
+        """Directory tree with bundled + learned skills."""
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "rules").mkdir()
+        (tmp_path / "skills").mkdir()
+        (tmp_path / "learned_skills").mkdir()
+        return tmp_path
+
+    def test_learned_skill_appears_in_capabilities(self, base_dir_with_learned):
+        base = base_dir_with_learned
+        _write_skill(base, "bundled-search", "Search the web", ["search"])
+        _write_learned_skill(base, "data-cleanup", "Clean messy data", ["clean"])
+
+        skills = SkillLoader()
+        skills.load_all(base / "skills")
+        skills.load_learned(base / "learned_skills")
+
+        assembler = _make_assembler(base, skills=skills)
+        result = assembler.assemble()
+
+        assert "**bundled-search**: Search the web" in result
+        assert "**data-cleanup**: [learned] Clean messy data" in result
+
+        audit = assembler.get_audit()
+        cap_layer = next(ly for ly in audit.layers if ly.name == "capabilities")
+        assert cap_layer.skipped is False
+        assert cap_layer.source == "skills"
+
+    def test_learned_skill_only_no_bundled(self, base_dir_with_learned):
+        """Capabilities layer works when all skills are learned."""
+        base = base_dir_with_learned
+        _write_learned_skill(base, "auto-fix", "Fix common errors", ["fix", "repair"])
+
+        skills = SkillLoader()
+        skills.load_all(base / "skills")  # empty
+        skills.load_learned(base / "learned_skills")
+
+        assembler = _make_assembler(base, skills=skills)
+        result = assembler.assemble()
+
+        assert "# Available Skills" in result
+        assert "**auto-fix**: [learned] Fix common errors (triggers: fix, repair)" in result
+
+        audit = assembler.get_audit()
+        cap_layer = next(ly for ly in audit.layers if ly.name == "capabilities")
+        assert cap_layer.skipped is False
+
+    def test_learned_skill_tagged_in_manifest(self, base_dir_with_learned):
+        """SkillLoader.get_manifest() tags learned skills with [learned]."""
+        base = base_dir_with_learned
+        _write_skill(base, "bundled", "Bundled skill", ["b"])
+        _write_learned_skill(base, "learned", "Learned skill", ["l"])
+
+        skills = SkillLoader()
+        skills.load_all(base / "skills")
+        skills.load_learned(base / "learned_skills")
+
+        manifest = skills.get_manifest()
+        by_name = {e.name: e for e in manifest}
+
+        assert "bundled" in by_name
+        assert "[learned]" not in by_name["bundled"].description
+        assert "learned" in by_name
+        assert by_name["learned"].description.startswith("[learned]")
+
+    def test_audit_log_with_learned_skills(self, base_dir_with_learned, caplog):
+        """Assembly audit log reflects capabilities layer when learned skills
+        are present."""
+        base = base_dir_with_learned
+        _write_learned_skill(base, "summarize", "Summarize text", ["summarize"])
+
+        skills = SkillLoader()
+        skills.load_all(base / "skills")
+        skills.load_learned(base / "learned_skills")
+
+        assembler = _make_assembler(base, skills=skills)
+        with caplog.at_level(logging.INFO, logger="fipsagents.baseagent.prompt_assembly"):
+            assembler.assemble()
+
+        assert any("capabilities" in r.message for r in caplog.records)
+        audit = assembler.get_audit()
+        assert "capabilities" in audit.assembly_order
+        assert "capabilities" not in audit.skipped_layers

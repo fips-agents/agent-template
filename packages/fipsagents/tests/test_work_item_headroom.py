@@ -230,3 +230,147 @@ class TestCheckedOutWorkItemLifecycle:
         """By default, WorkItem.max_cost_usd is None (no budget)."""
         wi = WorkItem(id="wi_default", title="Default")
         assert wi.max_cost_usd is None
+
+
+# ---------------------------------------------------------------------------
+# Integration: headroom check with realistic token accumulation
+# ---------------------------------------------------------------------------
+
+
+class TestHeadroomIntegrationWithTokenAccumulation:
+    """Simulate the astep_stream headroom check end-to-end.
+
+    These tests wire together WorkItem (budget), PricingConfig (rates),
+    compute_cost (USD calculation), and the threshold logic — the same
+    chain that runs inside ``astep_stream`` after each model call.
+    """
+
+    def _simulate_headroom_check(
+        self,
+        wi: WorkItem,
+        pricing: PricingConfig,
+        model: str,
+        turns: list[tuple[int, int]],
+        headroom_pct: float = 20.0,
+    ) -> list[BudgetHeadroomWarning]:
+        """Run multiple model-call turns and collect any warnings.
+
+        Each entry in *turns* is (prompt_tokens, completion_tokens) for
+        one iteration of the inner loop.  Tokens accumulate across turns,
+        matching the ``_cumulative_prompt`` / ``_cumulative_completion``
+        pattern in ``astep_stream``.
+        """
+        warnings: list[BudgetHeadroomWarning] = []
+        cumulative_prompt = 0
+        cumulative_completion = 0
+        headroom_warned = False
+
+        for prompt_tok, completion_tok in turns:
+            cumulative_prompt += prompt_tok
+            cumulative_completion += completion_tok
+
+            # Guard: skip if no budget.
+            if wi.max_cost_usd is None or wi.max_cost_usd <= 0:
+                continue
+
+            turn_cost = compute_cost(
+                model,
+                input_tokens=cumulative_prompt,
+                output_tokens=cumulative_completion,
+                pricing=pricing,
+            )
+            remaining = wi.max_cost_usd - turn_cost
+            threshold = wi.max_cost_usd * (headroom_pct / 100.0)
+            if remaining <= threshold and not headroom_warned:
+                remaining_pct = max(
+                    0.0, (remaining / wi.max_cost_usd) * 100.0,
+                )
+                warnings.append(
+                    BudgetHeadroomWarning(
+                        item_id=wi.id, remaining_pct=remaining_pct,
+                    )
+                )
+                headroom_warned = True
+
+        return warnings
+
+    def test_warning_fires_when_tokens_cross_threshold(self):
+        """Multi-turn accumulation crosses the 80% mark (headroom=20%)."""
+        pricing = PricingConfig(
+            default=PricingRate(input_per_1k=0.01, output_per_1k=0.03),
+        )
+        wi = WorkItem(id="wi_multi", title="Multi-turn", max_cost_usd=0.10)
+
+        # Turn 1: 1k in + 500 out = $0.01 + $0.015 = $0.025
+        # Turn 2: cumulative 3k in + 1k out = $0.03 + $0.03 = $0.06
+        # Turn 3: cumulative 5k in + 2k out = $0.05 + $0.06 = $0.11
+        #   => $0.11 > $0.10 budget, remaining < 0, warning fires
+        turns = [(1000, 500), (2000, 500), (2000, 1000)]
+        warnings = self._simulate_headroom_check(
+            wi, pricing, "test-model", turns, headroom_pct=20.0,
+        )
+
+        assert len(warnings) == 1
+        assert warnings[0].item_id == "wi_multi"
+        # Remaining capped at 0% when overspent.
+        assert warnings[0].remaining_pct == 0.0
+
+    def test_no_warning_when_under_threshold(self):
+        """Tokens stay well within budget — no warning."""
+        pricing = PricingConfig(
+            default=PricingRate(input_per_1k=0.001, output_per_1k=0.003),
+        )
+        wi = WorkItem(id="wi_cheap", title="Cheap work", max_cost_usd=1.00)
+
+        # 2k in + 1k out = $0.002 + $0.003 = $0.005  (0.5% of budget)
+        turns = [(1000, 500), (1000, 500)]
+        warnings = self._simulate_headroom_check(
+            wi, pricing, "test-model", turns, headroom_pct=20.0,
+        )
+        assert warnings == []
+
+    def test_warning_fires_once_across_many_turns(self):
+        """Even with many turns past threshold, only one warning emitted."""
+        pricing = PricingConfig(
+            default=PricingRate(input_per_1k=0.05, output_per_1k=0.10),
+        )
+        wi = WorkItem(id="wi_many", title="Many turns", max_cost_usd=0.50)
+
+        # Each turn: 1k in + 500 out = $0.05 + $0.05 = $0.10 cumulative per turn
+        # Turn 5: cumulative 5k in + 2.5k out = $0.25 + $0.25 = $0.50 (= budget)
+        turns = [(1000, 500)] * 8  # push far past budget
+        warnings = self._simulate_headroom_check(
+            wi, pricing, "test-model", turns, headroom_pct=20.0,
+        )
+
+        assert len(warnings) == 1  # dedup flag works
+
+    def test_exact_threshold_boundary_triggers_warning(self):
+        """Cost lands exactly at the headroom boundary (remaining == threshold)."""
+        pricing = PricingConfig(
+            default=PricingRate(input_per_1k=0.01, output_per_1k=0.00),
+        )
+        wi = WorkItem(id="wi_exact", title="Exact", max_cost_usd=0.10)
+
+        # headroom_pct=20 => threshold=$0.02, warn at remaining<=$0.02
+        # Need cost = $0.08 => 8000 input tokens at $0.01/1k
+        turns = [(8000, 0)]
+        warnings = self._simulate_headroom_check(
+            wi, pricing, "test-model", turns, headroom_pct=20.0,
+        )
+
+        assert len(warnings) == 1
+        assert warnings[0].remaining_pct == pytest.approx(20.0, abs=0.01)
+
+    def test_no_budget_skips_check(self):
+        """WorkItem with no budget (max_cost_usd=None) never warns."""
+        pricing = PricingConfig(
+            default=PricingRate(input_per_1k=1.00, output_per_1k=1.00),
+        )
+        wi = WorkItem(id="wi_none", title="No budget")
+
+        turns = [(100000, 100000)]  # enormous usage
+        warnings = self._simulate_headroom_check(
+            wi, pricing, "test-model", turns, headroom_pct=20.0,
+        )
+        assert warnings == []
