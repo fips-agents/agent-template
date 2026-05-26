@@ -8,7 +8,7 @@ import frontmatter
 import pytest
 
 from fipsagents.baseagent.config import AgentConfig, SelfHealingConfig
-from fipsagents.baseagent.events import SkillLearned, SkillRolledBack
+from fipsagents.baseagent.events import SkillEdited, SkillLearned, SkillRolledBack
 from fipsagents.baseagent.skills import SkillLoader
 from fipsagents.baseagent.tools.self_healing import (
     STOCK_TOOL_SPEC,
@@ -26,6 +26,7 @@ def _make_agent_stub(
     trust_level: int = 2,
     trust_domains: list[str] | None = None,
     review_policy: str = "audit_only",
+    max_skills: int = 50,
 ):
     """Build a minimal agent-like object for the factory."""
     agent = type("Agent", (), {})()
@@ -36,6 +37,7 @@ def _make_agent_stub(
             trust_domains=trust_domains or ["document_processing"],
             review_policy=review_policy,
             learned_skills_dir=str(base_dir / "learned_skills"),
+            max_skills=max_skills,
         )
     )
     agent._base_dir = base_dir
@@ -248,6 +250,130 @@ class TestLearnSkill:
         assert isinstance(event, SkillLearned)
         assert event.skill_name == "event-test"
         assert event.version == 1
+
+    @pytest.mark.asyncio
+    async def test_new_skill_does_not_emit_skill_edited(self, tmp_path):
+        agent = _make_agent_stub(tmp_path)
+        tools = make_self_healing_tools(agent)
+        learn = tools[0]
+
+        await learn(
+            name="fresh-skill",
+            description="Brand new",
+            content="Content",
+            domain="document_processing",
+            trigger="test",
+        )
+
+        assert len(agent._self_healing_events) == 1
+        assert isinstance(agent._self_healing_events[0], SkillLearned)
+        assert not any(isinstance(e, SkillEdited) for e in agent._self_healing_events)
+
+    @pytest.mark.asyncio
+    async def test_update_skill_emits_skill_edited_event(self, tmp_path):
+        agent = _make_agent_stub(tmp_path)
+        tools = make_self_healing_tools(agent)
+        learn = tools[0]
+
+        # Create v1.
+        await learn(
+            name="evolving-skill",
+            description="v1",
+            content="Version 1",
+            domain="document_processing",
+            trigger="test",
+        )
+        agent._self_healing_events.clear()
+
+        # Update to v2.
+        await learn(
+            name="evolving-skill",
+            description="v2",
+            content="Version 2",
+            domain="document_processing",
+            trigger="test",
+        )
+
+        learned_events = [e for e in agent._self_healing_events if isinstance(e, SkillLearned)]
+        edited_events = [e for e in agent._self_healing_events if isinstance(e, SkillEdited)]
+
+        assert len(learned_events) == 1
+        assert learned_events[0].version == 2
+
+        assert len(edited_events) == 1
+        assert edited_events[0].skill_name == "evolving-skill"
+        assert edited_events[0].from_version == 1
+        assert edited_events[0].to_version == 2
+
+    @pytest.mark.asyncio
+    async def test_max_skills_cap_rejects_new_skill(self, tmp_path):
+        agent = _make_agent_stub(tmp_path, max_skills=2)
+        tools = make_self_healing_tools(agent)
+        learn = tools[0]
+
+        # Create 2 skills to fill the cap.
+        await learn(
+            name="skill-one",
+            description="First",
+            content="Content",
+            domain="document_processing",
+            trigger="test",
+        )
+        await learn(
+            name="skill-two",
+            description="Second",
+            content="Content",
+            domain="document_processing",
+            trigger="test",
+        )
+
+        # Third skill should be rejected.
+        result = json.loads(await learn(
+            name="skill-three",
+            description="Over the cap",
+            content="Content",
+            domain="document_processing",
+            trigger="test",
+        ))
+
+        assert "error" in result
+        assert "cap reached" in result["error"]
+        # Verify no directory was created for the rejected skill.
+        assert not (tmp_path / "learned_skills" / "skill-three").exists()
+
+    @pytest.mark.asyncio
+    async def test_max_skills_allows_update_of_existing(self, tmp_path):
+        agent = _make_agent_stub(tmp_path, max_skills=2)
+        tools = make_self_healing_tools(agent)
+        learn = tools[0]
+
+        # Create 2 skills to fill the cap.
+        await learn(
+            name="skill-one",
+            description="First",
+            content="Content v1",
+            domain="document_processing",
+            trigger="test",
+        )
+        await learn(
+            name="skill-two",
+            description="Second",
+            content="Content v1",
+            domain="document_processing",
+            trigger="test",
+        )
+
+        # Updating an existing skill should succeed despite the cap.
+        result = json.loads(await learn(
+            name="skill-one",
+            description="First updated",
+            content="Content v2",
+            domain="document_processing",
+            trigger="test",
+        ))
+
+        assert result["skill_name"] == "skill-one"
+        assert result["version"] == 2
 
 
 # ---------------------------------------------------------------------------

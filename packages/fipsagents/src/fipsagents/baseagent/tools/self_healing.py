@@ -11,7 +11,7 @@ from pathlib import Path
 
 import frontmatter
 
-from fipsagents.baseagent.events import SkillLearned, SkillRolledBack
+from fipsagents.baseagent.events import SkillEdited, SkillLearned, SkillRolledBack
 from fipsagents.baseagent.tools import tool
 from fipsagents.baseagent.tools._stock import StockToolSpec
 
@@ -96,6 +96,16 @@ def make_self_healing_tools(agent: object) -> list:
         if not learned_dir.is_absolute():
             learned_dir = base_dir / learned_dir
         skill_dir = learned_dir / name
+
+        # Enforce max_skills cap for new skills (updates are always allowed).
+        if not skill_dir.exists() and learned_dir.exists():
+            current_count = sum(1 for p in learned_dir.iterdir() if p.is_dir())
+            if current_count >= cfg.max_skills:
+                return json.dumps({
+                    "error": f"Learned skills cap reached ({current_count}/{cfg.max_skills}). "
+                    "Remove or consolidate existing skills before adding new ones.",
+                })
+
         skill_dir.mkdir(parents=True, exist_ok=True)
         skill_path = skill_dir / "SKILL.md"
 
@@ -138,6 +148,13 @@ def make_self_healing_tools(agent: object) -> list:
             version=version,
             review_status=review_status,
         ))
+
+        if version > 1:
+            _emit(SkillEdited(
+                skill_name=name,
+                from_version=version - 1,
+                to_version=version,
+            ))
 
         return json.dumps({
             "skill_name": name,

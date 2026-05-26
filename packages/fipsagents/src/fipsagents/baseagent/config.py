@@ -374,6 +374,7 @@ class SelfHealingConfig(BaseModel):
         "human_review"
     )
     learned_skills_dir: str = "./learned_skills"
+    max_skills: int = Field(default=50, ge=1)
     trust_thresholds: TrustThresholdsConfig = Field(
         default_factory=TrustThresholdsConfig
     )
