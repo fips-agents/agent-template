@@ -75,6 +75,12 @@ class TestNullWorkItemStore:
         assert expired == []
 
     @pytest.mark.asyncio
+    async def test_stats_returns_empty(self):
+        store = NullWorkItemStore()
+        counts = await store.stats()
+        assert counts == {}
+
+    @pytest.mark.asyncio
     async def test_create_returns_item(self):
         store = NullWorkItemStore()
         item = WorkItem(id="wi_123", title="Test")
@@ -346,6 +352,24 @@ class TestSqliteWorkItemStore:
         assert len(expired) == 1
         assert expired[0].id == "wi_expire"
         assert expired[0].status == WorkItemStatus.available
+
+    @pytest.mark.asyncio
+    async def test_stats_returns_counts_by_status(self, store):
+        item1 = WorkItem(id="stat-1", title="Item 1", description="test")
+        item2 = WorkItem(id="stat-2", title="Item 2", description="test")
+        await store.create(item1)
+        await store.create(item2)
+        await store.checkout("stat-1", actor_id="agent-a", lease_duration_seconds=300)
+
+        counts = await store.stats()
+        assert counts.get("available", 0) == 1
+        assert counts.get("checked_out", 0) == 1
+        assert sum(counts.values()) == 2
+
+    @pytest.mark.asyncio
+    async def test_stats_empty_store(self, store):
+        counts = await store.stats()
+        assert counts == {}
 
     @pytest.mark.asyncio
     async def test_capability_matching(self, store):

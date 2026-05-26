@@ -184,6 +184,10 @@ class WorkItemStore(ABC):
     async def reject(self, item_id: str, *, reason: str) -> WorkItem:
         """Reject a review_pending item, moving it back to available."""
 
+    async def stats(self) -> dict[str, int]:
+        """Aggregate counts by work-item status. Returns ``{status_name: count}``."""
+        return {}
+
     async def expire_leases(self) -> list[WorkItem]:
         """Expire leases past their deadline. Returns expired items."""
         return []
@@ -275,6 +279,9 @@ class NullWorkItemStore(WorkItemStore):
 
     async def reject(self, item_id: str, *, reason: str) -> WorkItem:
         raise NotImplementedError("NullWorkItemStore does not support reject")
+
+    async def stats(self) -> dict[str, int]:
+        return {}
 
 
 # ---------------------------------------------------------------------------

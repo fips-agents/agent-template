@@ -179,6 +179,46 @@ class TestListWorkItems:
 
 
 # ---------------------------------------------------------------------------
+# GET /v1/work-items/stats
+# ---------------------------------------------------------------------------
+
+
+class TestStatsWorkItems:
+    @pytest.mark.asyncio
+    async def test_stats_empty(self, work_item_client):
+        client, _ = work_item_client
+        resp = await client.get("/v1/work-items/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["counts"] == {}
+        assert data["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_stats_with_items(self, work_item_client):
+        client, _ = work_item_client
+        item_a = await _create_item(client, title="Item A")
+        item_b = await _create_item(client, title="Item B")
+        await _checkout(client, item_a["id"])
+
+        resp = await client.get("/v1/work-items/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["counts"]["available"] == 1
+        assert data["counts"]["checked_out"] == 1
+        assert data["total"] == 2
+
+    @pytest.mark.asyncio
+    async def test_stats_disabled(self, disabled_client):
+        resp = await disabled_client.get("/v1/work-items/stats")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_stats_none_store(self, none_store_client):
+        resp = await none_store_client.get("/v1/work-items/stats")
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # GET /v1/work-items/{item_id} (get)
 # ---------------------------------------------------------------------------
 

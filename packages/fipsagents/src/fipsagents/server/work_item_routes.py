@@ -92,6 +92,18 @@ def _store_guard(get_store: Callable) -> Any | None:
 # ---------------------------------------------------------------------------
 
 
+async def _stats_work_items(request: Request) -> Response:
+    """GET /v1/work-items/stats -- aggregate counts by status."""
+    get_store = request.app.state.get_work_item_store
+    store = _store_guard(get_store)
+    if store is None:
+        return JSONResponse(
+            {"error": "Work items not enabled"}, status_code=404,
+        )
+    counts = await store.stats()
+    return JSONResponse({"counts": counts, "total": sum(counts.values())})
+
+
 async def _create_work_item(request: Request) -> Response:
     """POST /v1/work-items -- create a new work item."""
     get_store = request.app.state.get_work_item_store
@@ -336,6 +348,9 @@ def register_work_item_routes(
 
     app.add_route("/v1/work-items", _create_work_item, methods=["POST"])
     app.add_route("/v1/work-items", _list_work_items, methods=["GET"])
+    app.add_route(
+        "/v1/work-items/stats", _stats_work_items, methods=["GET"],
+    )
     app.add_route(
         "/v1/work-items/{item_id}", _get_work_item, methods=["GET"],
     )

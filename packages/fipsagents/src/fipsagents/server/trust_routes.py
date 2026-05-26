@@ -113,6 +113,25 @@ async def _get_capabilities(request: Request) -> JSONResponse:
     return JSONResponse({"capabilities": capabilities})
 
 
+async def _get_maturation(request: Request) -> JSONResponse:
+    """GET /v1/agent/maturation -- get maturation stage summary."""
+    get_agent = request.app.state.get_agent
+    agent = get_agent()
+
+    if agent is None:
+        return JSONResponse(
+            {"error": "Agent not available"}, status_code=404,
+        )
+
+    maturation = getattr(agent, "_maturation_manager", None)
+    if maturation is None:
+        return JSONResponse(
+            {"error": "Maturation not enabled"}, status_code=404,
+        )
+
+    return JSONResponse(maturation.get_summary())
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -141,3 +160,4 @@ def register_trust_routes(
     app.add_route("/v1/agent/trust", _get_trust, methods=["GET"])
     app.add_route("/v1/agent/skills", _get_skills, methods=["GET"])
     app.add_route("/v1/agent/capabilities", _get_capabilities, methods=["GET"])
+    app.add_route("/v1/agent/maturation", _get_maturation, methods=["GET"])

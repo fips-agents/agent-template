@@ -755,6 +755,15 @@ CREATE TABLE IF NOT EXISTS work_items (
 
         return expired
 
+    async def stats(self) -> dict[str, int]:
+        """Aggregate counts by work-item status."""
+        db = await self._get_db()
+        cursor = await db.execute(
+            "SELECT status, COUNT(*) FROM work_items GROUP BY status"
+        )
+        rows = await cursor.fetchall()
+        return {row[0]: row[1] for row in rows}
+
     async def close(self) -> None:
         """Release resources."""
         if self._own_conn is not None:

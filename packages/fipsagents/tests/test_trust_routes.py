@@ -61,6 +61,43 @@ async def no_trust_client():
 
 
 @pytest_asyncio.fixture
+async def maturation_client():
+    """ASGI test client with a mock maturation manager."""
+    agent = MockAgent()
+    agent._maturation_manager = type("MaturationManager", (), {
+        "get_summary": lambda self: {
+            "stage": "apprentice",
+            "permissions": {"can_learn_skills": True, "can_write_skills": False},
+            "trust": {"level": 1, "score": 15.0},
+            "progress": {"completions": 5, "next_stage_at": 50},
+        },
+    })()
+
+    app = Starlette()
+    register_trust_routes(app, lambda: agent)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+@pytest_asyncio.fixture
+async def no_maturation_client():
+    """ASGI test client where maturation is not enabled."""
+    agent = MockAgent()
+    # Ensure no _maturation_manager attribute.
+    if hasattr(agent, "_maturation_manager"):
+        delattr(agent, "_maturation_manager")
+
+    app = Starlette()
+    register_trust_routes(app, lambda: agent)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+@pytest_asyncio.fixture
 async def no_agent_client():
     """ASGI test client where the agent is None."""
     app = Starlette()
@@ -276,5 +313,44 @@ class TestGetCapabilities:
         client = no_agent_client
 
         resp = await client.get("/v1/agent/capabilities")
+        assert resp.status_code == 404
+        assert "Agent not available" in resp.json()["error"]
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/agent/maturation
+# ---------------------------------------------------------------------------
+
+
+class TestGetMaturation:
+    @pytest.mark.asyncio
+    async def test_returns_summary(self, maturation_client):
+        client = maturation_client
+
+        resp = await client.get("/v1/agent/maturation")
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert data["stage"] == "apprentice"
+        assert data["permissions"]["can_learn_skills"] is True
+        assert data["permissions"]["can_write_skills"] is False
+        assert data["trust"]["level"] == 1
+        assert data["trust"]["score"] == 15.0
+        assert data["progress"]["completions"] == 5
+        assert data["progress"]["next_stage_at"] == 50
+
+    @pytest.mark.asyncio
+    async def test_not_enabled_returns_404(self, no_maturation_client):
+        client = no_maturation_client
+
+        resp = await client.get("/v1/agent/maturation")
+        assert resp.status_code == 404
+        assert "Maturation not enabled" in resp.json()["error"]
+
+    @pytest.mark.asyncio
+    async def test_no_agent_returns_404(self, no_agent_client):
+        client = no_agent_client
+
+        resp = await client.get("/v1/agent/maturation")
         assert resp.status_code == 404
         assert "Agent not available" in resp.json()["error"]

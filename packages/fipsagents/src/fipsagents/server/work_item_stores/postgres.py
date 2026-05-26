@@ -719,6 +719,15 @@ CREATE TABLE IF NOT EXISTS work_items (
             logger.debug("PostgresWorkItemStore: expired %d leases", len(expired))
         return expired
 
+    async def stats(self) -> dict[str, int]:
+        """Aggregate counts by work-item status."""
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT status, COUNT(*) AS cnt FROM work_items GROUP BY status"
+            )
+        return {row["status"]: row["cnt"] for row in rows}
+
     async def close(self) -> None:
         """Release the connection pool."""
         if self._pool is not None:
