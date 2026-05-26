@@ -492,6 +492,26 @@ server:
   #     # - name: "trust"
   #     #   value: 3
 
+  # -- Event sources (optional) ------------------------------------------------
+  #
+  # Inbound event sources that trigger agent processing via event_handler().
+  # Supported types: webhook, cron, kafka, redis.
+  #
+  # event_sources:
+  #   - type: cron
+  #     source_id: daily-health-check
+  #     schedule: "0 6 * * *"          # 6 AM UTC daily
+  #     event_type: scheduled_health_check
+  #
+  #   - type: webhook
+  #     source_id: github-events
+  #     path: /webhooks/github
+  #     secret: ${WEBHOOK_SECRET}
+  #
+  # event_sink:
+  #   type: log
+  #   level: INFO
+
 # -- Memory backend (optional) -----------------------------------------------
 #
 # Controls which memory backend the agent uses.
