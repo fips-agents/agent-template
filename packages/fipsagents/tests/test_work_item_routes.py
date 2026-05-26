@@ -197,7 +197,7 @@ class TestStatsWorkItems:
     async def test_stats_with_items(self, work_item_client):
         client, _ = work_item_client
         item_a = await _create_item(client, title="Item A")
-        item_b = await _create_item(client, title="Item B")
+        await _create_item(client, title="Item B")
         await _checkout(client, item_a["id"])
 
         resp = await client.get("/v1/work-items/stats")

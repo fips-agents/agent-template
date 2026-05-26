@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import frontmatter
@@ -15,7 +14,6 @@ from fipsagents.baseagent.events import (
     SkillQuarantined,
     TrustLevelChanged,
     WorkItemCheckedOut,
-    WorkItemReleased,
 )
 from fipsagents.server.work_items import (
     Capability,

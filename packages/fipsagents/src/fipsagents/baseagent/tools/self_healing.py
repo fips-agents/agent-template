@@ -77,8 +77,6 @@ def make_self_healing_tools(agent: object) -> list:
         # Stage-aware gating: proto-agents can only suggest, not learn.
         maturation = getattr(agent, "_maturation_manager", None)
         if maturation is not None:
-            from fipsagents.baseagent.maturation import MaturationStage
-
             stage = maturation.current_stage()
             perms = maturation.get_permissions(stage)
             if not perms.can_create_skills:
