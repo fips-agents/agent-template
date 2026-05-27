@@ -90,7 +90,9 @@ def mock_openai(monkeypatch):
             async def __anext__(self):
                 if self._i >= len(self._chunks):
                     raise StopAsyncIteration
-                c = self._chunks[self._i]; self._i += 1; return c
+                c = self._chunks[self._i]
+                self._i += 1
+                return c
         return Stream()
 
     mock_cls = MagicMock()

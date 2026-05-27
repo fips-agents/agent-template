@@ -158,7 +158,11 @@ Four new `StreamEvent` variants land on the union: `SubagentInvoked`, `SubagentC
 
 Failure modes surface as concrete `SubagentError` subclasses -- `SubagentTimeoutError`, `SubagentRemoteError`, `MaxDelegationDepthError`, `SubagentCrashedError` -- so the parent's LLM can branch on type and replan. The existing server-layer `BudgetExceededError` is reused for budget exhaustion. Retries are the parent's loop's responsibility; the framework does not auto-retry subagent calls because retrying conflates failure modes (timeout vs. crash vs. denial) the model should handle differently.
 
-v1 ships buffered: the parent waits for the subagent to finish and sees a single tool result. Nested-delta streaming (the `SubagentDelta` event), kagenti-driven dynamic registries, and remote-chain depth enforcement (the receiver reading `x-subagent-depth` on inbound) are scoped as follow-ups. Full design lives in `planning/subagent-tool-design.md`.
+v1 ships buffered: the parent waits for the subagent to finish and sees a single tool result. Nested-delta streaming (the `SubagentDelta` event) and kagenti-driven dynamic registries are scoped as follow-ups. Full design lives in `planning/subagent-tool-design.md`.
+
+**Remote-side depth enforcement.** `OpenAIChatServer` reads the `x-subagent-depth` header from inbound requests and sets `agent._delegation_depth` before `astep_stream()`, so the receiver's own `delegate_to_agent` / `spawn_agent` depth checks enforce correctly in multi-hop remote chains. Depth is reset to 0 after each request.
+
+**Ad-hoc spawn_agent tool.** A stock `@tool(visibility="llm_only")` always registered during `setup()` (no condition, independent of the `subagents:` config). Lets the LLM spawn ephemeral in-process subagents at runtime with a caller-supplied system prompt, tool subset, and optional model override. Parameters: `role` (label), `system_prompt`, `task`, `tools` (optional whitelist of parent tool names; `None` = no tools / pure reasoning), `model` (optional override), `max_iterations` (optional). The ephemeral agent is constructed via `object.__new__()` with manual attribute setup (skips full `setup()` to avoid MCP/memory/prompt loading) and destroyed after execution. Cost rolls up via existing `_subagent_token_usage`. Depth is shared with `delegate_to_agent` via `_delegation_depth`. Events: `SpawnAgentInvoked`, `SpawnAgentCompleted`, `SpawnAgentFailed` (separate from the deployed-peer events). Config: `spawn.{enabled, max_depth, max_iterations, allowed_models}` in `AgentConfig`.
 
 ### Prompts
 
