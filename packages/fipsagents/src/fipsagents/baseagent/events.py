@@ -354,6 +354,17 @@ class SkillLearned:
 
 
 @dataclass
+class SkillProposed:
+    """Emitted when an agent proposes a skill for review via suggest_skill."""
+    skill_name: str
+    description: str
+    content: str
+    domain: str
+    trigger: str
+    work_item_id: str | None = None
+
+
+@dataclass
 class SkillEdited:
     """Emitted when a learned skill is edited (version bump)."""
     skill_name: str
@@ -459,6 +470,7 @@ StreamEvent = Union[
     HandoffRequired,
     TrustLevelChanged,
     SkillLearned,
+    SkillProposed,
     SkillEdited,
     SkillRolledBack,
     SkillQuarantined,

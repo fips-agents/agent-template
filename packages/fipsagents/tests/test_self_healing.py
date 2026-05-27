@@ -8,7 +8,7 @@ import frontmatter
 import pytest
 
 from fipsagents.baseagent.config import AgentConfig, SelfHealingConfig
-from fipsagents.baseagent.events import SkillEdited, SkillLearned, SkillRolledBack
+from fipsagents.baseagent.events import SkillEdited, SkillLearned, SkillProposed, SkillRolledBack
 from fipsagents.baseagent.skills import SkillLoader
 from fipsagents.baseagent.tools.self_healing import (
     STOCK_TOOL_SPEC,
@@ -29,8 +29,11 @@ def _make_agent_stub(
     max_skills: int = 50,
 ):
     """Build a minimal agent-like object for the factory."""
+    from fipsagents.baseagent.config import AgentIdentity
+
     agent = type("Agent", (), {})()
     agent.config = AgentConfig(
+        agent=AgentIdentity(name="test-agent"),
         self_healing=SelfHealingConfig(
             enabled=True,
             trust_level=trust_level,
@@ -455,9 +458,12 @@ class TestSuggestSkill:
 
         assert len(agent._self_healing_events) == 1
         event = agent._self_healing_events[0]
-        assert isinstance(event, SkillLearned)
-        assert event.review_status == "pending_review"
-        assert event.version == 0
+        assert isinstance(event, SkillProposed)
+        assert event.skill_name == "event-test"
+        assert event.description == "Test"
+        assert event.domain == "test"
+        assert event.trigger == "test"
+        assert event.work_item_id is None
 
     @pytest.mark.asyncio
     async def test_invalid_name_rejected(self, tmp_path):
@@ -474,6 +480,124 @@ class TestSuggestSkill:
         ))
 
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# suggest_skill review queue integration
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestSkillReviewQueue:
+    """suggest_skill creates review_pending work items when work_items is enabled."""
+
+    @pytest.mark.asyncio
+    async def test_creates_work_item_when_store_present(self, tmp_path):
+        """suggest_skill creates a review_pending work item."""
+        agent = _make_agent_stub(tmp_path, trust_level=0)
+        # Add a minimal in-memory work item store
+        from fipsagents.server.work_items import NullWorkItemStore, WorkItem
+
+        created_items = []
+        class CapturingStore(NullWorkItemStore):
+            async def create(self, item: WorkItem) -> WorkItem:
+                created_items.append(item)
+                return item
+
+        agent._work_item_store = CapturingStore()
+        tools = make_self_healing_tools(agent)
+        suggest = tools[1]
+
+        result = json.loads(await suggest(
+            name="review-me",
+            description="Needs review",
+            content="Proposed content",
+            domain="test-domain",
+            trigger="test trigger",
+        ))
+
+        assert result["work_item_id"] is not None
+        assert result["work_item_id"].startswith("skill-review-review-me-")
+        assert len(created_items) == 1
+        item = created_items[0]
+        assert item.id == result["work_item_id"]
+        assert item.title == "Review proposed skill: review-me"
+        assert "review-me" in item.description
+        assert "test-domain" in item.description
+        assert item.status.value == "review_pending"
+
+    @pytest.mark.asyncio
+    async def test_no_work_item_when_store_absent(self, tmp_path):
+        """suggest_skill works without _work_item_store (backward compat)."""
+        agent = _make_agent_stub(tmp_path, trust_level=0)
+        # Explicitly ensure no store
+        assert not hasattr(agent, "_work_item_store")
+        tools = make_self_healing_tools(agent)
+        suggest = tools[1]
+
+        result = json.loads(await suggest(
+            name="no-store",
+            description="No store",
+            content="Content",
+            domain="any",
+            trigger="test",
+        ))
+
+        assert result["status"] == "proposed"
+        assert result["work_item_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_work_item_id_in_event(self, tmp_path):
+        """SkillProposed event carries the work_item_id."""
+        from fipsagents.server.work_items import NullWorkItemStore, WorkItem
+
+        agent = _make_agent_stub(tmp_path, trust_level=0)
+        class CapturingStore(NullWorkItemStore):
+            async def create(self, item: WorkItem) -> WorkItem:
+                return item
+        agent._work_item_store = CapturingStore()
+        tools = make_self_healing_tools(agent)
+        suggest = tools[1]
+
+        await suggest(
+            name="event-wi",
+            description="Test",
+            content="Content",
+            domain="test",
+            trigger="test",
+        )
+
+        event = agent._self_healing_events[0]
+        assert isinstance(event, SkillProposed)
+        assert event.work_item_id is not None
+        assert event.work_item_id.startswith("skill-review-event-wi-")
+
+    @pytest.mark.asyncio
+    async def test_store_error_gracefully_handled(self, tmp_path):
+        """If work item creation fails, suggest_skill still succeeds."""
+        from fipsagents.server.work_items import NullWorkItemStore, WorkItem
+
+        agent = _make_agent_stub(tmp_path, trust_level=0)
+        class FailingStore(NullWorkItemStore):
+            async def create(self, item: WorkItem) -> WorkItem:
+                raise RuntimeError("Store unavailable")
+        agent._work_item_store = FailingStore()
+        tools = make_self_healing_tools(agent)
+        suggest = tools[1]
+
+        result = json.loads(await suggest(
+            name="resilient",
+            description="Should still work",
+            content="Content",
+            domain="any",
+            trigger="test",
+        ))
+
+        assert result["status"] == "proposed"
+        assert result["work_item_id"] is None
+        # Event should still be emitted with no work_item_id
+        event = agent._self_healing_events[0]
+        assert isinstance(event, SkillProposed)
+        assert event.work_item_id is None
 
 
 # ---------------------------------------------------------------------------

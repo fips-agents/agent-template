@@ -584,6 +584,35 @@ security:
 #  guardrails:
 #    mode: observe     # override global mode for guardrails
 
+# -- Self-healing (optional) --------------------------------------------------
+#
+# Enables agent self-improvement via learned skills. When enabled, three
+# stock LLM tools are auto-registered: learn_skill, suggest_skill,
+# rollback_skill.
+#
+# suggest_skill creates review_pending work items in the work-item pool
+# (when work_items is also enabled) so proposals can be reviewed via
+# POST /v1/work-items/{id}/accept or /reject.
+#
+# Trust levels gate skill creation:
+#   0 -- suggest_skill only (no disk writes)
+#   1+ -- learn_skill (creates versioned SKILL.md in learned_skills/)
+#   3+ -- rollback_skill (restore archived versions)
+#   4+ -- bypass domain restrictions
+#
+# Production env vars:
+#   SELF_HEALING_ENABLED    -- "true" to enable
+#   SELF_HEALING_TRUST_LEVEL -- numeric trust level (0-4)
+#
+# self_healing:
+#   enabled: ${SELF_HEALING_ENABLED:-false}
+#   trust_level: ${SELF_HEALING_TRUST_LEVEL:-0}
+#   trust_domains:
+#     - document_processing
+#   review_policy: human_review     # audit_only | peer_review | human_review
+#   learned_skills_dir: ./learned_skills
+#   max_skills: 50
+
 # -- Subagents (optional, per #165) ------------------------------------------
 #
 # Register other agents the LLM can delegate to via the stock

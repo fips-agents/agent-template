@@ -11,7 +11,12 @@ from pathlib import Path
 
 import frontmatter
 
-from fipsagents.baseagent.events import SkillEdited, SkillLearned, SkillRolledBack
+from fipsagents.baseagent.events import (
+    SkillEdited,
+    SkillLearned,
+    SkillProposed,
+    SkillRolledBack,
+)
 from fipsagents.baseagent.tools import tool
 from fipsagents.baseagent.tools._stock import StockToolSpec
 
@@ -199,7 +204,7 @@ def make_self_healing_tools(agent: object) -> list:
             trigger: Natural-language trigger phrase.
 
         Returns:
-            JSON object with skill_name, status, review_status.
+            JSON object with skill_name, status, review_status, work_item_id.
         """
         if not _KEBAB_RE.match(name):
             return json.dumps({
@@ -207,17 +212,50 @@ def make_self_healing_tools(agent: object) -> list:
                 "detail": "Name must be kebab-case: lowercase letters, digits, hyphens, starting with a letter.",
             })
 
-        _emit(SkillLearned(
+        work_item_id = None
+        store = getattr(agent, "_work_item_store", None)
+        if store is not None:
+            import uuid
+            from fipsagents.server.work_items import WorkItem, WorkItemStatus
+            work_item_id = f"skill-review-{name}-{uuid.uuid4().hex[:8]}"
+            try:
+                # Extract agent name safely
+                agent_name = "unknown"
+                if hasattr(agent, "config") and hasattr(agent.config, "agent"):
+                    agent_name = agent.config.agent.name
+
+                await store.create(WorkItem(
+                    id=work_item_id,
+                    title=f"Review proposed skill: {name}",
+                    description=(
+                        f"Skill proposal from suggest_skill.\n\n"
+                        f"**Name**: {name}\n"
+                        f"**Domain**: {domain}\n"
+                        f"**Trigger**: {trigger}\n\n"
+                        f"## Description\n{description}\n\n"
+                        f"## Proposed Content\n```\n{content}\n```"
+                    ),
+                    status=WorkItemStatus.review_pending,
+                    created_by=agent_name,
+                ))
+            except Exception:
+                logger.warning("Failed to create review work item for skill %s", name, exc_info=True)
+                work_item_id = None
+
+        _emit(SkillProposed(
             skill_name=name,
+            description=description,
+            content=content,
             domain=domain,
-            version=0,
-            review_status="pending_review",
+            trigger=trigger,
+            work_item_id=work_item_id,
         ))
 
         return json.dumps({
             "skill_name": name,
             "status": "proposed",
             "review_status": "pending_review",
+            "work_item_id": work_item_id,
         })
 
     @tool(

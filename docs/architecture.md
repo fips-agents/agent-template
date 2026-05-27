@@ -1106,6 +1106,14 @@ Opt-in via `self_healing:` in `agent.yaml`. When enabled:
 | `suggest_skill` | any | No | Propose skill for review |
 | `rollback_skill` | >= 3 | Yes | Restore archived version |
 
+**Review Queue** — When `work_items` is enabled alongside `self_healing`, `suggest_skill` automatically creates a `review_pending` work item in the work-item pool. The work item carries the full proposal (name, description, content, domain, trigger) so reviewers have complete context. Approval flow:
+
+1. Agent calls `suggest_skill` → `SkillProposed` event emitted + work item created with `status: review_pending`
+2. Reviewer calls `POST /v1/work-items/{id}/accept` → work item moves to `completed`
+3. Or reviewer calls `POST /v1/work-items/{id}/reject` with reason → work item moves back to `available`
+
+When `work_items` is not enabled, `suggest_skill` still works — it emits `SkillProposed` but no work item is created. Backward compatible.
+
 Skills are versioned in `.versions/` subdirectories. Domain validation enforces `trust_domains` (trust 4+ bypasses). Review policy (`audit_only`, `peer_review`, `human_review`) controls gating.
 
 **Trust Accumulation** — `TrustManager` tracks a continuous score:
