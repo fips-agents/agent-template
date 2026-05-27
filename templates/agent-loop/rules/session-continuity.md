@@ -1,5 +1,16 @@
 # Session Continuity
 
+Use this rule when your agent works on tasks that span multiple
+sessions — document processing pipelines, multi-step research,
+compliance reviews, ops runbook execution, or any long-running workflow
+where context windows are too small for the full task. If your agent
+handles only single-turn Q&A, this rule is not needed.
+
+The core discipline: **pick ONE item per session, complete it fully,
+verify it, hand it off clean.** This prevents one-shotting (trying too
+much), premature victory (declaring done without testing), and broken
+state (leaving partial work).
+
 ## Resume Protocol
 
 At the start of each session, before beginning new work:

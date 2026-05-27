@@ -40,3 +40,52 @@ structured resume and handoff protocol with the work-item pool.
 3. If done: `complete_work_item` with results and accomplishments.
 4. If blocked or out of budget: `release_work_item` with a structured
    handoff note.
+
+## Domain-Specific AgentState Examples
+
+Define a typed `AgentState` subclass to track session progress. The
+framework checkpoints it automatically and replays from traces on
+recovery.
+
+### Document processing
+
+```python
+class DocProcessingState(AgentState):
+    batch_id: str = ""
+    total_documents: int = 0
+    processed: list[str] = []
+    failed: dict[str, str] = {}   # doc_id -> error
+    current_document: str | None = None
+```
+
+### Research / investigation
+
+```python
+class ResearchState(AgentState):
+    questions: list[dict] = []     # {id, text, status, answer}
+    sources_reviewed: list[str] = []
+    hypotheses: list[dict] = []    # {claim, confidence, evidence}
+```
+
+### Compliance monitoring
+
+```python
+class ComplianceState(AgentState):
+    framework: str = ""            # SOC2, FedRAMP, etc.
+    sections: dict[str, str] = {}  # section_id -> status
+    findings: list[dict] = []
+    last_reviewed: str | None = None
+```
+
+## Handoff Note Quality
+
+A good handoff note answers five questions:
+
+1. **What was accomplished?** Concrete, verifiable statements with
+   artifact references.
+2. **What was attempted but failed?** Including the failure reason —
+   the next actor should not retry the same approach.
+3. **What remains?** Scoped to the work item, not the entire project.
+4. **What blocks progress?** Missing access, broken infra, ambiguity.
+5. **Where are the artifacts?** File paths, URLs, trace IDs, commit
+   SHAs.

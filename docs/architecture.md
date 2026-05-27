@@ -471,15 +471,77 @@ and lease expiries.
 
 ### Session Continuity
 
-The agent-loop template includes a session-continuity rule
-(`rules/session-continuity.md`) and skill
-(`skills/session-continuity/SKILL.md`) that guide agents through a
-resume/handoff protocol. The protocol enforces incremental progress
-discipline: pick ONE work item per session, verify results before
-completing, and write a structured handoff note if unable to finish.
+Session continuity in fipsagents is provided by four independent mechanisms that compose additively:
 
-Full design: `planning/work-item-coordination-design.md` and
-`planning/session-continuity-patterns.md`.
+| Mechanism | Scope | Timescale | Purpose |
+|-----------|-------|-----------|---------|
+| Compaction (#166) | Intra-session | Minutes | Frees context space within a single session via lossy summaries of older messages. Allows long conversations to stay within model context limits. |
+| AgentState (#190) | Per-session | Hours to days | Typed, checkpointed state with reducer-based recovery. Example: "I am 60% through batch #47, last processed item ID 1234." |
+| HandoffNote (WorkItemStore) | Per-work-item | Across agents | Structured bridge between work-item attempts. Records what was accomplished, what was attempted but failed, what remains, blockers, and artifact references. |
+| Memory (MemoryHub) | Cross-project | Weeks to months | Long-lived facts, preferences, architectural decisions, and lessons learned. Shared across all sessions and agents. |
+
+These mechanisms are **independent** and **compose additively**. An agent can use AgentState without WorkItemStore, memory without either, or all four simultaneously. Each serves a distinct continuity need at a different timescale.
+
+#### Resume/Handoff Protocol
+
+The agent lifecycle with continuity enabled follows this pattern:
+
+```
+Session Start → setup() → Resume Protocol → Execute → Handoff Protocol → Session End
+```
+
+**Resume Protocol** (session start):
+- SessionStore loads `messages`, `checkpoint_state`, and `pending_question`
+- If `checkpoint_state` exists and schema matches, load it as `agent.state`
+- If schema mismatches, discard checkpoint and start with default state
+- Check for an active work item lease via `WorkItemStore.get_checked_out_by_agent()`
+- If found, load the work item's most recent `HandoffNote` (if any)
+- AgentState reducer may replay events from TraceStore if `state_recovery.enabled: true`
+
+**Handoff Protocol** (session end):
+- If a work item is checked out and incomplete, call `update_work_progress()` with a `HandoffNote` capturing:
+  - `accomplished`: What was completed this session
+  - `attempted`: What was tried but failed (with reasons)
+  - `remaining`: What still needs to be done
+  - `blockers`: Anything preventing forward progress
+  - `artifacts`: File paths, URLs, or identifiers produced
+  - `context`: Any load-bearing context for the next agent/session
+- SessionStore persists `messages`, `checkpoint_state`, and `pending_question`
+- TraceStore persists span trees (if enabled)
+- MemoryHub receives any `write_memory()` calls made during the session
+
+The resume/handoff protocol is implemented as a **rule** (`rules/session-continuity.md`) and **skill** (`skills/session-continuity/SKILL.md`), not as framework lifecycle hooks. This is intentional — resume logic is domain-specific and agents must retain flexibility to adapt the protocol to their needs.
+
+#### Configuration Matrix
+
+Enable continuity features based on your deployment pattern:
+
+| Pattern | Sessions | Traces | AgentState | Work Items | Memory |
+|---------|----------|--------|------------|------------|--------|
+| Stateless Q&A | off | optional | no | no | optional |
+| Single-agent, long tasks | on | on | yes | optional | on |
+| Multi-agent, shared work | on | on | yes | on | on |
+| Ambient (cron-triggered) | on | on | yes | on | on |
+
+**Stateless Q&A**: No continuity needed. Each request is independent.
+
+**Single-agent, long tasks**: One agent, multiple sessions. Enable sessions + traces for message history and audit trail. Use AgentState to checkpoint progress (e.g., "processed 1000/5000 records"). Memory captures reusable lessons.
+
+**Multi-agent, shared work**: Multiple agents pulling from a shared work queue. Enable WorkItemStore for lease-based coordination and HandoffNotes for structured handoff. AgentState tracks per-session progress; Memory shares cross-agent knowledge.
+
+**Ambient (cron-triggered)**: Event-driven agents running unattended. All continuity mechanisms enabled. Sessions persist across cron invocations, AgentState checkpoints incremental progress, WorkItemStore coordinates with other agents, Memory captures lessons learned.
+
+#### Failure Recovery
+
+When an agent crashes mid-work, the system self-heals:
+- **SessionStore** reloads the message history on next request
+- **AgentState** recovers via reducer replay from TraceStore (if `state_recovery.enabled: true`)
+- **Work item lease** expires (default 3600s) and the item returns to the pool for another agent to claim
+- **Memory** remains intact — any `write_memory()` calls committed before the crash are preserved
+
+No manual intervention required. The next agent (or session) picks up where the previous one left off.
+
+Full design: `planning/session-continuity-patterns.md`.
 
 ## Event-Triggered Mode
 
