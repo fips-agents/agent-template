@@ -395,6 +395,37 @@ class StageDemoted:
     reason: str
 
 
+@dataclass
+class SpawnAgentInvoked:
+    """Emitted when a spawn_agent tool call begins."""
+    role: str
+    task: str
+    span_id: str
+    tools: list[str]
+    model: str | None
+    depth: int
+
+
+@dataclass
+class SpawnAgentCompleted:
+    """Emitted when a spawned ephemeral agent finishes successfully."""
+    role: str
+    span_id: str
+    content: str
+    tokens_used: dict[str, int]
+    tool_calls_made: int
+    cost_usd: float
+
+
+@dataclass
+class SpawnAgentFailed:
+    """Emitted when a spawned ephemeral agent fails."""
+    role: str
+    span_id: str
+    error_type: str
+    error_message: str
+
+
 # Discriminated union of every event a stream can emit.
 StreamEvent = Union[
     ReasoningDelta,
@@ -433,4 +464,7 @@ StreamEvent = Union[
     SkillQuarantined,
     StagePromoted,
     StageDemoted,
+    SpawnAgentInvoked,
+    SpawnAgentCompleted,
+    SpawnAgentFailed,
 ]

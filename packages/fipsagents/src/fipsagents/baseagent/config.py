@@ -668,6 +668,14 @@ class IdentityServiceAccount(BaseModel):
     service_account: str
 
 
+class SpawnConfig(BaseModel):
+    """Ad-hoc spawn_agent tool configuration."""
+    enabled: bool = True
+    max_depth: int = Field(default=3, ge=1, le=10)
+    max_iterations: int = Field(default=10, ge=1, le=100)
+    allowed_models: list[str] | None = None
+
+
 class SubagentConfig(BaseModel):
     """Configuration for a single registered subagent.
 
@@ -1422,6 +1430,7 @@ class AgentConfig(BaseModel):
     prompt_assembly: PromptAssemblyConfig | None = None
     self_healing: SelfHealingConfig = Field(default_factory=SelfHealingConfig)
     maturation: MaturationConfig = Field(default_factory=MaturationConfig)
+    spawn: SpawnConfig = Field(default_factory=SpawnConfig)
 
     @model_validator(mode="after")
     def _no_duplicate_subagent_names(self) -> "AgentConfig":
