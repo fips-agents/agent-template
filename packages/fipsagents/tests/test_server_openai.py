@@ -49,6 +49,7 @@ class _StubAgent(BaseAgent):
         self._system_prompt: str = ""
         self.messages: list[dict] = []
         self.tools = ToolRegistry()
+        self._delegation_depth = 0
         self.config = types.SimpleNamespace(
             model=types.SimpleNamespace(
                 name=model_name,
@@ -1756,3 +1757,155 @@ def test_session_usage_uses_cost_data_model_over_default(tmp_path):
     assert body["model"] == "billed-model"
     # 1000/1000 * 0.01, NOT 99.0
     assert body["cost_usd"] == pytest.approx(0.01)
+
+
+# ---------------------------------------------------------------------------
+# Delegation depth header (x-subagent-depth) (#181)
+# ---------------------------------------------------------------------------
+
+
+def test_depth_header_sets_delegation_depth():
+    """x-subagent-depth header sets agent._delegation_depth during request."""
+    captured_depth = []
+
+    class _CaptureDepthStub(_StubAgent):
+        def __init__(self, *args, **kwargs):
+            super().__init__([], model_name="stub-model")
+            self._delegation_depth = 0
+
+        async def astep_stream(self, *, max_iterations: int = 10):
+            captured_depth.append(self._delegation_depth)
+            yield ContentDelta(content="ok")
+            yield StreamComplete(finish_reason="stop", metrics=StreamMetrics())
+
+    server = OpenAIChatServer(_CaptureDepthStub)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+            headers={"x-subagent-depth": "2"},
+        )
+        assert resp.status_code == 200
+        # After request, depth should be restored to 0.
+        assert server._agent._delegation_depth == 0
+
+    # During the request, depth was set to 2.
+    assert captured_depth == [2]
+
+
+def test_depth_header_absent_defaults_to_zero():
+    """Without x-subagent-depth header, _delegation_depth stays at 0."""
+    captured_depth = []
+
+    class _CaptureDepthStub(_StubAgent):
+        def __init__(self, *args, **kwargs):
+            super().__init__([], model_name="stub-model")
+            self._delegation_depth = 0
+
+        async def astep_stream(self, *, max_iterations: int = 10):
+            captured_depth.append(self._delegation_depth)
+            yield ContentDelta(content="ok")
+            yield StreamComplete(finish_reason="stop", metrics=StreamMetrics())
+
+    server = OpenAIChatServer(_CaptureDepthStub)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+        )
+        assert resp.status_code == 200
+        assert server._agent._delegation_depth == 0
+
+    assert captured_depth == [0]
+
+
+def test_depth_header_restored_after_streaming_request():
+    """Streaming requests also restore _delegation_depth to 0 after completion."""
+    events = [
+        ContentDelta(content="hi"),
+        StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+    ]
+    server = _build_server(events)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "ping"}],
+                "stream": True,
+            },
+            headers={"x-subagent-depth": "3"},
+        )
+        assert resp.status_code == 200
+        # Drain the stream so the finally block runs.
+        _ = resp.text
+        # After request, depth should be restored to 0.
+        assert server._agent._delegation_depth == 0
+
+
+def test_depth_header_malformed_ignored():
+    """Invalid x-subagent-depth values are silently ignored."""
+    captured_depth = []
+
+    class _CaptureDepthStub(_StubAgent):
+        def __init__(self, *args, **kwargs):
+            super().__init__([], model_name="stub-model")
+            self._delegation_depth = 0
+
+        async def astep_stream(self, *, max_iterations: int = 10):
+            captured_depth.append(self._delegation_depth)
+            yield ContentDelta(content="ok")
+            yield StreamComplete(finish_reason="stop", metrics=StreamMetrics())
+
+    server = OpenAIChatServer(_CaptureDepthStub)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+            headers={"x-subagent-depth": "not_a_number"},
+        )
+        assert resp.status_code == 200
+        assert server._agent._delegation_depth == 0
+
+    # Malformed header should be ignored, depth stays 0.
+    assert captured_depth == [0]
+
+
+def test_depth_header_negative_accepted():
+    """Negative depth values are parsed (edge case validation)."""
+    captured_depth = []
+
+    class _CaptureDepthStub(_StubAgent):
+        def __init__(self, *args, **kwargs):
+            super().__init__([], model_name="stub-model")
+            self._delegation_depth = 0
+
+        async def astep_stream(self, *, max_iterations: int = 10):
+            captured_depth.append(self._delegation_depth)
+            yield ContentDelta(content="ok")
+            yield StreamComplete(finish_reason="stop", metrics=StreamMetrics())
+
+    server = OpenAIChatServer(_CaptureDepthStub)
+    with TestClient(server.app) as client:
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+            headers={"x-subagent-depth": "-1"},
+        )
+        assert resp.status_code == 200
+        # After request, depth should be restored to 0.
+        assert server._agent._delegation_depth == 0
+
+    # During the request, depth was set to -1.
+    assert captured_depth == [-1]
