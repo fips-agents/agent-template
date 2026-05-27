@@ -57,18 +57,98 @@ def _bytes_path(bytes_dir: str, file_id: str) -> str:
 # per process instead of on every upload.
 _magic_unavailable_logged = False
 
+# Magic-byte signatures for the built-in fallback sniffer.  Each entry
+# is ``(offset, prefix_bytes, mime_type)``.  Checked in order; first
+# match wins.
+_SIGNATURES: list[tuple[int, bytes, str]] = [
+    # Images
+    (0, b"\x89PNG\r\n\x1a\n", "image/png"),
+    (0, b"\xff\xd8\xff", "image/jpeg"),
+    (0, b"GIF87a", "image/gif"),
+    (0, b"GIF89a", "image/gif"),
+    (0, b"RIFF", "image/webp"),       # needs secondary check for WEBP
+    (0, b"BM", "image/bmp"),
+    (0, b"II\x2a\x00", "image/tiff"),  # little-endian TIFF
+    (0, b"MM\x00\x2a", "image/tiff"),  # big-endian TIFF
+    # Documents
+    (0, b"%PDF", "application/pdf"),
+    # Archives
+    (0, b"PK\x03\x04", "application/zip"),
+    (0, b"\x1f\x8b", "application/gzip"),
+    # Audio / video
+    (0, b"OggS", "audio/ogg"),
+    (0, b"\xff\xfb", "audio/mpeg"),    # MP3 frame sync
+    (0, b"\xff\xf3", "audio/mpeg"),
+    (0, b"\xff\xf2", "audio/mpeg"),
+    (0, b"ID3", "audio/mpeg"),         # MP3 with ID3 tag
+    (0, b"fLaC", "audio/flac"),
+    (0, b"RIFF", "audio/wav"),         # needs secondary check for WAVE
+]
+
+# RIFF container needs a secondary fourcc check at offset 8.
+_RIFF_SUBTYPES: dict[bytes, str] = {
+    b"WEBP": "image/webp",
+    b"WAVE": "audio/wav",
+    b"AVI ": "video/x-msvideo",
+}
+
+
+def _sniff_builtin(data: bytes) -> str | None:
+    """Pure-Python magic-byte sniffer — no external dependencies.
+
+    Handles the most common binary signatures and a basic text/binary
+    heuristic.  Returns None when the content doesn't match any known
+    pattern and doesn't look like plain text.
+    """
+    if not data:
+        return None
+
+    # Check fixed-offset magic-byte signatures.
+    for offset, sig, mime in _SIGNATURES:
+        if data[offset:offset + len(sig)] == sig:
+            # RIFF container: disambiguate via the fourcc at offset 8.
+            if sig == b"RIFF" and len(data) >= 12:
+                fourcc = bytes(data[8:12])
+                riff_mime = _RIFF_SUBTYPES.get(fourcc)
+                if riff_mime:
+                    return riff_mime
+                continue  # unrecognised RIFF variant — skip
+            return mime
+
+    # ftyp-based container (MP4 / M4A / QuickTime).
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return "video/mp4"
+
+    # Text heuristic: if the first 8 KiB contain only bytes that are
+    # common in UTF-8 / ASCII text, call it text/plain.
+    sample = data[:8192]
+    # Allow TAB (0x09), LF (0x0a), CR (0x0d), and printable ASCII
+    # (0x20-0x7e), plus any multi-byte UTF-8 continuation/start
+    # bytes (0x80-0xfe).  Reject NUL and most C0 control chars.
+    _TEXT_SAFE = frozenset(
+        {0x09, 0x0A, 0x0D}
+        | set(range(0x20, 0x7F))
+        | set(range(0x80, 0xFF))
+    )
+    if all(b in _TEXT_SAFE for b in sample):
+        return "text/plain"
+
+    return None
+
 
 def detect_mime(data: bytes) -> str | None:
-    """Sniff the MIME type of *data* via libmagic, or None on failure.
+    """Sniff the MIME type of *data* via libmagic, falling back to a
+    built-in pure-Python sniffer when libmagic is unavailable.
 
-    Returns the detected MIME (e.g. ``application/pdf``) when both
-    python-magic and libmagic are available; logs a one-time warning
-    and returns None when either is missing. The caller is expected to
-    fall back to the client-supplied ``Content-Type`` in that case.
+    Returns the detected MIME (e.g. ``application/pdf``) when
+    identification succeeds; returns ``None`` only when the content
+    cannot be recognised by either backend.
 
-    The first call constructs a ``Magic`` instance which loads the
-    libmagic database; subsequent calls reuse it via a module-level
-    cache.
+    Prefers libmagic for its breadth (hundreds of signatures) but the
+    built-in fallback covers the most common binary formats and a
+    text/binary heuristic so MIME-dependent features (allowlist, file
+    upload type recording, data-URI conversion) work without requiring
+    a C library.
     """
     global _magic_unavailable_logged
     try:
@@ -77,17 +157,17 @@ def detect_mime(data: bytes) -> str | None:
         if not _magic_unavailable_logged:
             logger.warning(
                 "detect_mime: python-magic / libmagic not available; "
-                "falling back to client-supplied Content-Type. Install "
-                "python-magic and libmagic for content-based MIME "
-                "validation (fipsagents[files] + system libmagic).",
+                "using built-in magic-byte sniffer. Install "
+                "python-magic and libmagic for broader MIME coverage "
+                "(fipsagents[files] + system libmagic).",
             )
             _magic_unavailable_logged = True
-        return None
+        return _sniff_builtin(data)
     try:
         return magic_mod.from_buffer(data)
     except Exception as exc:
         logger.warning("detect_mime: libmagic raised %s: %s", type(exc).__name__, exc)
-        return None
+        return _sniff_builtin(data)
 
 
 def _get_magic_module():

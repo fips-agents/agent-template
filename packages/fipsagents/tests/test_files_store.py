@@ -427,7 +427,9 @@ class TestDetectMime:
         # Reset the warn-once flag so the fallback path actually runs.
         monkeypatch.setattr(files_mod, "_magic_unavailable_logged", False)
 
-        assert detect_mime(b"anything") is None
+        # Binary blob with NUL bytes — no magic signature match and
+        # fails the text heuristic, so the builtin sniffer returns None.
+        assert detect_mime(b"\x00\x01\x02\x03\x04") is None
 
     def test_returns_none_on_runtime_error(self, monkeypatch):
         from fipsagents.server import files as files_mod
@@ -437,7 +439,8 @@ class TestDetectMime:
                 raise RuntimeError("libmagic exploded")
 
         monkeypatch.setattr(files_mod, "_get_magic_module", lambda: _Boom())
-        assert detect_mime(b"anything") is None
+        # Binary blob — builtin fallback also returns None.
+        assert detect_mime(b"\x00\x01\x02\x03\x04") is None
 
 
 class TestCreateFileStore:
