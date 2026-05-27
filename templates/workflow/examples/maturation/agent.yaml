@@ -1,0 +1,85 @@
+# agent.yaml — Maturation lifecycle example
+#
+# Demonstrates self-healing + maturation + work items + prompt assembly
+# working together. A proto-agent suggests skills for review; an
+# apprentice+ agent learns them directly.
+
+agent:
+  name: ${AGENT_NAME:-maturation-example}
+  description: "Stage-gated skill learning workflow"
+  version: 0.1.0
+
+model:
+  provider: ${MODEL_PROVIDER:-openai}
+  endpoint: ${MODEL_ENDPOINT:-http://llamastack:8321/v1}
+  name: ${MODEL_NAME:-meta-llama/Llama-3.3-70B-Instruct}
+  temperature: 0.3
+  max_tokens: 4096
+
+prompt_assembly:
+  identity:
+    source: identity.md
+    enabled: true
+  personality:
+    source: personality.md
+    enabled: false
+  governance_enabled: true
+  capabilities_enabled: true
+
+loop:
+  max_iterations: ${MAX_ITERATIONS:-50}
+  backoff:
+    initial: 1.0
+    max: 30.0
+    multiplier: 2.0
+
+logging:
+  level: ${LOG_LEVEL:-INFO}
+
+server:
+  host: ${HOST:-0.0.0.0}
+  port: ${PORT:-8080}
+
+  storage:
+    backend: ${STORAGE_BACKEND:-sqlite}
+    sqlite_path: ${SQLITE_PATH:-./agent.db}
+
+  sessions:
+    enabled: true
+    max_age_hours: 168
+
+  traces:
+    enabled: true
+    sampling_rate: 1.0
+
+  work_items:
+    enabled: true
+    lease_duration_seconds: 300
+    budget_headroom_pct: 10.0
+    capabilities:
+      - name: "skill:self_healing"
+
+self_healing:
+  enabled: true
+  trust_level: ${SELF_HEALING_TRUST_LEVEL:-0}
+  trust_domains:
+    - document_processing
+    - data_analysis
+  review_policy: human_review
+  learned_skills_dir: ./learned_skills
+  max_skills: 50
+
+maturation:
+  enabled: true
+  apprentice_max_trust: 1
+  journeyman_max_trust: 3
+  specialist_min_trust: 4
+
+memory:
+  backend: ${MEMORY_BACKEND:-}
+  config_path: .memoryhub.yaml
+
+security:
+  mode: ${SECURITY_MODE:-enforce}
+  tool_inspection:
+    enabled: true

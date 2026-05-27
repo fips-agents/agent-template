@@ -1194,6 +1194,25 @@ Level transitions at configurable thresholds (default: 10/50/200/500 for levels 
 | `GET /v1/agent/skills` | All skills (bundled + learned) |
 | `GET /v1/agent/capabilities` | Discovered capabilities |
 
+## Agent Maturation
+
+Opt-in via `maturation:` in `agent.yaml`. Maturation stages are derived from trust levels — there is no independent maturation state. `MaturationManager` reads `TrustManager.level` and maps it to a lifecycle stage with graduated autonomy:
+
+| Stage | Trust Level | can_create_skills | review_gate | can_edit_own | can_delete_own |
+|-------|------------|-------------------|-------------|-------------|---------------|
+| Proto-agent | 0 | No | — | No | No |
+| Apprentice | 1 | Yes | human_review | No | No |
+| Journeyman | 2-3 | Yes | peer_review | Yes | No |
+| Specialist | 4+ | Yes | audit_only | Yes | Yes |
+
+**Stage-gated routing**: `learn_skill` checks `MaturationManager.current_stage()` via `StagePermissions.can_create_skills`. Proto-agents are redirected to `suggest_skill`. In workflow templates, `CheckStageNode` reads the stage and a conditional edge routes to the appropriate path. See `templates/workflow/examples/maturation/` for a full working example.
+
+**Trust seeding**: A child agent spawned by a trusted parent (level >= 3) with overlapping capabilities starts at trust level 1 (apprentice) instead of 0 via `TrustManager.seed_from_parent()`.
+
+**Quarantine**: On trust demotion, `quarantine_out_of_scope_skills()` marks learned skills whose domain falls outside the agent's current `trust_domains` as `quarantined: true` in SKILL.md frontmatter. `SkillLoader.load_learned()` excludes quarantined skills.
+
+REST: `GET /v1/agent/maturation` returns stage, permissions, trust state, and promotion progress.
+
 ## Cross-Agent Platform Service
 
 The v0.12.0 enterprise feature track added four stateful surfaces to BaseAgent's server layer — sessions (`/v1/sessions`), traces (`/v1/traces`), feedback (`/v1/feedback`), and metrics (`/metrics`). All four follow the same pattern: BaseAgent owns a pluggable store (Null / SQLite / Postgres) and the server exposes REST endpoints. This was the right call when most deployments had one or two agents.
