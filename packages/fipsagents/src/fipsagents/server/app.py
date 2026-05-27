@@ -1676,6 +1676,16 @@ class OpenAIChatServer:
         # subsequent requests when the agent instance is reused.
         agent._inbound_auth_header = request.headers.get("authorization")
 
+        # Propagate delegation depth from upstream callers so this agent's
+        # delegate_to_agent / spawn_agent depth checks enforce correctly
+        # in multi-hop remote chains.
+        _raw_depth = request.headers.get("x-subagent-depth")
+        if _raw_depth is not None:
+            try:
+                agent._delegation_depth = int(_raw_depth)
+            except (ValueError, TypeError):
+                pass
+
         if not req.stream:
             try:
                 content, metrics, finish_reason = await self._collect_sync(
@@ -1685,6 +1695,7 @@ class OpenAIChatServer:
                 )
             finally:
                 agent._inbound_auth_header = None
+                agent._delegation_depth = 0
                 agent._permission_source = None
                 agent._permission_preapproved = set()
             # Session: save after sync response.
@@ -2100,8 +2111,8 @@ class OpenAIChatServer:
                 logger.exception("Stream errored")
                 stream_status = "error"
             finally:
-                # Reset auth header so it doesn't bleed into the next request.
                 self._agent._inbound_auth_header = None
+                self._agent._delegation_depth = 0
                 self._agent._permission_source = None
                 self._agent._permission_preapproved = set()
 
