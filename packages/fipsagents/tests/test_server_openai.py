@@ -1909,3 +1909,5 @@ def test_depth_header_negative_accepted():
 
     # During the request, depth was set to -1.
     assert captured_depth == [-1]
+
+

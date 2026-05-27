@@ -1,65 +1,56 @@
-# Agent Name
+# Agent Project
 
-<!-- This file is populated by /create-agent from AGENT_PLAN.md. -->
+An AI agent built on the fipsagents BaseAgent framework. Runs as an
+OpenAI-compatible HTTP server (`/v1/chat/completions`).
 
-## Version
+## Build and Run
 
-0.1.0
+```bash
+make install       # Create .venv, install dependencies
+make run-local     # Run the agent locally (port 8080)
+make test          # Run pytest
+make lint          # Lint with ruff
+make build         # Build container (podman, linux/amd64)
+make deploy PROJECT=<ns>   # Deploy to OpenShift via Helm
+```
 
-## Capabilities
+## Project Structure
 
-<!-- Populated by /create-agent from the Purpose section of AGENT_PLAN.md -->
+```
+src/agent.py       # Agent subclass — implements step()
+tools/             # One @tool-decorated .py file per tool
+prompts/           # Markdown with YAML frontmatter, one per prompt
+skills/            # agentskills.io directories with SKILL.md
+rules/             # Plain Markdown, one constraint per file
+agent.yaml         # Config with ${VAR:-default} env var substitution
+chart/             # Helm chart for OpenShift deployment
+evals/             # Eval cases
+```
 
-## Tools
+## Conventions
 
-<!-- Populated by /create-agent. Format:
+- Tools use `@tool(description=..., visibility=...)` — every tool must
+  declare its visibility plane (`llm_only`, `agent_only`, or `both`).
+- Do not edit `src/fipsagents/baseagent/` — that is the framework.
+- Do not import `openai` directly — use BaseAgent's `call_model*` methods.
+- Do not hardcode model names or endpoints — use `agent.yaml` with env
+  var substitution.
+- Run `make test && make lint` before committing.
 
-| Tool | Visibility | Parameters |
-|------|------------|------------|
-| `tool_name` | `llm_only` | `param1`, `param2` |
+## Testing
 
--->
-
-## Input / Output
-
-<!-- Populated by /create-agent from the Interaction Model section of AGENT_PLAN.md -->
+```bash
+make test          # Unit tests
+make test-cov      # With coverage report
+make eval          # Run eval cases from evals/evals.yaml
+```
 
 ## Configuration
 
-Agent behavior is controlled by `agent.yaml`. All values support
-`${VAR:-default}` environment variable substitution so that the configuration
-structure stays baked into the container image while environment-specific
-values come from OpenShift ConfigMaps and Secrets at deploy time.
+`agent.yaml` controls agent behavior. All values support `${VAR:-default}`
+environment variable substitution. Key env vars:
 
-See `agent.yaml` for the full schema.
-
-## Dependencies
-
-The agent requires an LLM endpoint that speaks the OpenAI-compatible chat
-completions API. The template uses the OpenAI async SDK, which connects to
-vLLM, LlamaStack, llm-d, or any other OpenAI-compatible endpoint.
-
-The agent has no dependency on LangChain, LangGraph, or any agent framework.
-
-## Deployment
-
-```sh
-make build   # Build the container image
-make deploy  # Deploy to OpenShift via Helm
-```
-
-See `Makefile` and `chart/` for details.
-
-## Development
-
-This agent was scaffolded using the `agent-loop` template via the `fips-agents`
-CLI. The slash command workflow in `.claude/commands/` guides development:
-
-```
-/plan-agent   -> design the agent
-/create-agent -> scaffold from the plan
-/add-tool     -> add a new tool
-/add-skill    -> add a new skill
-/exercise-agent -> test agent behavior
-/deploy-agent -> build and deploy to OpenShift
-```
+- `MODEL_ENDPOINT` — LLM API endpoint
+- `MODEL_NAME` — Model identifier
+- `MAX_ITERATIONS` — Agent loop cap
+- `LOG_LEVEL` — Python logging level

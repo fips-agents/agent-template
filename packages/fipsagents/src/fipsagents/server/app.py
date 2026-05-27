@@ -15,7 +15,7 @@ from typing import Any, AsyncIterator
 
 try:
     from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
-    from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.responses import JSONResponse, Response, StreamingResponse
     from starlette.middleware.base import BaseHTTPMiddleware
 except ImportError as exc:  # pragma: no cover — helpful error path
     raise ImportError(
@@ -1446,8 +1446,6 @@ class OpenAIChatServer:
             self._metrics_collector, NullMetricsCollector
         ):
             raise HTTPException(status_code=404, detail="Metrics not enabled")
-        from fastapi.responses import Response
-
         return Response(
             content=self._metrics_collector.generate_metrics(),
             media_type="text/plain; version=0.0.4; charset=utf-8",
