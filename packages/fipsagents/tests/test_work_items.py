@@ -6,10 +6,13 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+import frontmatter
 import pytest
 import pytest_asyncio
 
 from fipsagents.baseagent.events import (
+    SkillQuarantined,
+    TrustLevelChanged,
     WorkItemCheckedOut,
 )
 from fipsagents.server.work_items import (
@@ -70,6 +73,12 @@ class TestNullWorkItemStore:
         assert expired == []
 
     @pytest.mark.asyncio
+    async def test_stats_returns_empty(self):
+        store = NullWorkItemStore()
+        counts = await store.stats()
+        assert counts == {}
+
+    @pytest.mark.asyncio
     async def test_create_returns_item(self):
         store = NullWorkItemStore()
         item = WorkItem(id="wi_123", title="Test")
@@ -96,9 +105,16 @@ class TestCreateWorkItemStore:
         store = create_work_item_store("sqlite", sqlite_path=str(tmp_path / "test.db"))
         assert isinstance(store, SqliteWorkItemStore)
 
-    def test_postgres_raises(self):
-        with pytest.raises(NotImplementedError, match="postgres"):
+    def test_postgres_requires_url(self):
+        with pytest.raises(ValueError, match="database_url"):
             create_work_item_store("postgres")
+
+    def test_postgres_returns_postgres_store(self):
+        from fipsagents.server.work_item_stores.postgres import PostgresWorkItemStore
+        store = create_work_item_store(
+            "postgres", database_url="postgresql://localhost/test",
+        )
+        assert isinstance(store, PostgresWorkItemStore)
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +352,24 @@ class TestSqliteWorkItemStore:
         assert expired[0].status == WorkItemStatus.available
 
     @pytest.mark.asyncio
+    async def test_stats_returns_counts_by_status(self, store):
+        item1 = WorkItem(id="stat-1", title="Item 1", description="test")
+        item2 = WorkItem(id="stat-2", title="Item 2", description="test")
+        await store.create(item1)
+        await store.create(item2)
+        await store.checkout("stat-1", actor_id="agent-a", lease_duration_seconds=300)
+
+        counts = await store.stats()
+        assert counts.get("available", 0) == 1
+        assert counts.get("checked_out", 0) == 1
+        assert sum(counts.values()) == 2
+
+    @pytest.mark.asyncio
+    async def test_stats_empty_store(self, store):
+        counts = await store.stats()
+        assert counts == {}
+
+    @pytest.mark.asyncio
     async def test_capability_matching(self, store):
         # Create items with different capability requirements
         await store.create(WorkItem(
@@ -531,6 +565,154 @@ class TestWorkItemStockTools:
         assert isinstance(event, WorkItemCheckedOut)
         assert event.item_id == "wi_1"
         assert event.actor_id == "test-actor"
+
+    @pytest.mark.asyncio
+    async def test_complete_work_item_drains_trust_events(self):
+        """Promotion events from TrustManager surface in _self_healing_events."""
+        from fipsagents.baseagent.tools.work_items import make_work_item_tools
+        from fipsagents.baseagent.trust import TrustManager
+
+        agent = _make_mock_agent()
+        agent._self_healing_events = []
+
+        # Use a real TrustManager with a low promotion threshold so a single
+        # completion triggers a level 0 -> 1 transition.
+        agent._trust_manager = TrustManager(thresholds=(1.0, 50.0, 200.0, 500.0))
+
+        agent._work_item_store.complete = AsyncMock(return_value=WorkItem(
+            id="wi_promo", title="Promo task", status=WorkItemStatus.completed,
+        ))
+
+        tools = make_work_item_tools(agent)
+        complete_tool = next(
+            t for t in tools
+            if getattr(t, "__base_agent_tool__").name == "complete_work_item"
+        )
+
+        await complete_tool(
+            item_id="wi_promo",
+            result_summary="done",
+            accomplished=["everything"],
+        )
+
+        # Trust event should have been drained into _self_healing_events.
+        assert len(agent._self_healing_events) == 1
+        evt = agent._self_healing_events[0]
+        assert isinstance(evt, TrustLevelChanged)
+        assert evt.from_level == 0
+        assert evt.to_level == 1
+
+    @pytest.mark.asyncio
+    async def test_release_work_item_records_trust_failure(self):
+        """Releasing a work item records a trust failure and drains events."""
+        from fipsagents.baseagent.tools.work_items import make_work_item_tools
+        from fipsagents.baseagent.trust import TrustManager
+
+        agent = _make_mock_agent()
+        agent._self_healing_events = []
+
+        # Start at level 1 with score just above demotion threshold (5.0)
+        # so a single failure (-5.0) triggers demotion.
+        agent._trust_manager = TrustManager(
+            thresholds=(10.0, 50.0, 200.0, 500.0),
+        )
+        # Manually set level and score for the test scenario.
+        agent._trust_manager._state.level = 1
+        agent._trust_manager._state.score = 5.0
+
+        agent._work_item_store.release = AsyncMock(return_value=WorkItem(
+            id="wi_rel", title="Released task", status=WorkItemStatus.available,
+        ))
+
+        tools = make_work_item_tools(agent)
+        release_tool = next(
+            t for t in tools
+            if getattr(t, "__base_agent_tool__").name == "release_work_item"
+        )
+
+        await release_tool(
+            item_id="wi_rel",
+            accomplished=["step 1"],
+            remaining=["step 2", "step 3"],
+        )
+
+        # Trust failure should have been recorded.
+        assert agent._trust_manager._state.failures == 1
+
+        # Demotion event should be in _self_healing_events.
+        trust_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, TrustLevelChanged)
+        ]
+        assert len(trust_events) == 1
+        assert trust_events[0].from_level == 1
+        assert trust_events[0].to_level == 0
+
+    @pytest.mark.asyncio
+    async def test_demotion_quarantines_out_of_scope_skills(self, tmp_path):
+        """Trust demotion during release quarantines learned skills outside scope."""
+        from fipsagents.baseagent.config import AgentConfig, SelfHealingConfig
+        from fipsagents.baseagent.tools.work_items import make_work_item_tools
+        from fipsagents.baseagent.trust import TrustManager
+
+        agent = _make_mock_agent()
+        agent._self_healing_events = []
+        agent._base_dir = tmp_path
+
+        # Configure self-healing with restricted trust domains.
+        agent.config = AgentConfig(
+            self_healing=SelfHealingConfig(
+                enabled=True,
+                trust_level=1,
+                trust_domains=["document_processing"],
+                learned_skills_dir=str(tmp_path / "learned_skills"),
+            ),
+        )
+        agent.config.server.work_items.enabled = True
+
+        # Create a learned skill in an out-of-scope domain.
+        skill_dir = tmp_path / "learned_skills" / "nlp-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: nlp-skill\ndomain: nlp\nversion: 1\n"
+            "description: NLP skill\n---\nContent\n"
+        )
+
+        # Set up trust manager at level 1, score just above demotion threshold.
+        agent._trust_manager = TrustManager(
+            thresholds=(10.0, 50.0, 200.0, 500.0),
+        )
+        agent._trust_manager._state.level = 1
+        agent._trust_manager._state.score = 5.0
+
+        agent._work_item_store.release = AsyncMock(return_value=WorkItem(
+            id="wi_q", title="Quarantine trigger", status=WorkItemStatus.available,
+        ))
+
+        tools = make_work_item_tools(agent)
+        release_tool = next(
+            t for t in tools
+            if getattr(t, "__base_agent_tool__").name == "release_work_item"
+        )
+
+        await release_tool(
+            item_id="wi_q",
+            accomplished=["partial"],
+            remaining=["rest"],
+        )
+
+        # Verify quarantine event was emitted.
+        q_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, SkillQuarantined)
+        ]
+        assert len(q_events) == 1
+        assert q_events[0].skill_name == "nlp-skill"
+        assert "nlp" in q_events[0].reason
+
+        # Verify the skill file was actually marked quarantined.
+        post = frontmatter.load(str(skill_dir / "SKILL.md"))
+        assert post.metadata["quarantined"] is True
 
 
 # ---------------------------------------------------------------------------

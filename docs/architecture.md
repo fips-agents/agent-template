@@ -1042,6 +1042,84 @@ The sidecar container runs with `readOnlyRootFilesystem: true` and an emptyDir m
 
 AST guardrails are a defense-in-depth layer, not a hard security boundary. Python's dynamic nature means a sufficiently creative attacker can find bypass vectors. The real security comes from layering: AST validation teaches the LLM what is allowed, while container-level constraints (non-root, read-only filesystem, dropped capabilities, resource limits) provide the actual enforcement. Issue #26 tracks v2 hardening, including running the sandbox in a separate pod with a deny-all-egress NetworkPolicy.
 
+## Prompt Assembly
+
+Prompt assembly provides opt-in layered composition for agent system prompts with explicit precedence rules. When enabled via the `prompt_assembly:` config block, four immutable layers are assembled into the system message; three additional layers (knowledge, operational context, ephemeral) are handled by separate mechanisms.
+
+### Layer Taxonomy
+
+| Layer | Precedence | Mutability | Source | Purpose |
+|-------|-----------|-----------|--------|---------|
+| Identity | 0 | Immutable | `identity.md` or inline | Core agent purpose and role |
+| Personality | 1 | Immutable | `personality.md` (optional) | Communication style, tone |
+| Governance | 2 | Immutable | `rules/` directory | Behavioral constraints, policies |
+| Capabilities | 3 | Mixed | `skills/` + `learned_skills/` | What the agent knows how to do |
+| Knowledge | 4 | Agent-mutable | Memory backends | Facts and context retrieved per session |
+| Operational Context | 5 | Agent-mutable | `AgentState` / work items | Runtime state, current work |
+| Ephemeral | 6 | Transient | Per-turn injections | Tool results, one-off context |
+
+Layers 0–3 are assembled into the system message by `build_system_prompt()`. Layers 4–6 use existing framework mechanisms: memory prefix (`build_memory_prefix()` / `_inject_deferred_memory()`), state recovery (`StateReducerObserver`), and per-turn tool results.
+
+### Resolution and Precedence
+
+`PromptAssembler` in `fipsagents.baseagent.prompt_assembly` implements the composition logic:
+
+- **Identity** (layer 0): inline string from `agent.yaml` > `identity.md` file > system prompt fallback (first `# Identity` section or entire content when no frontmatter)
+- **Personality** (layer 1): `personality.md` file only, off by default
+- **Governance** (layer 2): all files in `rules/` concatenated with `---` separators
+- **Capabilities** (layer 3): skill stubs from `skills/` (frontmatter only) plus learned skills from `learned_skills/` (when that layer ships)
+
+Each layer is separated by `---` in the final system message. Higher layers cannot override or suppress lower-layer content.
+
+### Backward Compatibility
+
+When `prompt_assembly:` config is absent, legacy flat concatenation runs unchanged — the system prompt is loaded from `prompts/system.md` or assembled from legacy `identity + rules + skills` without precedence constraints. Existing agents are unaffected.
+
+### Assembly Audit Log
+
+Structured logging at the `fipsagents.baseagent.prompt_assembly` logger records which layers were assembled, their lengths, and any resolution failures (missing files, parse errors). This is for debugging prompt composition, not runtime decisions.
+
+## Human-in-the-Loop Tool Approval
+
+Tools can declare `requires_approval=True` (or a callable predicate) on the `@tool` decorator. When the LLM calls such a tool, the agent pauses via the existing permission "ask" flow:
+
+1. `astep_stream` checks `ToolMeta.requires_approval` before the server-layer `_permission_source`
+2. If approval needed and not pre-approved: emits `QuestionAsked`, appends `__permission_pending__` sentinel
+3. Server persists `pending_question` in session state, returns HTTP 409 on subsequent requests
+4. Client sends `answers_to_question_id` to approve/deny; server re-executes or injects denial
+
+Predicate form enables conditional gates: `@tool(requires_approval=lambda **kw: kw["amount"] > 1000)`.
+
+## Self-Healing and Trust
+
+Opt-in via `self_healing:` in `agent.yaml`. When enabled:
+
+**Learned Skills** — Three stock LLM tools auto-register:
+
+| Tool | Trust Required | Disk Write | Purpose |
+|------|---------------|------------|---------|
+| `learn_skill` | >= 1 | Yes (`learned_skills/`) | Create/update versioned skill |
+| `suggest_skill` | any | No | Propose skill for review |
+| `rollback_skill` | >= 3 | Yes | Restore archived version |
+
+Skills are versioned in `.versions/` subdirectories. Domain validation enforces `trust_domains` (trust 4+ bypasses). Review policy (`audit_only`, `peer_review`, `human_review`) controls gating.
+
+**Trust Accumulation** — `TrustManager` tracks a continuous score:
+
+- Completions: +1.0 per successful work-item completion
+- Failures: -5.0 per failure (proportional to severity)
+- Violations: -50.0 per violation
+
+Level transitions at configurable thresholds (default: 10/50/200/500 for levels 1-4). Demotion at 50% of current threshold. `TrustLevelChanged` stream event emitted on transitions.
+
+**Scoreboard Endpoints:**
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /v1/agent/trust` | Trust level, score, history |
+| `GET /v1/agent/skills` | All skills (bundled + learned) |
+| `GET /v1/agent/capabilities` | Discovered capabilities |
+
 ## Cross-Agent Platform Service
 
 The v0.12.0 enterprise feature track added four stateful surfaces to BaseAgent's server layer — sessions (`/v1/sessions`), traces (`/v1/traces`), feedback (`/v1/feedback`), and metrics (`/metrics`). All four follow the same pattern: BaseAgent owns a pluggable store (Null / SQLite / Postgres) and the server exposes REST endpoints. This was the right call when most deployments had one or two agents.

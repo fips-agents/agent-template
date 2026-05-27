@@ -62,6 +62,9 @@ class Skill:
     content: str | None = None
     activated: bool = False
 
+    # Whether this skill was loaded from learned_skills (vs bundled).
+    learned: bool = False
+
     # Path to SKILL.md so we can load content later.
     source_path: Path | None = field(default=None, repr=False)
 
@@ -141,22 +144,93 @@ class SkillLoader:
         logger.info("Loaded %d skill stub(s)", len(self._skills))
         return list(self._skills.values())
 
+    def load_learned(self, learned_dir: str | Path) -> list[str]:
+        """Load learned skills from a directory, skipping name conflicts.
+
+        Same discovery logic as :meth:`load_all` but sets ``learned=True``
+        on each skill.  If a learned skill has the same name as a bundled
+        skill already in the registry, the bundled version takes precedence
+        and the learned skill is skipped with a warning.
+
+        Parameters
+        ----------
+        learned_dir:
+            Root directory containing learned skill subdirectories.
+
+        Returns
+        -------
+        list[str]:
+            Names of successfully loaded learned skills.
+        """
+        root = Path(learned_dir)
+        if not root.is_dir():
+            logger.debug("Learned skills directory does not exist: %s", root)
+            return []
+
+        loaded: list[str] = []
+        for child in sorted(root.iterdir()):
+            if not child.is_dir():
+                continue
+            skill_file = child / SKILL_FILENAME
+            if not skill_file.exists():
+                continue
+            try:
+                skill = _load_frontmatter(skill_file)
+            except SkillError:
+                logger.warning(
+                    "Skipping invalid learned skill in %s", child.name,
+                    exc_info=True,
+                )
+                continue
+
+            # Skip quarantined skills.
+            try:
+                post = frontmatter.load(str(skill_file))
+                if post.metadata.get("quarantined", False):
+                    logger.info(
+                        "Skipping quarantined learned skill: %s", skill.name,
+                    )
+                    continue
+            except Exception:
+                pass  # frontmatter parse errors already handled above
+
+            if skill.name in self._skills:
+                logger.warning(
+                    "Learned skill %r conflicts with bundled skill — skipping "
+                    "(bundled takes precedence)",
+                    skill.name,
+                )
+                continue
+
+            skill.learned = True
+            self._skills[skill.name] = skill
+            loaded.append(skill.name)
+            logger.debug("Loaded learned skill: %s", skill.name)
+
+        if loaded:
+            logger.info("Loaded %d learned skill(s)", len(loaded))
+        return loaded
+
     # -- Manifest ------------------------------------------------------------
 
     def get_manifest(self) -> list[SkillManifestEntry]:
         """Return lightweight summaries suitable for LLM context injection.
 
         This never triggers activation — it only uses frontmatter data that
-        was already loaded during ``load_all()``.
+        was already loaded during ``load_all()``.  Learned skills are tagged
+        with ``[learned]`` in their description.
         """
-        return [
-            SkillManifestEntry(
+        entries = []
+        for s in self._skills.values():
+            desc = s.description
+            if s.learned:
+                desc = f"[learned] {desc}"
+            entries.append(SkillManifestEntry(
                 name=s.name,
-                description=s.description,
+                description=desc,
                 triggers=list(s.triggers),
-            )
-            for s in self._skills.values()
-        ]
+            ))
+        return entries
 
     # -- Activation ----------------------------------------------------------
 

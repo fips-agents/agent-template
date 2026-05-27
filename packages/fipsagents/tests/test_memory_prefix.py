@@ -79,6 +79,7 @@ def _make_agent(
             self.prompts = _stub_prompts()
             self.rules = _stub_rules()
             self.skills = _stub_skills()
+            self._assembler = None
 
     return _PrefixTestAgent()
 

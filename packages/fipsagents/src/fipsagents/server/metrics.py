@@ -14,9 +14,12 @@ from fipsagents.baseagent.events import (
     EventFailed,
     EventProcessed,
     EventReceived,
+    SkillLearned,
+    SkillRolledBack,
     StreamComplete,
     StreamEvent,
     ToolResultEvent,
+    TrustLevelChanged,
     WorkItemCheckedOut,
     WorkItemCompleted,
 )
@@ -27,6 +30,7 @@ try:
     from prometheus_client import (
         CollectorRegistry,
         Counter,
+        Gauge,
         Histogram,
         generate_latest,
     )
@@ -141,6 +145,36 @@ class MetricsCollector:
             "Total work item lease expiries",
             registry=self._registry,
         )
+        self.trust_level = Gauge(
+            "agent_trust_level",
+            "Current agent trust level (0-4)",
+            registry=self._registry,
+        )
+        self.trust_score = Gauge(
+            "agent_trust_score",
+            "Current agent trust score",
+            registry=self._registry,
+        )
+        self.trust_promotions = Counter(
+            "agent_trust_promotions_total",
+            "Trust level promotions",
+            registry=self._registry,
+        )
+        self.trust_demotions = Counter(
+            "agent_trust_demotions_total",
+            "Trust level demotions",
+            registry=self._registry,
+        )
+        self.skills_learned = Counter(
+            "agent_skills_learned_total",
+            "Skills learned or updated",
+            registry=self._registry,
+        )
+        self.skills_rolled_back = Counter(
+            "agent_skills_rolled_back_total",
+            "Skills rolled back to prior version",
+            registry=self._registry,
+        )
 
     def _token_labels(
         self,
@@ -206,6 +240,17 @@ class MetricsCollector:
                 self.work_items_checked_out.inc()
             elif isinstance(event, WorkItemCompleted):
                 self.work_items_completed.inc()
+            elif isinstance(event, TrustLevelChanged):
+                self.trust_level.set(event.to_level)
+                self.trust_score.set(event.score)
+                if event.to_level > event.from_level:
+                    self.trust_promotions.inc()
+                else:
+                    self.trust_demotions.inc()
+            elif isinstance(event, SkillLearned):
+                self.skills_learned.inc()
+            elif isinstance(event, SkillRolledBack):
+                self.skills_rolled_back.inc()
             elif isinstance(event, StreamComplete):
                 m = event.metrics
                 if m.prompt_tokens is not None:

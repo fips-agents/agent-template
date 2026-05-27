@@ -8,12 +8,15 @@ prometheus_client = pytest.importorskip("prometheus_client")
 
 from fipsagents.baseagent.events import (  # noqa: E402
     ContentDelta,
+    SkillLearned,
+    SkillRolledBack,
     StreamComplete,
     StreamMetrics,
     SubagentInvoked,
     SubagentCompleted,
     SubagentFailed,
     ToolResultEvent,
+    TrustLevelChanged,
 )
 from fipsagents.server.metrics import (  # noqa: E402
     MetricsCollector,
@@ -320,3 +323,66 @@ class TestFoundationEventPassthrough:
             result.append(e)
         assert len(result) == 2
         assert isinstance(result[0], PermissionDecisionMade)
+
+
+class TestTrustAndSkillMetrics:
+    """Verify trust and skill events update Prometheus metrics."""
+
+    @pytest.mark.asyncio
+    async def test_trust_level_changed_promotion_updates_metrics(self):
+        collector = MetricsCollector()
+        events = [
+            TrustLevelChanged(
+                from_level=0, to_level=1, score=10.0, reason="promoted",
+            ),
+            StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+        ]
+        async for _ in collector.observe(_emit_events(*events), model="test"):
+            pass
+        assert collector.trust_level._value.get() == 1
+        assert collector.trust_score._value.get() == 10.0
+        assert collector.trust_promotions._value.get() == 1
+        assert collector.trust_demotions._value.get() == 0
+
+    @pytest.mark.asyncio
+    async def test_trust_level_changed_demotion_updates_metrics(self):
+        collector = MetricsCollector()
+        events = [
+            TrustLevelChanged(
+                from_level=2, to_level=1, score=25.0, reason="demoted",
+            ),
+            StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+        ]
+        async for _ in collector.observe(_emit_events(*events), model="test"):
+            pass
+        assert collector.trust_level._value.get() == 1
+        assert collector.trust_score._value.get() == 25.0
+        assert collector.trust_promotions._value.get() == 0
+        assert collector.trust_demotions._value.get() == 1
+
+    @pytest.mark.asyncio
+    async def test_skill_learned_increments_counter(self):
+        collector = MetricsCollector()
+        events = [
+            SkillLearned(
+                skill_name="x", domain="d", version=1,
+                review_status="auto_approved",
+            ),
+            StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+        ]
+        async for _ in collector.observe(_emit_events(*events), model="test"):
+            pass
+        assert collector.skills_learned._value.get() == 1
+
+    @pytest.mark.asyncio
+    async def test_skill_rolled_back_increments_counter(self):
+        collector = MetricsCollector()
+        events = [
+            SkillRolledBack(
+                skill_name="x", from_version=2, to_version=1, reason="test",
+            ),
+            StreamComplete(finish_reason="stop", metrics=StreamMetrics()),
+        ]
+        async for _ in collector.observe(_emit_events(*events), model="test"):
+            pass
+        assert collector.skills_rolled_back._value.get() == 1

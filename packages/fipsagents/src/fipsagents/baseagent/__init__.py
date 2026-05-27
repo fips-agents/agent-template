@@ -3,7 +3,7 @@
 __version__ = "0.9.0"
 
 from fipsagents.baseagent.agent import BaseAgent, StepOutcome, StepResult
-from fipsagents.baseagent.config import AgentConfig, AgentIdentity, ConfigError, NodeConfig, SecurityConfig, ServerConfig, StateRecoveryConfig, load_config, load_config_from_string
+from fipsagents.baseagent.config import AgentConfig, AgentIdentity, ConfigError, NodeConfig, PromptAssemblyConfig, SecurityConfig, ServerConfig, StateRecoveryConfig, load_config, load_config_from_string
 from fipsagents.baseagent.events import (
     ContentDelta,
     GuardrailFiredEvent,
@@ -25,6 +25,7 @@ from fipsagents.baseagent.memory import MemoryClientBase, NullMemoryClient, crea
 from fipsagents.baseagent.prompts import Prompt, PromptLoader
 from fipsagents.baseagent.rules import Rule, RuleLoader
 from fipsagents.baseagent.skills import Skill, SkillLoader
+from fipsagents.baseagent.prompt_assembly import PromptAssembler, PromptAssemblyAudit, PromptLayer
 from fipsagents.baseagent.diagnostics import RoleProbeResult, probe_role_support
 from fipsagents.baseagent.tool_inspector import InspectionFinding, InspectionResult, ToolInspector
 from fipsagents.baseagent.tools.question import QuestionAnswer, QuestionOption
@@ -41,6 +42,7 @@ __all__ = [
     "AgentIdentity",
     "ConfigError",
     "NodeConfig",
+    "PromptAssemblyConfig",
     "SecurityConfig",
     "ServerConfig",
     "StateRecoveryConfig",
@@ -74,6 +76,10 @@ __all__ = [
     # skills
     "Skill",
     "SkillLoader",
+    # prompt_assembly
+    "PromptAssembler",
+    "PromptAssemblyAudit",
+    "PromptLayer",
     # diagnostics
     "RoleProbeResult",
     "probe_role_support",

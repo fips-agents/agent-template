@@ -27,6 +27,7 @@ from fipsagents.baseagent.config import (
     _OFF_PLATFORM_PROVIDERS,
 )
 from fipsagents.baseagent.events import (
+    BudgetHeadroomWarning,
     ContentDelta,
     LimitExceeded,
     LoopBreakEvent,
@@ -139,12 +140,13 @@ class BaseAgent(abc.ABC):
         self.skills: SkillLoader = SkillLoader()
         self.rules: RuleLoader = RuleLoader()
         self.memory: MemoryClientBase = NullMemoryClient()
+        self._assembler: Any = None
 
         # Conversation state.
         self.messages: list[dict[str, Any]] = []
 
-        # MCP client references for cleanup.
-        self._mcp_clients: list[Any] = []
+        # MCP client references for cleanup; each entry is (client, label).
+        self._mcp_clients: list[tuple[Any, str]] = []
 
         # MCP prompts, resources, and resource templates — populated by connect_mcp().
         self._mcp_prompts: dict[str, tuple[Any, Any]] = {}      # name → (client, mcp.types.Prompt)
@@ -183,6 +185,21 @@ class BaseAgent(abc.ABC):
         self._work_item_store: Any = None
         self._work_item_actor_id: str | None = None
         self._work_item_events: list[Any] = []
+
+        # Self-healing events buffer — drained by astep_stream.
+        self._self_healing_events: list[Any] = []
+
+        # Trust manager — initialized in setup() when self_healing is enabled.
+        self._trust_manager: Any = None
+
+        # Maturation manager — initialized in setup() when maturation is enabled.
+        self._maturation_manager: Any = None
+
+        # Capability auto-discovery — populated by _discover_capabilities()
+        # at the end of setup(). Used for work-item matching.
+        self._discovered_capabilities: list[Any] = []
+        self._checked_out_work_item: Any = None
+        self._headroom_warned: bool = False
 
         # Tracks whether setup has completed.
         self._setup_done = False
@@ -276,6 +293,58 @@ class BaseAgent(abc.ABC):
         else:
             logger.debug("Skills directory does not exist: %s", skills_dir)
 
+        # 6a. Learned skills (when self_healing is enabled).
+        if self.config.self_healing.enabled:
+            learned_dir = base / self.config.self_healing.learned_skills_dir
+            if learned_dir.is_dir():
+                loaded_learned = self.skills.load_learned(learned_dir)
+                if loaded_learned:
+                    logger.info("Loaded %d learned skill(s)", len(loaded_learned))
+
+        # 6b. Trust manager (when self_healing is enabled).
+        if self.config.self_healing.enabled:
+            from fipsagents.baseagent.trust import TrustManager
+
+            th = self.config.self_healing.trust_thresholds
+            self._trust_manager = TrustManager(
+                thresholds=(th.level_1, th.level_2, th.level_3, th.level_4),
+            )
+
+            # Seed trust from parent lineage if configured.
+            sh = self.config.self_healing
+            if sh.parent_trust_level is not None:
+                self._trust_manager.seed_from_parent(
+                    parent_trust_level=sh.parent_trust_level,
+                    capability_overlap=sh.parent_capability_overlap,
+                    seed_level=sh.seed_trust_level,
+                )
+
+            logger.info(
+                "Trust manager initialized (level=%d)", self._trust_manager.level
+            )
+
+        # 6c. Maturation manager (when maturation is enabled).
+        if self.config.maturation.enabled:
+            from fipsagents.baseagent.maturation import MaturationManager
+
+            trust_mgr = getattr(self, "_trust_manager", None)
+            if trust_mgr is not None:
+                self._maturation_manager = MaturationManager(
+                    trust_mgr,
+                    apprentice_max_trust=self.config.maturation.apprentice_max_trust,
+                    journeyman_max_trust=self.config.maturation.journeyman_max_trust,
+                    specialist_min_trust=self.config.maturation.specialist_min_trust,
+                )
+                logger.info(
+                    "Maturation manager initialized (stage=%s)",
+                    self._maturation_manager.current_stage().value,
+                )
+            else:
+                logger.warning(
+                    "Maturation enabled but self_healing is disabled — "
+                    "maturation requires trust tracking"
+                )
+
         # 7. Rules
         rules_dir = base / "rules"
         if rules_dir.is_dir():
@@ -283,6 +352,28 @@ class BaseAgent(abc.ABC):
             logger.info("Loaded %d rule(s)", len(loaded_rules))
         else:
             logger.debug("Rules directory does not exist: %s", rules_dir)
+
+        # 7a. Prompt assembler (when prompt_assembly config is present).
+        if self.config.prompt_assembly is not None:
+            from fipsagents.baseagent.prompt_assembly import PromptAssembler
+            pa = self.config.prompt_assembly
+            self._assembler = PromptAssembler(
+                identity_source=pa.identity.source,
+                identity_inline=pa.identity.inline,
+                identity_enabled=pa.identity.enabled,
+                personality_source=pa.personality.source,
+                personality_enabled=pa.personality.enabled,
+                governance_enabled=pa.governance_enabled,
+                capabilities_enabled=pa.capabilities_enabled,
+                base_dir=base,
+                prompts=self.prompts,
+                rules=self.rules,
+                skills=self.skills,
+                system_prompt_name=(
+                    self.config.prompts.system if self.config else "system"
+                ),
+            )
+            logger.info("Prompt assembler initialized (layered mode)")
 
         # 8. Memory
         memory_cfg_path = base / self.config.memory.config_path
@@ -338,6 +429,8 @@ class BaseAgent(abc.ABC):
                 self.config.model.name,
             )
 
+        self._discover_capabilities()
+
         self._setup_done = True
         logger.info("Agent setup complete")
 
@@ -391,7 +484,7 @@ class BaseAgent(abc.ABC):
     async def shutdown(self) -> None:
         """Clean up resources: close MCP connections and any open handles."""
         logger.info("Shutting down agent")
-        for client in self._mcp_clients:
+        for client, _label in self._mcp_clients:
             try:
                 if hasattr(client, "close"):
                     await client.close()
@@ -561,6 +654,9 @@ class BaseAgent(abc.ABC):
         on :meth:`call_model`.
         """
         self._require_llm()
+
+        # Reset per-turn headroom flag so we warn at most once per turn.
+        self._headroom_warned = False
 
         # Deferred memory injection — runs before the first model call.
         await self._inject_deferred_memory()
@@ -756,7 +852,7 @@ class BaseAgent(abc.ABC):
                     )
                 elif _limits.max_cost_per_turn_usd is not None:
                     _turn_cost = compute_cost(
-                        self.config.model.model,
+                        self.config.model.name,
                         input_tokens=_cumulative_prompt,
                         output_tokens=_cumulative_completion,
                         pricing=self.config.pricing,
@@ -782,6 +878,60 @@ class BaseAgent(abc.ABC):
                     finish_reason = "limit"
                     _loop_broken = True
                     break
+
+            # Budget headroom check for checked-out work items.
+            # Use getattr defensively for agents constructed via __new__
+            # in tests that bypass __init__.
+            _wi = getattr(self, "_checked_out_work_item", None)
+            if not _loop_broken and _wi is not None:
+                if _wi.max_cost_usd is not None and _wi.max_cost_usd > 0:
+                    _wi_cfg = getattr(
+                        getattr(getattr(self, "config", None), "server", None),
+                        "work_items", None,
+                    )
+                    _headroom_pct = (
+                        _wi_cfg.budget_headroom_pct
+                        if _wi_cfg is not None
+                        else 10.0
+                    )
+                    _wi_turn_cost = compute_cost(
+                        self.config.model.name,
+                        input_tokens=_cumulative_prompt,
+                        output_tokens=_cumulative_completion,
+                        pricing=self.config.pricing,
+                    )
+                    _remaining = _wi.max_cost_usd - _wi_turn_cost
+                    _threshold = _wi.max_cost_usd * (_headroom_pct / 100.0)
+                    if _remaining <= _threshold and not getattr(
+                        self, "_headroom_warned", False
+                    ):
+                        yield BudgetHeadroomWarning(
+                            item_id=_wi.id,
+                            remaining_pct=max(
+                                0.0,
+                                (_remaining / _wi.max_cost_usd) * 100.0,
+                            ),
+                        )
+                        self._append_message({
+                            "role": "system",
+                            "content": (
+                                f"Budget headroom warning: ${_remaining:.4f} "
+                                f"remaining of ${_wi.max_cost_usd:.4f} for "
+                                f"work item {_wi.id!r}. Complete or release "
+                                f"the work item now."
+                            ),
+                        })
+                        self._headroom_warned = True
+                        logger.warning(
+                            "Budget headroom reached for work item %s: "
+                            "%.1f%% remaining (threshold: %.1f%%)",
+                            _wi.id,
+                            max(
+                                0.0,
+                                (_remaining / _wi.max_cost_usd) * 100.0,
+                            ),
+                            _headroom_pct,
+                        )
 
             # If the model decided to call tools, execute them and loop.
             if tool_buf:
@@ -827,11 +977,82 @@ class BaseAgent(abc.ABC):
                     except _json.JSONDecodeError:
                         args = {}
 
+                    # Tool-level approval check (@tool requires_approval).
+                    # Runs before the server-layer permission source so
+                    # per-tool metadata takes precedence over policy rules.
+                    _preapproved = getattr(self, "_permission_preapproved", set())
+                    _tool_meta = self.tools.get(fn_name)
+                    _approval_handled = False
+                    if (
+                        _tool_meta is not None
+                        and _tool_meta.requires_approval
+                        and call["id"] not in _preapproved
+                    ):
+                        _needs_approval = True
+                        if callable(_tool_meta.requires_approval):
+                            if asyncio.iscoroutinefunction(_tool_meta.requires_approval):
+                                _needs_approval = await _tool_meta.requires_approval(**args)
+                            else:
+                                _needs_approval = _tool_meta.requires_approval(**args)
+
+                        if _needs_approval:
+                            import json as _approval_json
+                            _approval_q_id = _generate_message_id().replace(
+                                "msg_", "perm_"
+                            )
+                            _approval_pending = {
+                                "question_id": _approval_q_id,
+                                "prompt": (
+                                    f"Tool '{fn_name}' requires approval. "
+                                    f"Arguments: {args}. Approve?"
+                                ),
+                                "options": [
+                                    {"label": "Allow", "value": "allow"},
+                                    {"label": "Deny", "value": "deny"},
+                                ],
+                                "multiple": False,
+                                "allow_custom": False,
+                                "permission_ask": True,
+                                "tool_name": fn_name,
+                                "tool_args": args,
+                                "tool_call_id": call["id"],
+                            }
+                            self._question_pending = _approval_pending
+
+                            yield QuestionAsked(
+                                question_id=_approval_q_id,
+                                question_text=_approval_pending["prompt"],
+                                options=_approval_pending["options"],
+                                multiple=False,
+                                allow_custom=False,
+                            )
+
+                            _sentinel = _approval_json.dumps({
+                                "__permission_pending__": True,
+                                "question_id": _approval_q_id,
+                                "tool_name": fn_name,
+                            })
+                            self._append_message({
+                                "role": "tool",
+                                "content": _sentinel,
+                                "tool_call_id": call["id"],
+                            })
+                            yield ToolResultEvent(
+                                call_id=call["id"],
+                                name=fn_name,
+                                content=_sentinel,
+                                is_error=False,
+                            )
+
+                            self._question_pending["tool_call_id"] = call["id"]
+                            finish_reason = "question"
+                            _approval_handled = True
+                            break
+
                     # Permission check (before tool execution).
                     _perm_src = getattr(self, "_permission_source", None)
-                    if _perm_src is not None:
+                    if not _approval_handled and _perm_src is not None:
                         _perm_mode = getattr(self, "_permission_mode", "enforce")
-                        _preapproved = getattr(self, "_permission_preapproved", set())
 
                         if call["id"] not in _preapproved:
                             _perm_ctx = {"args": args, "tool_call_id": call["id"]}
@@ -953,6 +1174,11 @@ class BaseAgent(abc.ABC):
                     _wi_events = getattr(self, "_work_item_events", None)
                     while _wi_events:
                         yield _wi_events.pop(0)
+
+                    # Drain self-healing events.
+                    _sh_events = getattr(self, "_self_healing_events", None)
+                    while _sh_events:
+                        yield _sh_events.pop(0)
 
                     is_err = result.is_error
                     content_str = (
@@ -1344,7 +1570,7 @@ class BaseAgent(abc.ABC):
             except Exception:
                 logger.debug("MCP server %s does not expose resource templates (or error listing them)", label, exc_info=True)
 
-            self._mcp_clients.append(client)
+            self._mcp_clients.append((client, label))
             logger.info(
                 "Connected to MCP server %s — %d tool(s), %d prompt(s), %d resource(s), %d template(s)",
                 label, registered, prompt_count, resource_count, template_count,
@@ -1452,13 +1678,57 @@ class BaseAgent(abc.ABC):
             })
         return result
 
+    # -- Capability auto-discovery ---------------------------------------------
+
+    def _discover_capabilities(self) -> None:
+        """Scan loaded subsystems and build a discovered capability list.
+
+        Called at the end of setup() to introspect MCP servers, skills,
+        and tools into Capability objects for work-item matching.
+        """
+        from fipsagents.server.work_items import Capability
+
+        caps: list[Capability] = []
+
+        # MCP server capabilities.
+        for _client, label in self._mcp_clients:
+            caps.append(Capability(name=f"mcp:{label}", value=1.0))
+
+        # Skill capabilities.
+        for skill_name in self.skills._skills:
+            caps.append(Capability(name=f"skill:{skill_name}", value=1.0))
+
+        # Explicit config capabilities (merge, don't duplicate).
+        seen = {c.name for c in caps}
+        wi_cfg = getattr(
+            getattr(getattr(self, "config", None), "server", None),
+            "work_items",
+            None,
+        )
+        if wi_cfg is not None:
+            for c in wi_cfg.capabilities:
+                if c.name not in seen:
+                    caps.append(Capability(name=c.name, value=c.value))
+                    seen.add(c.name)
+
+        self._discovered_capabilities = caps
+        if caps:
+            logger.info(
+                "Discovered %d capabilities: %s",
+                len(caps),
+                [c.name for c in caps],
+            )
+
     # -- System prompt assembly -----------------------------------------------
 
     def build_system_prompt(self) -> str:
-        """Assemble system prompt from main prompt, rules, and skills."""
+        """Assemble system prompt from named layers (or legacy flat mode)."""
+        if self._assembler is not None:
+            return self._assembler.assemble()
+
+        # --- Legacy path (backward compatible) ---
         sections: list[str] = []
 
-        # 1. Main system prompt.
         try:
             prompt_name = self.config.prompts.system if self.config else "system"
             system_prompt = self.prompts.get(prompt_name)
@@ -1466,12 +1736,10 @@ class BaseAgent(abc.ABC):
         except PromptNotFoundError:
             logger.debug("No 'system' prompt found — skipping")
 
-        # 2. Rules.
         rules_text = self.rules.get_combined_content()
         if rules_text:
             sections.append(rules_text)
 
-        # 3. Activated skill manifests.
         manifest = self.skills.get_manifest()
         if manifest:
             skill_lines = ["# Available Skills", ""]

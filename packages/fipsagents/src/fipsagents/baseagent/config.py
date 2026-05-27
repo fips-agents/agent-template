@@ -318,6 +318,82 @@ class PromptsConfig(BaseModel):
     system: str = "system"
 
 
+class IdentityConfig(BaseModel):
+    """Identity layer (precedence 0): who the agent IS.
+
+    Loaded from ``identity.md`` at the project root, or provided inline
+    via the ``inline`` field.  Inline takes precedence over file.
+    """
+
+    source: str = "identity.md"
+    inline: str | None = None
+    enabled: bool = True
+
+
+class PersonalityConfig(BaseModel):
+    """Personality layer (precedence 1): HOW the agent behaves.
+
+    Optional — off by default.  When enabled, loaded from
+    ``personality.md`` at the project root.
+    """
+
+    source: str = "personality.md"
+    enabled: bool = False
+
+
+class PromptAssemblyConfig(BaseModel):
+    """Named-layer prompt assembly configuration.
+
+    When present on ``AgentConfig``, ``build_system_prompt()`` assembles
+    the system message from four explicit layers (identity, personality,
+    governance, capabilities) instead of the legacy flat concatenation.
+    """
+
+    identity: IdentityConfig = Field(default_factory=IdentityConfig)
+    personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
+    governance_enabled: bool = True
+    capabilities_enabled: bool = True
+
+
+class TrustThresholdsConfig(BaseModel):
+    """Score thresholds for trust level promotions (levels 1-4)."""
+
+    level_1: float = 10.0
+    level_2: float = 50.0
+    level_3: float = 200.0
+    level_4: float = 500.0
+
+
+class SelfHealingConfig(BaseModel):
+    """Self-healing configuration: learned skills and trust-scoped writes."""
+
+    enabled: bool = False
+    trust_level: int = Field(default=0, ge=0, le=4)
+    trust_domains: list[str] = Field(default_factory=list)
+    review_policy: Literal["audit_only", "peer_review", "human_review"] = (
+        "human_review"
+    )
+    learned_skills_dir: str = "./learned_skills"
+    max_skills: int = Field(default=50, ge=1)
+    parent_agent_id: str | None = None
+    parent_trust_level: int | None = None
+    parent_capability_overlap: list[str] = Field(default_factory=list)
+    seed_trust_level: int | None = None
+    trust_thresholds: TrustThresholdsConfig = Field(
+        default_factory=TrustThresholdsConfig
+    )
+
+
+class MaturationConfig(BaseModel):
+    """Agent maturation lifecycle configuration."""
+
+    enabled: bool = False
+    apprentice_max_trust: int = Field(default=1, ge=0, le=4)
+    journeyman_max_trust: int = Field(default=3, ge=0, le=4)
+    specialist_min_trust: int = Field(default=4, ge=1, le=4)
+    promotion_requires: Literal["auto", "human_approval"] = "auto"
+
+
 class BackoffConfig(BaseModel):
     """Exponential backoff parameters for the agent loop."""
 
@@ -1343,6 +1419,9 @@ class AgentConfig(BaseModel):
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)
     subagents: list[SubagentConfig] = Field(default_factory=list)
+    prompt_assembly: PromptAssemblyConfig | None = None
+    self_healing: SelfHealingConfig = Field(default_factory=SelfHealingConfig)
+    maturation: MaturationConfig = Field(default_factory=MaturationConfig)
 
     @model_validator(mode="after")
     def _no_duplicate_subagent_names(self) -> "AgentConfig":

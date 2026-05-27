@@ -362,6 +362,7 @@ class OpenAIChatServer:
                 work_items_backend,
                 sqlite_path=server_cfg.storage.sqlite_path,
                 sqlite_connection=sqlite_conn,
+                database_url=server_cfg.storage.database_url,
             )
             self._lease_expiry_task = asyncio.create_task(
                 self._run_lease_expiry(
@@ -644,6 +645,14 @@ class OpenAIChatServer:
         self.app.delete("/v1/files/{file_id}")(self._delete_file)
         self.app.post("/v1/chat/completions")(self._chat_completions)
         self.app.get("/metrics")(self._metrics_endpoint)
+
+        # Work-item management endpoints (separate module).
+        from .work_item_routes import register_work_item_routes
+        register_work_item_routes(self.app, lambda: self._work_item_store)
+
+        # Trust/scoreboard endpoints (separate module).
+        from .trust_routes import register_trust_routes
+        register_trust_routes(self.app, lambda: self._agent)
 
     # -- Endpoint handlers ---------------------------------------------------
 

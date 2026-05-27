@@ -335,6 +335,66 @@ class HandoffRequired:
     expires_at: str
 
 
+@dataclass
+class TrustLevelChanged:
+    """Emitted when an agent's trust level changes (promotion or demotion)."""
+    from_level: int
+    to_level: int
+    score: float
+    reason: str
+
+
+@dataclass
+class SkillLearned:
+    """Emitted when an agent creates or updates a learned skill."""
+    skill_name: str
+    domain: str
+    version: int
+    review_status: str
+
+
+@dataclass
+class SkillEdited:
+    """Emitted when a learned skill is edited (version bump)."""
+    skill_name: str
+    from_version: int
+    to_version: int
+
+
+@dataclass
+class SkillRolledBack:
+    """Emitted when a learned skill is rolled back to a prior version."""
+    skill_name: str
+    from_version: int
+    to_version: int
+    reason: str
+
+
+@dataclass
+class SkillQuarantined:
+    """Emitted when a learned skill is quarantined due to trust violation."""
+    skill_name: str
+    reason: str
+
+
+@dataclass
+class StagePromoted:
+    """Emitted when an agent advances to a higher maturation stage."""
+    from_stage: str
+    to_stage: str
+    trust_level: int
+    reason: str
+
+
+@dataclass
+class StageDemoted:
+    """Emitted when an agent drops to a lower maturation stage."""
+    from_stage: str
+    to_stage: str
+    trust_level: int
+    reason: str
+
+
 # Discriminated union of every event a stream can emit.
 StreamEvent = Union[
     ReasoningDelta,
@@ -366,4 +426,11 @@ StreamEvent = Union[
     WorkItemFailed,
     BudgetHeadroomWarning,
     HandoffRequired,
+    TrustLevelChanged,
+    SkillLearned,
+    SkillEdited,
+    SkillRolledBack,
+    SkillQuarantined,
+    StagePromoted,
+    StageDemoted,
 ]
