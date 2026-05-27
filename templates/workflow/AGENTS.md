@@ -1,62 +1,63 @@
-# Workflow Template Agent
+# ${AGENT_NAME:-Workflow Agent}
 
-## Overview
+<!-- Capability manifest for this workflow agent.
+     Populated by /create-agent from AGENT_PLAN.md.
+     Served at runtime via GET /.well-known/agents.md -->
 
-This is a workflow agent that composes multiple nodes into a directed graph.
-Each node processes typed state and passes it to the next node in the graph.
+## Description
+
+<!-- Populated by /create-agent from the Purpose section of AGENT_PLAN.md -->
+
+A multi-node workflow agent built on the fipsagents workflow framework.
+Composes BaseNode and AgentNode instances into a directed graph with typed state.
+
+## API
+
+- **Endpoint**: `POST /v1/chat/completions` (OpenAI-compatible)
+- **Streaming**: SSE via `stream: true`
+- **Health**: `GET /healthz`
+- **Info**: `GET /v1/agent-info` (JSON capability summary)
 
 ## Capabilities
 
-- Classifies input queries by complexity
-- Routes to appropriate processing pipeline
-- Performs research using LLM and tools
-- Summarizes results
+<!-- Populated by /create-agent -->
 
 ## Tools
 
-Tools are available to AgentNode instances within the workflow. See `tools/` for available tool implementations.
+<!-- Populated by /create-agent. Format:
 
-## Input / Output
+| Tool | Visibility | Description |
+|------|------------|-------------|
+| `tool_name` | `llm_only` | What it does |
 
-<!-- Populated by /create-agent from the Interaction Model section of AGENT_PLAN.md -->
+-->
+
+## Workflow Nodes
+
+<!-- Populated by /create-agent. Format:
+
+| Node | Type | Description |
+|------|------|-------------|
+| `node_name` | `BaseNode` / `AgentNode` | What it does |
+
+-->
+
+## Model
+
+- **Provider**: `${MODEL_PROVIDER:-openai}`
+- **Model**: `${MODEL_NAME:-}`
+
+## Constraints
+
+- Maximum workflow steps: configurable via `max_steps`
+- Immutable container image -- prompts, tools, and rules are baked in
+- Requires an OpenAI-compatible LLM endpoint
 
 ## Configuration
 
-Agent behavior is controlled by `agent.yaml`. All values support
-`${VAR:-default}` environment variable substitution so that the configuration
-structure stays baked into the container image while environment-specific
-values come from OpenShift ConfigMaps and Secrets at deploy time.
+Runtime behavior is configured via `agent.yaml` with `${VAR:-default}`
+environment variable substitution. See `agent.yaml` for the full schema.
 
-See `agent.yaml` for the full schema.
+## Version
 
-## Dependencies
-
-The workflow requires an LLM endpoint that speaks the OpenAI-compatible chat
-completions API. The template uses the OpenAI async SDK, which connects to
-vLLM, LlamaStack, llm-d, or any other OpenAI-compatible endpoint.
-
-The workflow framework has no dependency on LangChain, LangGraph, or any
-external agent framework.
-
-## Deployment
-
-```sh
-make build   # Build the container image
-make deploy  # Deploy to OpenShift via Helm
-```
-
-See `Makefile` and `chart/` for details.
-
-## Development
-
-This workflow was scaffolded using the `workflow` template via the `fips-agents`
-CLI. The slash command workflow in `.claude/commands/` guides development:
-
-```
-/plan-agent   -> design the workflow
-/create-agent -> scaffold from the plan
-/add-tool     -> add a new tool
-/add-skill    -> add a new skill
-/exercise-agent -> test workflow behavior
-/deploy-agent -> build and deploy to OpenShift
-```
+0.1.0

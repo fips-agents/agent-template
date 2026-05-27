@@ -1,65 +1,53 @@
-# Agent Name
+# ${AGENT_NAME:-My Agent}
 
-<!-- This file is populated by /create-agent from AGENT_PLAN.md. -->
+<!-- Capability manifest for this agent.
+     Populated by /create-agent from AGENT_PLAN.md.
+     Served at runtime via GET /.well-known/agents.md -->
 
-## Version
+## Description
 
-0.1.0
+<!-- Populated by /create-agent from the Purpose section of AGENT_PLAN.md -->
+
+A single-loop AI agent built on the fipsagents BaseAgent framework.
+
+## API
+
+- **Endpoint**: `POST /v1/chat/completions` (OpenAI-compatible)
+- **Streaming**: SSE via `stream: true`
+- **Health**: `GET /healthz`
+- **Info**: `GET /v1/agent-info` (JSON capability summary)
 
 ## Capabilities
 
-<!-- Populated by /create-agent from the Purpose section of AGENT_PLAN.md -->
+<!-- Populated by /create-agent -->
 
 ## Tools
 
 <!-- Populated by /create-agent. Format:
 
-| Tool | Visibility | Parameters |
-|------|------------|------------|
-| `tool_name` | `llm_only` | `param1`, `param2` |
+| Tool | Visibility | Description |
+|------|------------|-------------|
+| `tool_name` | `llm_only` | What it does |
 
 -->
 
-## Input / Output
+## Model
 
-<!-- Populated by /create-agent from the Interaction Model section of AGENT_PLAN.md -->
+- **Provider**: `${MODEL_PROVIDER:-openai}`
+- **Model**: `${MODEL_NAME:-}`
+- **Endpoint**: OpenAI-compatible chat completions
+
+## Constraints
+
+- Maximum loop iterations per turn: `${MAX_ITERATIONS:-10}`
+- Immutable container image -- prompts, tools, and rules are baked in
+- Requires an OpenAI-compatible LLM endpoint
 
 ## Configuration
 
-Agent behavior is controlled by `agent.yaml`. All values support
-`${VAR:-default}` environment variable substitution so that the configuration
-structure stays baked into the container image while environment-specific
-values come from OpenShift ConfigMaps and Secrets at deploy time.
+Runtime behavior is configured via `agent.yaml` with `${VAR:-default}`
+environment variable substitution. See `agent.yaml` for the full schema.
 
-See `agent.yaml` for the full schema.
+## Version
 
-## Dependencies
-
-The agent requires an LLM endpoint that speaks the OpenAI-compatible chat
-completions API. The template uses the OpenAI async SDK, which connects to
-vLLM, LlamaStack, llm-d, or any other OpenAI-compatible endpoint.
-
-The agent has no dependency on LangChain, LangGraph, or any agent framework.
-
-## Deployment
-
-```sh
-make build   # Build the container image
-make deploy  # Deploy to OpenShift via Helm
-```
-
-See `Makefile` and `chart/` for details.
-
-## Development
-
-This agent was scaffolded using the `agent-loop` template via the `fips-agents`
-CLI. The slash command workflow in `.claude/commands/` guides development:
-
-```
-/plan-agent   -> design the agent
-/create-agent -> scaffold from the plan
-/add-tool     -> add a new tool
-/add-skill    -> add a new skill
-/exercise-agent -> test agent behavior
-/deploy-agent -> build and deploy to OpenShift
-```
+0.1.0

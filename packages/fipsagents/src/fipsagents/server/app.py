@@ -15,7 +15,7 @@ from typing import Any, AsyncIterator
 
 try:
     from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
-    from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.responses import JSONResponse, Response, StreamingResponse
     from starlette.middleware.base import BaseHTTPMiddleware
 except ImportError as exc:  # pragma: no cover — helpful error path
     raise ImportError(
@@ -625,6 +625,7 @@ class OpenAIChatServer:
         self.app.api_route("/healthz", methods=["GET", "HEAD"])(self._healthz)
         self.app.api_route("/readyz", methods=["GET", "HEAD"])(self._readyz)
         self.app.get("/v1/agent-info")(self._agent_info)
+        self.app.get("/.well-known/agents.md")(self._serve_agents_md)
         self.app.post("/v1/sessions")(self._create_session)
         self.app.get("/v1/sessions/{session_id}")(self._get_session)
         self.app.get("/v1/sessions/{session_id}/usage")(self._get_session_usage)
@@ -703,6 +704,21 @@ class OpenAIChatServer:
         ]
 
         return JSONResponse(info)
+
+    async def _serve_agents_md(self):
+        """Serve the AGENTS.md capability manifest."""
+        if self._agent is None:
+            raise HTTPException(status_code=503, detail="Agent not ready")
+        base = getattr(self._agent, "_base_dir", None)
+        if base is None:
+            base = getattr(self._agent, "_config_path", Path(".")).parent
+        agents_md = Path(base) / "AGENTS.md"
+        if not agents_md.is_file():
+            raise HTTPException(status_code=404, detail="AGENTS.md not found")
+        return Response(
+            content=agents_md.read_text(),
+            media_type="text/markdown; charset=utf-8",
+        )
 
     async def _create_session(self, body: CreateSessionRequest = Body(default_factory=CreateSessionRequest)):
         if self._session_store is None or self._agent is None:
@@ -1446,8 +1462,6 @@ class OpenAIChatServer:
             self._metrics_collector, NullMetricsCollector
         ):
             raise HTTPException(status_code=404, detail="Metrics not enabled")
-        from fastapi.responses import Response
-
         return Response(
             content=self._metrics_collector.generate_metrics(),
             media_type="text/plain; version=0.0.4; charset=utf-8",
