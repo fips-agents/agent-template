@@ -67,7 +67,7 @@ class _StubAgent(BaseAgent):
             self.config = SimpleNamespace(
                 model=SimpleNamespace(
                     limits=limits,
-                    model="test-model",
+                    name="test-model",
                 ),
                 tools=SimpleNamespace(enabled=True),
                 memory=SimpleNamespace(
