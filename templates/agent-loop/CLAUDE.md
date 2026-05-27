@@ -243,6 +243,8 @@ When `prompt_assembly:` is present in `agent.yaml`, `build_system_prompt()` asse
 
 When `prompt_assembly:` is absent, the legacy flat concatenation (system prompt + rules + skills) is used. All existing agents work without changes.
 
+The template ships with `identity.md` and `personality.md` starter files at the project root, and `prompt_assembly:` is enabled by default with identity on and personality off. Developers should customize `identity.md` to describe their agent's purpose and role — this is the file that `/create-agent` replaces with a tailored identity based on `AGENT_PLAN.md`.
+
 A structured audit log is emitted at assembly time showing which layers loaded, which were skipped, and token counts per layer. Set `LOG_LEVEL=DEBUG` to see per-layer detail.
 
 ## Configuration (`agent.yaml`)

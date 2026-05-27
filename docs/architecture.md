@@ -1077,7 +1077,7 @@ Each layer is separated by `---` in the final system message. Higher layers cann
 
 ### Backward Compatibility
 
-When `prompt_assembly:` config is absent, legacy flat concatenation runs unchanged — the system prompt is loaded from `prompts/system.md` or assembled from legacy `identity + rules + skills` without precedence constraints. Existing agents are unaffected.
+When `prompt_assembly:` config is absent, legacy flat concatenation runs unchanged — the system prompt is loaded from `prompts/system.md` or assembled from legacy `identity + rules + skills` without precedence constraints. Existing agents are unaffected. The agent-loop template now scaffolds `identity.md` and `personality.md` starter files and enables `prompt_assembly:` by default (identity on, personality off) for new projects.
 
 ### Assembly Audit Log
 

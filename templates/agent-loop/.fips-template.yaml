@@ -73,6 +73,9 @@ patch:
     - tools/**
     # User-authored examples (target of `fips-agents add vision`)
     - examples/**
+    # User-customized identity and personality (prompt assembly layers 0/1)
+    - identity.md
+    - personality.md
     # User-customized prompts / rules / skills
     - prompts/**
     - rules/**

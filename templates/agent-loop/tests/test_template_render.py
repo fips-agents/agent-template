@@ -123,3 +123,39 @@ class TestFilesBlockUnaffected:
         cfg = load_config(template_path, env={})
         # 50 MiB — preserved from the FilesConfig default.
         assert cfg.server.files.max_file_size_bytes == 50 * 1024 * 1024
+
+
+class TestPromptAssemblyScaffold:
+    """Prompt assembly scaffolding: identity.md, personality.md, and config block."""
+
+    def test_identity_file_exists(self):
+        identity_path = TEMPLATE_AGENT_YAML.parent / "identity.md"
+        assert identity_path.is_file(), f"identity.md not found at {identity_path}"
+
+    def test_personality_file_exists(self):
+        personality_path = TEMPLATE_AGENT_YAML.parent / "personality.md"
+        assert personality_path.is_file(), f"personality.md not found at {personality_path}"
+
+    def test_prompt_assembly_enabled_by_default(self, template_path: Path):
+        cfg = load_config(template_path, env={})
+        assert cfg.prompt_assembly is not None
+
+    def test_identity_enabled_by_default(self, template_path: Path):
+        cfg = load_config(template_path, env={})
+        assert cfg.prompt_assembly.identity.enabled is True
+
+    def test_identity_source_is_identity_md(self, template_path: Path):
+        cfg = load_config(template_path, env={})
+        assert cfg.prompt_assembly.identity.source == "identity.md"
+
+    def test_personality_disabled_by_default(self, template_path: Path):
+        cfg = load_config(template_path, env={})
+        assert cfg.prompt_assembly.personality.enabled is False
+
+    def test_governance_enabled_by_default(self, template_path: Path):
+        cfg = load_config(template_path, env={})
+        assert cfg.prompt_assembly.governance_enabled is True
+
+    def test_capabilities_enabled_by_default(self, template_path: Path):
+        cfg = load_config(template_path, env={})
+        assert cfg.prompt_assembly.capabilities_enabled is True
