@@ -1,53 +1,56 @@
-# ${AGENT_NAME:-My Agent}
+# Agent Project
 
-<!-- Capability manifest for this agent.
-     Populated by /create-agent from AGENT_PLAN.md.
-     Served at runtime via GET /.well-known/agents.md -->
+An AI agent built on the fipsagents BaseAgent framework. Runs as an
+OpenAI-compatible HTTP server (`/v1/chat/completions`).
 
-## Description
+## Build and Run
 
-<!-- Populated by /create-agent from the Purpose section of AGENT_PLAN.md -->
+```bash
+make install       # Create .venv, install dependencies
+make run-local     # Run the agent locally (port 8080)
+make test          # Run pytest
+make lint          # Lint with ruff
+make build         # Build container (podman, linux/amd64)
+make deploy PROJECT=<ns>   # Deploy to OpenShift via Helm
+```
 
-A single-loop AI agent built on the fipsagents BaseAgent framework.
+## Project Structure
 
-## API
+```
+src/agent.py       # Agent subclass — implements step()
+tools/             # One @tool-decorated .py file per tool
+prompts/           # Markdown with YAML frontmatter, one per prompt
+skills/            # agentskills.io directories with SKILL.md
+rules/             # Plain Markdown, one constraint per file
+agent.yaml         # Config with ${VAR:-default} env var substitution
+chart/             # Helm chart for OpenShift deployment
+evals/             # Eval cases
+```
 
-- **Endpoint**: `POST /v1/chat/completions` (OpenAI-compatible)
-- **Streaming**: SSE via `stream: true`
-- **Health**: `GET /healthz`
-- **Info**: `GET /v1/agent-info` (JSON capability summary)
+## Conventions
 
-## Capabilities
+- Tools use `@tool(description=..., visibility=...)` — every tool must
+  declare its visibility plane (`llm_only`, `agent_only`, or `both`).
+- Do not edit `src/fipsagents/baseagent/` — that is the framework.
+- Do not import `openai` directly — use BaseAgent's `call_model*` methods.
+- Do not hardcode model names or endpoints — use `agent.yaml` with env
+  var substitution.
+- Run `make test && make lint` before committing.
 
-<!-- Populated by /create-agent -->
+## Testing
 
-## Tools
-
-<!-- Populated by /create-agent. Format:
-
-| Tool | Visibility | Description |
-|------|------------|-------------|
-| `tool_name` | `llm_only` | What it does |
-
--->
-
-## Model
-
-- **Provider**: `${MODEL_PROVIDER:-openai}`
-- **Model**: `${MODEL_NAME:-}`
-- **Endpoint**: OpenAI-compatible chat completions
-
-## Constraints
-
-- Maximum loop iterations per turn: `${MAX_ITERATIONS:-10}`
-- Immutable container image -- prompts, tools, and rules are baked in
-- Requires an OpenAI-compatible LLM endpoint
+```bash
+make test          # Unit tests
+make test-cov      # With coverage report
+make eval          # Run eval cases from evals/evals.yaml
+```
 
 ## Configuration
 
-Runtime behavior is configured via `agent.yaml` with `${VAR:-default}`
-environment variable substitution. See `agent.yaml` for the full schema.
+`agent.yaml` controls agent behavior. All values support `${VAR:-default}`
+environment variable substitution. Key env vars:
 
-## Version
-
-0.1.0
+- `MODEL_ENDPOINT` — LLM API endpoint
+- `MODEL_NAME` — Model identifier
+- `MAX_ITERATIONS` — Agent loop cap
+- `LOG_LEVEL` — Python logging level

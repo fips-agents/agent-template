@@ -1911,29 +1911,3 @@ def test_depth_header_negative_accepted():
     assert captured_depth == [-1]
 
 
-# ---------------------------------------------------------------------------
-# AGENTS.md well-known endpoint (#192)
-# ---------------------------------------------------------------------------
-
-
-class TestAgentsMdEndpoint:
-    def test_serves_agents_md_when_present(self, tmp_path):
-        """GET /.well-known/agents.md returns the file content."""
-        agents_md = tmp_path / "AGENTS.md"
-        agents_md.write_text("# Test Agent\n\nA test agent.\n")
-
-        server = _build_server()
-        with TestClient(server.app) as client:
-            server._agent._base_dir = tmp_path
-            resp = client.get("/.well-known/agents.md")
-        assert resp.status_code == 200
-        assert "text/markdown" in resp.headers["content-type"]
-        assert "# Test Agent" in resp.text
-
-    def test_returns_404_when_missing(self, tmp_path):
-        """GET /.well-known/agents.md returns 404 when no file exists."""
-        server = _build_server()
-        with TestClient(server.app) as client:
-            server._agent._base_dir = tmp_path
-            resp = client.get("/.well-known/agents.md")
-        assert resp.status_code == 404
