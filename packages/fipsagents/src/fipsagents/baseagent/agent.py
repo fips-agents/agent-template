@@ -852,7 +852,7 @@ class BaseAgent(abc.ABC):
                     )
                 elif _limits.max_cost_per_turn_usd is not None:
                     _turn_cost = compute_cost(
-                        self.config.model.model,
+                        self.config.model.name,
                         input_tokens=_cumulative_prompt,
                         output_tokens=_cumulative_completion,
                         pricing=self.config.pricing,
@@ -895,7 +895,7 @@ class BaseAgent(abc.ABC):
                         else 10.0
                     )
                     _wi_turn_cost = compute_cost(
-                        self.config.model.model,
+                        self.config.model.name,
                         input_tokens=_cumulative_prompt,
                         output_tokens=_cumulative_completion,
                         pricing=self.config.pricing,

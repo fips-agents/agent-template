@@ -381,3 +381,172 @@ class TestQuarantine:
             trust_domains=["document_processing"],
         )
         assert events == []
+
+
+# ---------------------------------------------------------------------------
+# StagePromoted / StageDemoted emission via _drain_trust_events
+# ---------------------------------------------------------------------------
+
+
+class TestStageEventEmission:
+    """Verify that _drain_trust_events emits StagePromoted/StageDemoted
+    when a trust level change crosses a maturation stage boundary."""
+
+    def _make_agent(self, *, trust_level: int, trust_score: float):
+        """Build a minimal object that looks enough like an agent for
+        _drain_trust_events and _capture_stage_before."""
+        from unittest.mock import MagicMock
+
+        agent = MagicMock()
+        state = TrustState(level=trust_level, score=trust_score)
+        agent._trust_manager = TrustManager(
+            thresholds=(1.0, 50.0, 200.0, 500.0),
+            state=state,
+        )
+        agent._maturation_manager = MaturationManager(agent._trust_manager)
+        agent._self_healing_events = []
+        return agent
+
+    def test_stage_promoted_on_trust_promotion(self):
+        """A trust promotion from level 0 -> 1 should emit StagePromoted
+        (proto_agent -> apprentice)."""
+        from fipsagents.baseagent.events import StagePromoted, TrustLevelChanged
+        from fipsagents.baseagent.tools.work_items import (
+            _capture_stage_before,
+            _drain_trust_events,
+        )
+
+        agent = self._make_agent(trust_level=0, trust_score=0.0)
+        assert agent._maturation_manager.current_stage() == MaturationStage.PROTO_AGENT
+
+        stage_before = _capture_stage_before(agent)
+        agent._trust_manager.record_completion(reason="test completion")
+        _drain_trust_events(agent, stage_before=stage_before)
+
+        # Should have both TrustLevelChanged and StagePromoted.
+        trust_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, TrustLevelChanged)
+        ]
+        stage_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, StagePromoted)
+        ]
+        assert len(trust_events) == 1
+        assert trust_events[0].from_level == 0
+        assert trust_events[0].to_level == 1
+
+        assert len(stage_events) == 1
+        assert stage_events[0].from_stage == "proto_agent"
+        assert stage_events[0].to_stage == "apprentice"
+        assert stage_events[0].trust_level == 1
+
+    def test_stage_demoted_on_trust_demotion(self):
+        """A trust demotion from level 1 -> 0 should emit StageDemoted
+        (apprentice -> proto_agent)."""
+        from fipsagents.baseagent.events import StageDemoted, TrustLevelChanged
+        from fipsagents.baseagent.tools.work_items import (
+            _capture_stage_before,
+            _drain_trust_events,
+        )
+
+        # Start at level 1 with score just above the demotion threshold
+        # (50% of level-1 threshold = 0.5). A single failure (-5.0)
+        # will drop the score to 0.0, triggering demotion.
+        agent = self._make_agent(trust_level=1, trust_score=0.5)
+        assert agent._maturation_manager.current_stage() == MaturationStage.APPRENTICE
+
+        stage_before = _capture_stage_before(agent)
+        agent._trust_manager.record_failure(reason="test failure")
+        _drain_trust_events(agent, stage_before=stage_before)
+
+        trust_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, TrustLevelChanged)
+        ]
+        stage_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, StageDemoted)
+        ]
+        assert len(trust_events) == 1
+        assert trust_events[0].from_level == 1
+        assert trust_events[0].to_level == 0
+
+        assert len(stage_events) == 1
+        assert stage_events[0].from_stage == "apprentice"
+        assert stage_events[0].to_stage == "proto_agent"
+        assert stage_events[0].trust_level == 0
+
+    def test_no_stage_event_when_stage_unchanged(self):
+        """A trust score change that stays within the same stage should
+        not emit StagePromoted or StageDemoted."""
+        from fipsagents.baseagent.events import StageDemoted, StagePromoted
+        from fipsagents.baseagent.tools.work_items import (
+            _capture_stage_before,
+            _drain_trust_events,
+        )
+
+        # Level 2 (journeyman) with plenty of headroom — a completion won't
+        # change the stage because level 3 is still journeyman.
+        agent = self._make_agent(trust_level=2, trust_score=60.0)
+        assert agent._maturation_manager.current_stage() == MaturationStage.JOURNEYMAN
+
+        stage_before = _capture_stage_before(agent)
+        agent._trust_manager.record_completion(reason="normal work")
+        _drain_trust_events(agent, stage_before=stage_before)
+
+        stage_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, (StagePromoted, StageDemoted))
+        ]
+        assert len(stage_events) == 0
+
+    def test_no_stage_event_without_maturation_manager(self):
+        """When no maturation manager is present, only TrustLevelChanged
+        events are emitted (no StagePromoted/StageDemoted)."""
+        from fipsagents.baseagent.events import StageDemoted, StagePromoted
+        from fipsagents.baseagent.tools.work_items import (
+            _capture_stage_before,
+            _drain_trust_events,
+        )
+
+        agent = self._make_agent(trust_level=0, trust_score=0.0)
+        agent._maturation_manager = None  # disable maturation
+
+        stage_before = _capture_stage_before(agent)
+        agent._trust_manager.record_completion(reason="test")
+        _drain_trust_events(agent, stage_before=stage_before)
+
+        stage_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, (StagePromoted, StageDemoted))
+        ]
+        assert len(stage_events) == 0
+
+    def test_multi_level_promotion_emits_stage_event(self):
+        """Trust seeding that jumps multiple levels should still emit a
+        single StagePromoted event for the net stage change."""
+        from fipsagents.baseagent.events import StagePromoted
+        from fipsagents.baseagent.tools.work_items import (
+            _capture_stage_before,
+            _drain_trust_events,
+        )
+
+        agent = self._make_agent(trust_level=0, trust_score=0.0)
+        stage_before = _capture_stage_before(agent)
+
+        # Seed directly to level 2 (journeyman).
+        agent._trust_manager.seed_from_parent(
+            parent_trust_level=4,
+            capability_overlap=["coding"],
+            seed_level=2,
+        )
+        _drain_trust_events(agent, stage_before=stage_before)
+
+        stage_events = [
+            e for e in agent._self_healing_events
+            if isinstance(e, StagePromoted)
+        ]
+        assert len(stage_events) == 1
+        assert stage_events[0].from_stage == "proto_agent"
+        assert stage_events[0].to_stage == "journeyman"

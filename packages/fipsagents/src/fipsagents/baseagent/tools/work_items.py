@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from fipsagents.baseagent.events import (
+    StageDemoted,
+    StagePromoted,
     WorkItemCheckedOut,
     WorkItemCompleted,
     WorkItemReleased,
@@ -34,6 +36,81 @@ def _handoff_to_dict(note: HandoffNote) -> dict[str, Any]:
         "artifacts": note.artifacts,
         "context": note.context,
     }
+
+
+def _capture_stage_before(agent: object):
+    """Snapshot the maturation stage before a trust mutation.
+
+    Returns the current ``MaturationStage`` or ``None`` when maturation is
+    not active.  Call this *before* ``TrustManager.record_*`` so the
+    pre-mutation stage is available for comparison.
+    """
+    mm = getattr(agent, "_maturation_manager", None)
+    return mm.current_stage() if mm is not None else None
+
+
+def _drain_trust_events(agent: object, stage_before=None) -> None:
+    """Drain pending trust events, emit maturation stage transitions, and quarantine.
+
+    Called after ``TrustManager.record_completion`` or ``record_failure`` to
+    flush ``TrustLevelChanged`` events into ``_self_healing_events`` and, when
+    a maturation manager is active, emit ``StagePromoted`` / ``StageDemoted``
+    events when the trust-level change crosses a stage boundary.
+
+    *stage_before* should be the return value of ``_capture_stage_before()``
+    taken before the trust mutation.
+    """
+    trust = getattr(agent, "_trust_manager", None)
+    if trust is None:
+        return
+
+    trust_events = trust.drain_events()
+    if not trust_events:
+        return
+
+    sh_buf = getattr(agent, "_self_healing_events", None)
+    if sh_buf is not None:
+        sh_buf.extend(trust_events)
+
+    # Check for maturation stage transitions.
+    mm = getattr(agent, "_maturation_manager", None)
+    if mm is not None and stage_before is not None:
+        stage_after = mm.current_stage()
+        if stage_after != stage_before:
+            # Determine direction from the trust level change.
+            last_ev = trust_events[-1]
+            if last_ev.to_level > last_ev.from_level:
+                event = StagePromoted(
+                    from_stage=stage_before.value,
+                    to_stage=stage_after.value,
+                    trust_level=last_ev.to_level,
+                    reason=last_ev.reason,
+                )
+            else:
+                event = StageDemoted(
+                    from_stage=stage_before.value,
+                    to_stage=stage_after.value,
+                    trust_level=last_ev.to_level,
+                    reason=last_ev.reason,
+                )
+            if sh_buf is not None:
+                sh_buf.append(event)
+
+    # On demotion, quarantine out-of-scope learned skills.
+    for ev in trust_events:
+        if hasattr(ev, "from_level") and ev.to_level < ev.from_level:
+            cfg = getattr(getattr(agent, "config", None), "self_healing", None)
+            if cfg is not None and cfg.enabled:
+                from fipsagents.baseagent.maturation import quarantine_out_of_scope_skills
+
+                learned_dir = Path(cfg.learned_skills_dir)
+                if not learned_dir.is_absolute():
+                    learned_dir = getattr(agent, "_base_dir", Path(".")) / learned_dir
+                q_events = quarantine_out_of_scope_skills(
+                    learned_dir, ev.to_level, cfg.trust_domains,
+                )
+                if q_events and sh_buf is not None:
+                    sh_buf.extend(q_events)
 
 
 def make_work_item_tools(agent: object) -> list:
@@ -180,27 +257,9 @@ def make_work_item_tools(agent: object) -> list:
         # Record successful completion in the trust manager.
         trust = getattr(agent, "_trust_manager", None)
         if trust is not None:
+            stage_before = _capture_stage_before(agent)
             trust.record_completion(reason=f"completed work item {item_id}")
-            trust_events = trust.drain_events()
-            if trust_events:
-                sh_buf = getattr(agent, "_self_healing_events", None)
-                if sh_buf is not None:
-                    sh_buf.extend(trust_events)
-                # On demotion, quarantine out-of-scope learned skills.
-                for ev in trust_events:
-                    if hasattr(ev, "from_level") and ev.to_level < ev.from_level:
-                        cfg = getattr(getattr(agent, "config", None), "self_healing", None)
-                        if cfg is not None and cfg.enabled:
-                            from fipsagents.baseagent.maturation import quarantine_out_of_scope_skills
-
-                            learned_dir = Path(cfg.learned_skills_dir)
-                            if not learned_dir.is_absolute():
-                                learned_dir = getattr(agent, "_base_dir", Path(".")) / learned_dir
-                            q_events = quarantine_out_of_scope_skills(
-                                learned_dir, ev.to_level, cfg.trust_domains,
-                            )
-                            if q_events and sh_buf is not None:
-                                sh_buf.extend(q_events)
+            _drain_trust_events(agent, stage_before=stage_before)
 
         return json.dumps(
             {"id": item.id, "status": item.status.value, "title": item.title}
@@ -249,29 +308,11 @@ def make_work_item_tools(agent: object) -> list:
         reason = "; ".join(remaining[:3]) if remaining else "no details"
         trust = getattr(agent, "_trust_manager", None)
         if trust is not None:
+            stage_before = _capture_stage_before(agent)
             trust.record_failure(
                 reason=f"released work item {item_id}: {reason}",
             )
-            trust_events = trust.drain_events()
-            if trust_events:
-                sh_buf = getattr(agent, "_self_healing_events", None)
-                if sh_buf is not None:
-                    sh_buf.extend(trust_events)
-                # On demotion, quarantine out-of-scope learned skills.
-                for ev in trust_events:
-                    if hasattr(ev, "from_level") and ev.to_level < ev.from_level:
-                        cfg = getattr(getattr(agent, "config", None), "self_healing", None)
-                        if cfg is not None and cfg.enabled:
-                            from fipsagents.baseagent.maturation import quarantine_out_of_scope_skills
-
-                            learned_dir = Path(cfg.learned_skills_dir)
-                            if not learned_dir.is_absolute():
-                                learned_dir = getattr(agent, "_base_dir", Path(".")) / learned_dir
-                            q_events = quarantine_out_of_scope_skills(
-                                learned_dir, ev.to_level, cfg.trust_domains,
-                            )
-                            if q_events and sh_buf is not None:
-                                sh_buf.extend(q_events)
+            _drain_trust_events(agent, stage_before=stage_before)
 
         return json.dumps(
             {"id": item.id, "status": item.status.value, "title": item.title}
