@@ -6,6 +6,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-05-27
+
+### Added
+
+- **`SkillProposed` event replaces `SkillLearned` for `suggest_skill`** — carries the full proposal payload so consumers can inspect without disk reads.
+- **`suggest_skill` creates `review_pending` work items** when `work_items` is enabled, connecting the self-healing and work-coordination subsystems.
+- **Template scaffolds `identity.md` and `personality.md`**, enables `prompt_assembly:` by default in the agent-loop template.
+- **Ad-hoc `spawn_agent` tool** ([#184](https://github.com/fips-agents/agent-template/issues/184)). Stock `@tool(visibility="llm_only")` that creates ephemeral in-process `BaseAgent` instances with optional tool-subset whitelisting. Cost rolls up via existing `_subagent_token_usage`. Depth shared with `delegate_to_agent`.
+- **Remote-side delegation depth enforcement** ([#181](https://github.com/fips-agents/agent-template/issues/181)). `OpenAIChatServer` reads `x-subagent-depth` from inbound requests and sets `agent._delegation_depth` so multi-hop chains enforce correctly on the receiver side.
+- **`AGENTS.md` scaffold** ([#192](https://github.com/fips-agents/agent-template/issues/192)). Both templates scaffold an `AGENTS.md` following the AAIF spec. Runtime capability discovery served by `GET /v1/agent-info`.
+- **Maturation lifecycle workflow example** with stage-gated routing in `templates/workflow/examples/maturation/`.
+- **Pure-Python MIME sniffer fallback** when libmagic is unavailable.
+
+### Changed
+
+- Session continuity composition docs expanded with additional patterns and examples.
+
+## [0.30.0] - 2026-05-26
+
+### Added
+
+- **Prompt assembly** ([#215](https://github.com/fips-agents/agent-template/issues/215)). Opt-in layered system prompt composition with four layers (identity, personality, governance, capabilities) assembled by `PromptAssembler`. When config is absent, legacy flat concatenation runs unchanged.
+- **Per-tool human-in-the-loop approval** ([#105](https://github.com/fips-agents/agent-template/issues/105)). `@tool(requires_approval=True)` or a callable predicate. Reuses the existing permission "ask" flow.
+- **Self-healing tools** ([#215](https://github.com/fips-agents/agent-template/issues/215)). Three stock LLM tools: `learn_skill` (trust >= 1, domain-restricted), `suggest_skill` (any trust level), `rollback_skill` (trust >= 3). Skill versioning via `.versions/` directory. `max_skills` cap (default 50).
+- **Trust accumulation** ([#215](https://github.com/fips-agents/agent-template/issues/215)). `TrustManager` tracks score from work-item completions, failures, and violations. Configurable thresholds for level 0-4 promotions. Scoreboard REST endpoints: `GET /v1/agent/trust`, `/skills`, `/capabilities`, `/work-items/stats`. Six Prometheus metrics.
+- **Agent maturation** ([#215](https://github.com/fips-agents/agent-template/issues/215)). `MaturationManager` derives lifecycle stages (`PROTO_AGENT`, `APPRENTICE`, `JOURNEYMAN`, `SPECIALIST`) from trust levels. `StagePermissions` graduated autonomy table. Trust seeding from parent lineage. Quarantine for out-of-scope skills on trust demotion.
+- **Question tool** (`ask_user`, [#163](https://github.com/fips-agents/agent-template/issues/163)). Stock `@tool(visibility="llm_only")` with pending-question session state, HTTP 409 guard, and resume via `answers_to_question_id`.
+- **Per-tool permission policy** ([#164](https://github.com/fips-agents/agent-template/issues/164)). `PermissionSource` ABC with `StaticPermissionSource` (fnmatch glob matching). Three actions: `allow`, `deny`, `ask`. Config: `server.permissions.{source, mode, default_action, rules}`.
+- **WorkItemStore follow-ups** ([#215](https://github.com/fips-agents/agent-template/issues/215)). `SqliteWorkItemStore` with `BEGIN IMMEDIATE` for atomic checkout. Five stock LLM tools, session continuity rule and skill templates.
+- **Per-turn cost ceiling** — `max_cost_per_turn_usd` in `LimitsConfig`, checked in `astep_stream()` after each model call.
+- **Doom-loop detection** ([#167](https://github.com/fips-agents/agent-template/issues/167)). Sliding-window repeat-call hashing with `LoopGuardConfig`. Emits `LoopBreakEvent` and sets `finish_reason="loop_break"`. Enabled by default.
+
+## [0.29.0] - 2026-05-22
+
+### Added
+
+- **`WorkItemStore` ABC** ([#215](https://github.com/fips-agents/agent-template/issues/215) Phase 1). `NullWorkItemStore` (default no-op) and `SqliteWorkItemStore` (aiosqlite, `BEGIN IMMEDIATE` for atomic checkout).
+- **Lease-based concurrent checkout** with periodic expiry sweep.
+- **Capability matching** — conjunction semantics: agent must satisfy ALL required capabilities with value >= threshold.
+- **`HandoffNote` structured context model** for session continuity — accomplished, attempted, remaining, blockers, artifacts, context.
+- **Five stock LLM tools**: `check_available_work`, `checkout_work_item`, `complete_work_item`, `release_work_item`, `update_work_progress`. Auto-registered via `StockToolSpec` when `work_items` is enabled.
+- **Session continuity rule and skill templates** in the agent-loop template.
+- **Six stream events**: `WorkItemCheckedOut`, `WorkItemCompleted`, `WorkItemReleased`, `WorkItemFailed`, `BudgetHeadroomWarning`, `HandoffRequired`. Four Prometheus metrics.
+
+## [0.28.0] - 2026-05-21
+
+### Added
+
+- **Per-turn cost ceiling enforcement** ([#104](https://github.com/fips-agents/agent-template/issues/104)). `max_cost_per_turn_usd` in `LimitsConfig`, checked in `astep_stream()` after each model call before tool dispatch.
+
+### Changed
+
+- **Stock tools refactored to per-file layout** ([#174](https://github.com/fips-agents/agent-template/issues/174)). `StockToolSpec` + `ToolRegistry.discover_stock()` for condition-gated registration replaces the monolithic `tools.py` approach.
+
+## [0.27.0] - 2026-05-21
+
+### Added
+
+- **Apache AGE property-graph store** ([#79](https://github.com/fips-agents/agent-template/issues/79)). `GraphStore` ABC with `NullGraphStore` (default no-op) and `AgeGraphStore` (Apache AGE via asyncpg). Provides property-graph CRUD: `add_node`, `add_edge`, `get_node`, `get_neighbors`, `query_cypher`, `search_nodes`, `delete_node`, `delete_edge`. Config: `server.graph.{enabled, backend, database_url, graph_name}`. Requires `[graph]` extra.
+- **Kagenti identity integration documentation** ([#80](https://github.com/fips-agents/agent-template/issues/80)). Agents labeled `kagenti.io/type: agent` get auto-registered with Keycloak by the kagenti-operator. Token acquisition via OAuth2 Client Credentials Grant; agent-to-tool delegation via RFC 8693 token exchange.
+- **Long-running agent coordination design docs** ([#215](https://github.com/fips-agents/agent-template/issues/215)). Four planning documents: work-item coordination, enterprise multi-agent coordination, session continuity patterns, prompt assembly and agent maturation.
+
+## [0.26.0] - 2026-05-19
+
+### Added
+
+- **LLM-driven auto-compaction** ([#166](https://github.com/fips-agents/agent-template/issues/166)). `Compactor` ABC with `NullCompactor` (default no-op) and `LLMCompactor`. Tool-call pairing guard ensures `tool_calls`/`tool` result pairs are never split. Pending-state guard skips when sentinels exist. Config: `server.compaction.*`.
+- **Session fork and revert** ([#168](https://github.com/fips-agents/agent-template/issues/168)). `SessionStore.fork()` copies `messages[0:index]` into a new session with `parent_session_id` lineage. `SessionStore.revert()` truncates in place. REST: `POST /v1/sessions/{id}/fork`, `POST /v1/sessions/{id}/revert`.
+- **Event-triggered mode Phase 1a** ([#188](https://github.com/fips-agents/agent-template/issues/188)). `EventSource` and `EventSink` ABCs. `HttpWebhookSource` (HMAC-SHA256 verification), `CronSource` (5-field POSIX cron parser, stdlib only). Sinks: `NullSink`, `LogSink`, `HttpCallbackSink`. `TokenBucketRateLimiter` for per-source rate limiting.
+- **Kafka and Redis event sources/sinks** ([#188](https://github.com/fips-agents/agent-template/issues/188) Phase 1b). `KafkaSource`/`KafkaSink` (aiokafka), `RedisStreamSource`/`RedisStreamSink` (redis.asyncio). Optional extras `[kafka]` and `[redis]`.
+- **OTEL trace fidelity levels** ([#189](https://github.com/fips-agents/agent-template/issues/189)). `server.traces.fidelity` controls detail recorded as span events: `minimal` (default), `standard` (+ message snapshots, tool results), `full` (+ every streaming delta).
+- **Reducer-based state recovery** ([#190](https://github.com/fips-agents/agent-template/issues/190)). `AgentState` (Pydantic, `extra="forbid"`) with typed `reduce(state, event)` (pure sync) and optional `after_event(state, event)` (async side effects). `StateReducerObserver` in the observer chain. Checkpoint/replay from `TraceStore`. Config: `server.state_recovery.enabled`.
+- **Per-turn resource limits** ([#195](https://github.com/fips-agents/agent-template/issues/195)). `LimitsConfig` with `max_tokens_per_turn`, `max_iterations_per_turn`. Checked in `astep_stream()` after each model call. Emits `LimitExceeded` event with `finish_reason="limit"`.
+- **Doom-loop detection** ([#167](https://github.com/fips-agents/agent-template/issues/167)). `LoopGuardConfig` with `repeat_threshold`, `pattern_window`, and `canonicalization` mode. Hashes `(tool_name, canonical_args)` in a sliding window. Emits `LoopBreakEvent` with `finish_reason="loop_break"`. Enabled by default.
+- **Stable message IDs** ([#182](https://github.com/fips-agents/agent-template/issues/182)). Every entry in `BaseAgent.messages` carries a sortable `msg_{timestamp}_{random}` ID. Messages from pre-#182 sessions are backfilled on load. Session schema extended with fork lineage and pending-state columns.
+
+### Fixed
+
+- **Non-streaming usage** returns 0 instead of null for token counts.
+
+## [0.23.0] - [0.25.0] - 2026-05-18 / 2026-05-19
+
+Intermediate versions (0.23.0, 0.24.0, 0.25.0) tagged during development of the 0.26.0 feature set. These were not individually released to PyPI. All changes are captured in the 0.26.0 entry above.
+
 ## [0.22.0] - 2026-05-07
 
 Subagent-as-tool: composable delegation through the tool plane. Closes the bulk of [#165](https://github.com/fips-agents/agent-template/issues/165).
