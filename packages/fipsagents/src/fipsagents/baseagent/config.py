@@ -1107,10 +1107,20 @@ class FilesConfig(_PerStoreBackendMixin):
     ``parser.pdf.do_ocr`` to ``False`` -- text-extractable PDFs parse in
     sub-second instead of multiple minutes. Operators with scanned
     PDFs set ``do_ocr: true``.
+
+    ``max_injection_tokens`` caps how many tokens of extracted text
+    the full-text injection path inserts per file.  When the extracted
+    text exceeds this limit it is truncated and a note is appended
+    directing operators to enable chunking for full-content retrieval.
+    This prevents oversized documents from blowing out the model's
+    context window (which causes vLLM to compute a negative
+    ``max_tokens`` and reject the request).  Set to ``0`` to disable
+    the guard entirely.
     """
 
     enabled: bool = False
     max_file_size_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
+    max_injection_tokens: int = Field(default=100_000, ge=0)
     bytes_dir: str = "./files"
     bytes_backend: BytesBackendConfig = Field(default_factory=BytesBackendConfig)
     sqlite_path: str = ""

@@ -1333,9 +1333,27 @@ class OpenAIChatServer:
                 # leaving the model with nothing.
 
             if record.extracted_text:
+                text = record.extracted_text
+                max_tok = files_cfg.max_injection_tokens
+                if max_tok > 0:
+                    tok_count = count_tokens(text)
+                    if tok_count > max_tok:
+                        # Character-based first cut (~4 chars/token) to
+                        # avoid re-counting the full text.
+                        text = text[: max_tok * 4]
+                        # Verify and trim further if the estimate was
+                        # too generous.
+                        while count_tokens(text) > max_tok:
+                            text = text[: int(len(text) * 0.9)]
+                        omitted = tok_count - count_tokens(text)
+                        text += (
+                            f"\n\n[... content truncated — {omitted} "
+                            "tokens omitted. Enable chunking for "
+                            "full-content retrieval.]"
+                        )
                 messages.append({
                     "role": "system",
-                    "content": f"{header}\n{record.extracted_text}",
+                    "content": f"{header}\n{text}",
                 })
             else:
                 messages.append({
