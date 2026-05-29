@@ -97,6 +97,7 @@ class _StubAgent(BaseAgent):
                 files=types.SimpleNamespace(
                     enabled=False,
                     max_file_size_bytes=50 * 1024 * 1024,
+                    max_injection_tokens=100_000,
                     bytes_dir="./files",
                     sqlite_path="",
                     allowed_mime_types=[],

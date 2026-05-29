@@ -511,3 +511,115 @@ class TestShutdownDrainsTasks:
         # After context exit, lifespan shutdown ran. The slow save
         # should have completed before the chunk store was closed.
         assert stub.save_chunks.await_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# max_injection_tokens config and truncation
+# ---------------------------------------------------------------------------
+
+
+class TestMaxInjectionTokensConfig:
+    def test_default_value(self):
+        cfg = FilesConfig()
+        assert cfg.max_injection_tokens == 100_000
+
+    def test_custom_value(self):
+        cfg = FilesConfig(max_injection_tokens=500)
+        assert cfg.max_injection_tokens == 500
+
+    def test_zero_disables_guard(self):
+        cfg = FilesConfig(max_injection_tokens=0)
+        assert cfg.max_injection_tokens == 0
+
+    def test_negative_rejected(self):
+        with pytest.raises(ValueError):
+            FilesConfig(max_injection_tokens=-1)
+
+
+class TestInjectionTruncation:
+    @pytest.mark.asyncio
+    async def test_short_text_injected_in_full(self, tmp_path):
+        """Text under the token limit is injected without truncation."""
+        server, stub = _build_server_with_chunking(
+            tmp_path, enabled=False, threshold=10_000,
+        )
+        short_text = "This is a small document."
+        with TestClient(server.app) as _:
+            server._agent.config.server.files.max_injection_tokens = 1000
+            await server._file_store.save(  # type: ignore[union-attr]
+                FileRecord(
+                    file_id="f1", filename="small.txt", mime_type="text/plain",
+                    size_bytes=len(short_text), sha256="",
+                    extracted_text=short_text,
+                    parse_status="completed",
+                    chunk_status="skipped",
+                    chunk_count=0,
+                ),
+                short_text.encode(),
+            )
+            msgs = await server._resolve_file_attachments(
+                ["f1"], last_user_message="query",
+            )
+        assert len(msgs) == 1
+        assert short_text in msgs[0]["content"]
+        assert "truncated" not in msgs[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_large_text_truncated_with_note(self, tmp_path):
+        """Text over the token limit is truncated and a note is appended."""
+        server, stub = _build_server_with_chunking(
+            tmp_path, enabled=False, threshold=10_000,
+        )
+        # Build text that is well over 10 tokens (our test limit).
+        big_text = "word " * 500  # ~500 tokens
+        with TestClient(server.app) as _:
+            server._agent.config.server.files.max_injection_tokens = 10
+            await server._file_store.save(  # type: ignore[union-attr]
+                FileRecord(
+                    file_id="f2", filename="big.txt", mime_type="text/plain",
+                    size_bytes=len(big_text), sha256="",
+                    extracted_text=big_text,
+                    parse_status="completed",
+                    chunk_status="skipped",
+                    chunk_count=0,
+                ),
+                big_text.encode(),
+            )
+            msgs = await server._resolve_file_attachments(
+                ["f2"], last_user_message="query",
+            )
+        assert len(msgs) == 1
+        content = msgs[0]["content"]
+        # The truncation note must be present.
+        assert "content truncated" in content
+        assert "tokens omitted" in content
+        assert "Enable chunking" in content
+        # The full text should NOT be present.
+        assert content != f"[Attached file: big.txt (text/plain, {len(big_text)} bytes)]\n{big_text}"
+
+    @pytest.mark.asyncio
+    async def test_zero_limit_disables_truncation(self, tmp_path):
+        """max_injection_tokens=0 means no guard; full text injected."""
+        server, stub = _build_server_with_chunking(
+            tmp_path, enabled=False, threshold=10_000,
+        )
+        big_text = "word " * 500
+        with TestClient(server.app) as _:
+            server._agent.config.server.files.max_injection_tokens = 0
+            await server._file_store.save(  # type: ignore[union-attr]
+                FileRecord(
+                    file_id="f3", filename="huge.txt", mime_type="text/plain",
+                    size_bytes=len(big_text), sha256="",
+                    extracted_text=big_text,
+                    parse_status="completed",
+                    chunk_status="skipped",
+                    chunk_count=0,
+                ),
+                big_text.encode(),
+            )
+            msgs = await server._resolve_file_attachments(
+                ["f3"], last_user_message="query",
+            )
+        assert len(msgs) == 1
+        assert big_text in msgs[0]["content"]
+        assert "truncated" not in msgs[0]["content"]
