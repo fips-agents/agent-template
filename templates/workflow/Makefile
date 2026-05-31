@@ -13,11 +13,13 @@ PYTHON      ?= python3
 PROJECT     ?= workflow-template
 IMAGE_NAME  ?= workflow-template
 IMAGE_TAG   ?= latest
+CONTEXT     ?=
 
 # Derived
 PIP         := $(VENV)/bin/pip
 PYTEST      := $(VENV)/bin/pytest
 PYTHON_VENV := $(VENV)/bin/python
+OC_CTX      := $(if $(CONTEXT),--context=$(CONTEXT))
 
 # ---------------------------------------------------------------------------
 # Default target
@@ -79,7 +81,7 @@ build: ## Build container image with podman (linux/amd64 for OpenShift)
 
 .PHONY: deploy
 deploy: ## Deploy to OpenShift (make deploy PROJECT=<name>)
-	./deploy.sh $(PROJECT)
+	CONTEXT=$(CONTEXT) ./deploy.sh $(PROJECT)
 
 .PHONY: clean
 clean: ## Remove workflow resources from OpenShift (make clean PROJECT=<name>)
@@ -88,10 +90,10 @@ clean: ## Remove workflow resources from OpenShift (make clean PROJECT=<name>)
 		exit 1; \
 	fi
 	@echo "Removing workflow resources from project $(PROJECT)..."
-	oc delete deployment $(IMAGE_NAME) -n $(PROJECT) --ignore-not-found
-	oc delete service $(IMAGE_NAME) -n $(PROJECT) --ignore-not-found
-	oc delete configmap $(IMAGE_NAME)-config -n $(PROJECT) --ignore-not-found
-	oc delete route $(IMAGE_NAME) -n $(PROJECT) --ignore-not-found
+	oc delete deployment $(IMAGE_NAME) -n $(PROJECT) $(OC_CTX) --ignore-not-found
+	oc delete service $(IMAGE_NAME) -n $(PROJECT) $(OC_CTX) --ignore-not-found
+	oc delete configmap $(IMAGE_NAME)-config -n $(PROJECT) $(OC_CTX) --ignore-not-found
+	oc delete route $(IMAGE_NAME) -n $(PROJECT) $(OC_CTX) --ignore-not-found
 	@echo "Done."
 
 # ---------------------------------------------------------------------------
@@ -111,5 +113,6 @@ help: ## Show this help message
 	@echo "  PROJECT     OpenShift project/namespace  (default: $(PROJECT))"
 	@echo "  IMAGE_NAME  Container image name         (default: $(IMAGE_NAME))"
 	@echo "  IMAGE_TAG   Container image tag          (default: $(IMAGE_TAG))"
+	@echo "  CONTEXT     Kubernetes context (optional) (default: active context)"
 	@echo "  VENV        Virtual-env directory         (default: $(VENV))"
 	@echo ""

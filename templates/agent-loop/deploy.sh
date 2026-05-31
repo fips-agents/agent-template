@@ -14,6 +14,13 @@ set -euo pipefail
 
 PROJECT="${1:?Usage: ./deploy.sh <project-namespace>}"
 
+OC_CTX=""
+HELM_CTX=""
+if [ -n "${CONTEXT:-}" ]; then
+    OC_CTX="--context=$CONTEXT"
+    HELM_CTX="--kube-context=$CONTEXT"
+fi
+
 # ---------------------------------------------------------------------------
 # Pre-flight checks
 # ---------------------------------------------------------------------------
@@ -31,15 +38,15 @@ if ! command -v oc &>/dev/null; then
     exit 1
 fi
 
-if ! oc whoami &>/dev/null; then
+if ! oc whoami $OC_CTX &>/dev/null; then
     echo "Error: Not logged in to OpenShift. Run 'oc login' first."
     exit 1
 fi
 
 # Ensure the namespace exists (create if missing and user has permission)
-if ! oc get namespace "$PROJECT" &>/dev/null; then
+if ! oc get namespace "$PROJECT" $OC_CTX &>/dev/null; then
     echo "Namespace '$PROJECT' not found. Creating..."
-    oc new-project "$PROJECT" || {
+    oc new-project "$PROJECT" $OC_CTX || {
         echo "Error: Could not create namespace '$PROJECT'."
         exit 1
     }
@@ -58,12 +65,12 @@ if [ -d "$CHART_DIR" ]; then
     if command -v helm &>/dev/null && [ -f "$CHART_DIR/Chart.yaml" ]; then
         APP_NAME="$(basename "$(pwd)")"
         helm upgrade --install "$APP_NAME" "$CHART_DIR" \
-            -n "$PROJECT" \
+            -n "$PROJECT" $HELM_CTX \
             --wait
     else
         # Fallback: apply raw manifests from the chart templates directory
         if [ -d "$CHART_DIR/templates" ]; then
-            oc apply -f "$CHART_DIR/templates/" -n "$PROJECT"
+            oc apply -f "$CHART_DIR/templates/" -n "$PROJECT" $OC_CTX
         else
             echo "Error: No templates found in $CHART_DIR/. Create your manifests first."
             exit 1
@@ -77,4 +84,4 @@ fi
 
 echo ""
 echo "Deployment complete in namespace '$PROJECT'."
-echo "Check status: oc get pods -n $PROJECT"
+echo "Check status: oc get pods -n $PROJECT${OC_CTX:+ $OC_CTX}"
