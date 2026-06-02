@@ -321,7 +321,7 @@ def make_spawn_tool(agent: object):
             role: Short label for the spawned agent (e.g. "researcher").
             system_prompt: Full system prompt for the spawned agent.
             task: The user message / instruction to send.
-            tools: Whitelist of parent tool names to give the child. None means no tools.
+            tools: Allowlist of parent tool names to give the child. None means no tools.
             model: Override model name. Defaults to parent's model.
             max_iterations: Override max loop iterations. Defaults to config value.
         """
