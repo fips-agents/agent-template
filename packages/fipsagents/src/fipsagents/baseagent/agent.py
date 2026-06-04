@@ -1585,18 +1585,18 @@ class BaseAgent(abc.ABC):
 
     # -- Tool dispatch -------------------------------------------------------
 
-    async def use_tool(self, name: str, **kwargs: Any) -> ToolResult:
+    async def use_tool(self, tool_name: str, **kwargs: Any) -> ToolResult:
         """Call a tool through the registry.
 
         This is the single dispatch point for all agent-code tool calls
         (plane 1).  Logging is applied around the call.
         """
-        logger.info("Tool call: %s(%s)", name, _summarise_kwargs(kwargs))
-        result = await self.tools.execute(name, **kwargs)
+        logger.info("Tool call: %s(%s)", tool_name, _summarise_kwargs(kwargs))
+        result = await self.tools.execute(tool_name, **kwargs)
         if result.is_error:
-            logger.warning("Tool %s failed: %s", name, result.error)
+            logger.warning("Tool %s failed: %s", tool_name, result.error)
         else:
-            logger.debug("Tool %s returned: %s", name, _truncate(result.result))
+            logger.debug("Tool %s returned: %s", tool_name, _truncate(result.result))
         return result
 
     async def run_tool_calls(

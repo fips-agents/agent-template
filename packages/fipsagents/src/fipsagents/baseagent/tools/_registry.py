@@ -473,7 +473,7 @@ class ToolRegistry:
             schemas.append(_tool_meta_to_schema(meta))
         return schemas
 
-    async def execute(self, name: str, **kwargs: Any) -> ToolResult:
+    async def execute(self, tool_name: str, **kwargs: Any) -> ToolResult:
         """Execute a tool by name — the central dispatch point.
 
         All tool calls flow through here so logging, RBAC, and retry
@@ -481,26 +481,26 @@ class ToolRegistry:
         """
         call_id = uuid.uuid4().hex[:12]
 
-        meta = self._tools.get(name)
+        meta = self._tools.get(tool_name)
         if meta is None:
             return ToolResult(
                 call_id=call_id,
-                name=name,
-                error=f"Unknown tool: {name!r}",
+                name=tool_name,
+                error=f"Unknown tool: {tool_name!r}",
             )
 
-        logger.debug("Executing tool %r (call_id=%s)", name, call_id)
+        logger.debug("Executing tool %r (call_id=%s)", tool_name, call_id)
 
         # Pre-execution inspection
         if self._inspector is not None:
-            inspection = self._inspector.inspect(name, kwargs)
+            inspection = self._inspector.inspect(tool_name, kwargs)
             if not inspection.is_clean:
                 audit_logger = logging.getLogger("fipsagents.security.audit")
                 for finding in inspection.findings:
                     audit_logger.warning(
                         "tool_inspection_finding tool=%s call_id=%s category=%s "
                         "severity=%s argument=%s description=%s",
-                        name, call_id, finding.category,
+                        tool_name, call_id, finding.category,
                         finding.severity, finding.argument_name,
                         finding.description,
                     )
@@ -510,7 +510,7 @@ class ToolRegistry:
                     )
                     return ToolResult(
                         call_id=call_id,
-                        name=name,
+                        name=tool_name,
                         error=f"Tool call blocked by security inspection: {descriptions}",
                     )
                 # observe mode: log but continue execution
@@ -527,14 +527,14 @@ class ToolRegistry:
                 )
             return ToolResult(
                 call_id=call_id,
-                name=name,
+                name=tool_name,
                 result=str(raw_result) if raw_result is not None else "",
             )
         except Exception as exc:
-            logger.exception("Tool %r failed (call_id=%s)", name, call_id)
+            logger.exception("Tool %r failed (call_id=%s)", tool_name, call_id)
             return ToolResult(
                 call_id=call_id,
-                name=name,
+                name=tool_name,
                 error=f"{type(exc).__name__}: {exc}",
             )
 

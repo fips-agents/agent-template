@@ -471,6 +471,19 @@ class TestToolRegistryExecute:
         result = await registry.execute("t")
         assert len(result.call_id) > 0
 
+    @pytest.mark.asyncio
+    async def test_execute_with_name_parameter(self):
+        """Verify that tools with a 'name' parameter don't collide with execute(name=...)."""
+        @tool(description="Tool with name param", visibility="both")
+        async def get_pod_logs(name: str, container: str = "main") -> str:
+            return f"Logs for pod={name}, container={container}"
+
+        registry = ToolRegistry()
+        registry.register(get_pod_logs)
+        result = await registry.execute("get_pod_logs", name="my-pod", container="sidecar")
+        assert result.is_error is False
+        assert result.result == "Logs for pod=my-pod, container=sidecar"
+
 
 class TestToolRegistryDiscover:
     def test_discovers_tools_from_directory(self, tmp_path):
