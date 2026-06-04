@@ -3,7 +3,8 @@
 __version__ = "0.9.0"
 
 from fipsagents.baseagent.agent import BaseAgent, StepOutcome, StepResult
-from fipsagents.baseagent.config import AgentConfig, AgentIdentity, ConfigError, NodeConfig, PromptAssemblyConfig, SecurityConfig, ServerConfig, StateRecoveryConfig, load_config, load_config_from_string
+from fipsagents.baseagent.config import AgentConfig, AgentIdentity, ConfigError, HookEntryConfig, NodeConfig, PromptAssemblyConfig, SecurityConfig, ServerConfig, StateRecoveryConfig, load_config, load_config_from_string
+from fipsagents.baseagent.hooks import HookEntry, HookResult, HookRunner
 from fipsagents.baseagent.events import (
     ContentDelta,
     GuardrailFiredEvent,
@@ -41,6 +42,7 @@ __all__ = [
     "AgentConfig",
     "AgentIdentity",
     "ConfigError",
+    "HookEntryConfig",
     "NodeConfig",
     "PromptAssemblyConfig",
     "SecurityConfig",
@@ -48,6 +50,10 @@ __all__ = [
     "StateRecoveryConfig",
     "load_config",
     "load_config_from_string",
+    # hooks
+    "HookEntry",
+    "HookResult",
+    "HookRunner",
     # events (streaming)
     "ContentDelta",
     "GuardrailFiredEvent",

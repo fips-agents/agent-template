@@ -26,6 +26,7 @@ from fipsagents.baseagent.config import (
     _ADAPTER_ENDPOINT,
     _OFF_PLATFORM_PROVIDERS,
 )
+from fipsagents.baseagent.hooks import HookRunner, create_hook_runner
 from fipsagents.baseagent.events import (
     BudgetHeadroomWarning,
     ContentDelta,
@@ -140,6 +141,7 @@ class BaseAgent(abc.ABC):
         self.skills: SkillLoader = SkillLoader()
         self.rules: RuleLoader = RuleLoader()
         self.memory: MemoryClientBase = NullMemoryClient()
+        self.hooks: HookRunner = HookRunner()
         self._assembler: Any = None
 
         # Conversation state.
@@ -375,6 +377,14 @@ class BaseAgent(abc.ABC):
             )
             logger.info("Prompt assembler initialized (layered mode)")
 
+        # 7b. Lifecycle hooks
+        self.hooks = create_hook_runner(
+            config_hooks=self.config.hooks,
+            hooks_dir=base / "hooks",
+        )
+        if self.hooks:
+            logger.info("Loaded %d lifecycle hook(s)", len(self.hooks))
+
         # 8. Memory
         memory_cfg_path = base / self.config.memory.config_path
         self.memory = await create_memory_client(
@@ -434,6 +444,39 @@ class BaseAgent(abc.ABC):
         self._setup_done = True
         logger.info("Agent setup complete")
 
+        await self._fire_setup_hooks(base)
+
+    async def _fire_setup_hooks(self, base: Path) -> None:
+        """Fire ``setup_complete`` hooks and inject stdout as context."""
+        if not self.hooks:
+            return
+        env_extra = {
+            "AGENT_NAME": self.config.agent.name,
+            "AGENT_PROJECT_DIR": str(base.resolve()),
+        }
+        try:
+            results = await self.hooks.fire(
+                "setup_complete", env_extra=env_extra, cwd=base.resolve(),
+            )
+        except Exception:
+            logger.warning("setup_complete hooks failed", exc_info=True)
+            return
+        for result in results:
+            if result.success and result.stdout:
+                content = result.stdout
+                limit = self.config.memory.max_prefix_chars
+                if limit and len(content) > limit:
+                    content = content[:limit] + "\n\n… [truncated]"
+                self._append_message({
+                    "role": self.config.memory.prefix_role,
+                    "content": content,
+                })
+                logger.info(
+                    "setup_complete hook injected %d chars (hook=%s)",
+                    len(content),
+                    result.hook.name or result.hook.command[:40],
+                )
+
     async def run(self) -> Any:
         """Execute the agent loop until DONE or max iterations."""
         if not self._setup_done:
@@ -484,6 +527,21 @@ class BaseAgent(abc.ABC):
     async def shutdown(self) -> None:
         """Clean up resources: close MCP connections and any open handles."""
         logger.info("Shutting down agent")
+        if self.hooks and self._setup_done:
+            base = self._base_dir or self._config_path.parent
+            try:
+                await self.hooks.fire(
+                    "shutdown",
+                    env_extra={
+                        "AGENT_NAME": getattr(
+                            getattr(self.config, "agent", None), "name", ""
+                        ),
+                        "AGENT_PROJECT_DIR": str(base.resolve()),
+                    },
+                    cwd=base.resolve(),
+                )
+            except Exception:
+                logger.warning("Shutdown hooks failed", exc_info=True)
         for client, _label in self._mcp_clients:
             try:
                 if hasattr(client, "close"):
@@ -1152,6 +1210,43 @@ class BaseAgent(abc.ABC):
                                     finish_reason = "question"
                                     break
 
+                    # Pre-tool hook: can block execution via non-zero exit.
+                    if not _approval_handled and self.hooks:
+                        import json as _hook_json
+                        _base = self._base_dir or self._config_path.parent
+                        _pre_results = await self.hooks.fire(
+                            "pre_tool_use",
+                            env_extra={
+                                "AGENT_NAME": self.config.agent.name,
+                                "AGENT_PROJECT_DIR": str(_base.resolve()),
+                                "TOOL_NAME": fn_name,
+                                "TOOL_ARGS": _hook_json.dumps(args, default=str),
+                            },
+                            cwd=_base.resolve(),
+                            tool_name=fn_name,
+                        )
+                        _blocked = [r for r in _pre_results if r.blocked]
+                        if _blocked:
+                            _block_reason = (
+                                _blocked[0].stderr or _blocked[0].stdout
+                                or "non-zero exit"
+                            )
+                            _block_msg = (
+                                f"BLOCKED by pre_tool_use hook: {_block_reason}"
+                            )
+                            self._append_message({
+                                "role": "tool",
+                                "content": _block_msg,
+                                "tool_call_id": call["id"],
+                            })
+                            yield ToolResultEvent(
+                                call_id=call["id"],
+                                name=fn_name,
+                                content=_block_msg,
+                                is_error=True,
+                            )
+                            continue
+
                     result = await self.tools.execute(fn_name, **args)
 
                     # Drain subagent events emitted by delegate_to_agent
@@ -1200,6 +1295,23 @@ class BaseAgent(abc.ABC):
                         content=content_str,
                         is_error=is_err,
                     )
+
+                    # Post-tool hook (informational, cannot block).
+                    if self.hooks:
+                        import json as _post_hook_json
+                        _base = self._base_dir or self._config_path.parent
+                        await self.hooks.fire(
+                            "post_tool_use",
+                            env_extra={
+                                "AGENT_NAME": self.config.agent.name,
+                                "AGENT_PROJECT_DIR": str(_base.resolve()),
+                                "TOOL_NAME": fn_name,
+                                "TOOL_ARGS": _post_hook_json.dumps(args, default=str),
+                                "TOOL_RESULT": content_str[:4096],
+                            },
+                            cwd=_base.resolve(),
+                            tool_name=fn_name,
+                        )
 
                     # Doom-loop guard: hash (tool_name, args) and check for repeats.
                     if _guard_enabled and _guard_cfg is not None:

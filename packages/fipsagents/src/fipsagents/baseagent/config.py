@@ -558,6 +558,17 @@ class MemoryConfig(BaseModel):
         return v
 
 
+
+class HookEntryConfig(BaseModel):
+    """A single lifecycle hook declared in ``agent.yaml``."""
+
+    event: str
+    command: str
+    timeout: float = Field(default=10.0, gt=0.0)
+    matcher: str | None = None
+    name: str | None = None
+
+
 class ToolInspectionConfig(BaseModel):
     """Tool call inspection settings."""
 
@@ -1441,6 +1452,7 @@ class AgentConfig(BaseModel):
     self_healing: SelfHealingConfig = Field(default_factory=SelfHealingConfig)
     maturation: MaturationConfig = Field(default_factory=MaturationConfig)
     spawn: SpawnConfig = Field(default_factory=SpawnConfig)
+    hooks: list[HookEntryConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _no_duplicate_subagent_names(self) -> "AgentConfig":

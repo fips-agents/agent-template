@@ -569,6 +569,38 @@ memory:
   # max_results: 50
   # min_weight: 0.0            # 0.0 = no filtering
 
+# -- Lifecycle hooks (optional) ------------------------------------------------
+#
+# Shell commands fired at specific points in the agent lifecycle.
+# Hooks run as subprocesses with stdout captured.
+#
+# Built-in events:
+#   setup_complete  -- after setup() completes (stdout injected as context)
+#   shutdown        -- before shutdown() cleanup (informational)
+#   pre_tool_use    -- before a tool executes (non-zero exit blocks the call)
+#   post_tool_use   -- after a tool executes (informational)
+#
+# Custom events: call self.hooks.fire("my_event") from agent code.
+#
+# Hooks are also auto-discovered from hooks/*.yaml files. Each YAML file
+# declares event, command, and optional timeout/matcher/name. Config-defined
+# hooks fire first, then file-discovered hooks.
+#
+# Environment variables available to all hooks:
+#   AGENT_NAME, AGENT_PROJECT_DIR, HOOK_EVENT
+# Tool events additionally provide:
+#   TOOL_NAME, TOOL_ARGS (JSON), TOOL_RESULT (post only, max 4096 chars)
+#
+# hooks:
+#   - event: setup_complete
+#     command: ./hooks/fetch-memory.sh
+#     timeout: 10
+#   - event: pre_tool_use
+#     command: ./hooks/check-safety.sh
+#     timeout: 3
+#     matcher: "execute_*"
+hooks: []
+
 # -- Security ------------------------------------------------------------------
 #
 # Controls security inspection, audit logging, and enforcement behavior.
