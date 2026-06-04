@@ -80,6 +80,35 @@ T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
+# Mutable MCP client reference — allows token refresh without re-registering tools
+# ---------------------------------------------------------------------------
+
+
+class _McpClientRef:
+    """Mutable container for an MCP client reference.
+
+    Tool closures capture this ref instead of the client directly.
+    On reconnect, ``ref.client`` is swapped and all closures immediately
+    see the fresh client.
+    """
+
+    __slots__ = ("client", "label", "config", "header_templates", "_reconnect_lock")
+
+    def __init__(
+        self,
+        client: Any,
+        label: str,
+        config: Any | None = None,
+        header_templates: dict[str, str] | None = None,
+    ) -> None:
+        self.client = client
+        self.label = label
+        self.config = config
+        self.header_templates = header_templates
+        self._reconnect_lock = asyncio.Lock()
+
+
+# ---------------------------------------------------------------------------
 # Step result — returned by each step() invocation
 # ---------------------------------------------------------------------------
 
@@ -147,8 +176,8 @@ class BaseAgent(abc.ABC):
         # Conversation state.
         self.messages: list[dict[str, Any]] = []
 
-        # MCP client references for cleanup; each entry is (client, label).
-        self._mcp_clients: list[tuple[Any, str]] = []
+        # MCP client references for cleanup and auth refresh.
+        self._mcp_clients: list[_McpClientRef] = []
 
         # MCP prompts, resources, and resource templates — populated by connect_mcp().
         self._mcp_prompts: dict[str, tuple[Any, Any]] = {}      # name → (client, mcp.types.Prompt)
@@ -477,6 +506,90 @@ class BaseAgent(abc.ABC):
                     result.hook.name or result.hook.command[:40],
                 )
 
+    async def _refresh_mcp_auth(self, client_ref: _McpClientRef) -> bool:
+        """Fire ``mcp_auth_refresh`` hook, reconnect with fresh headers.
+
+        Called automatically when an MCP tool call receives a 401/403.
+        The hook script can refresh tokens and print ``KEY=VALUE`` lines
+        to stdout — those are injected into ``os.environ`` so that
+        subsequent ``substitute_env_vars()`` calls pick them up.
+
+        Returns ``True`` if the reconnect succeeded.
+        """
+        async with client_ref._reconnect_lock:
+            label = client_ref.label
+            config = client_ref.config
+
+            # Let hooks refresh tokens / env vars.
+            if self.hooks:
+                _base = self._base_dir or self._config_path.parent
+                results = await self.hooks.fire(
+                    "mcp_auth_refresh",
+                    env_extra={
+                        "AGENT_NAME": self.config.agent.name,
+                        "AGENT_PROJECT_DIR": str(_base.resolve()),
+                        "MCP_SERVER_URL": label,
+                    },
+                    cwd=_base.resolve(),
+                )
+                for r in results:
+                    if r.success and r.stdout:
+                        for line in r.stdout.strip().splitlines():
+                            if "=" in line:
+                                key, _, value = line.partition("=")
+                                _os.environ[key.strip()] = value.strip()
+
+            # Close old client.
+            old_client = client_ref.client
+            try:
+                if hasattr(old_client, "__aexit__"):
+                    await old_client.__aexit__(None, None, None)
+                elif hasattr(old_client, "close"):
+                    await old_client.close()
+            except Exception:
+                logger.debug("Error closing old MCP client %s", label, exc_info=True)
+
+            # Rebuild headers from templates (if available).
+            new_headers = None
+            if client_ref.header_templates:
+                from fipsagents.baseagent.config import substitute_env_vars
+                new_headers = {
+                    k: substitute_env_vars(v)
+                    for k, v in client_ref.header_templates.items()
+                }
+            elif config and config.headers:
+                new_headers = config.headers
+
+            # Reconnect.
+            try:
+                if config and config.url:
+                    if new_headers:
+                        from fastmcp.client.transports import StreamableHttpTransport
+                        transport = StreamableHttpTransport(
+                            url=config.url, headers=new_headers,
+                        )
+                    else:
+                        transport = config.url
+                else:
+                    logger.warning(
+                        "Cannot reconnect MCP server %s — no HTTP config", label,
+                    )
+                    return False
+
+                from fastmcp import Client as McpClient
+                new_client = McpClient(transport)
+                await new_client.__aenter__()
+
+                client_ref.client = new_client
+                if config and new_headers:
+                    config.headers = new_headers
+
+                logger.info("MCP server %s reconnected with refreshed auth", label)
+                return True
+            except Exception:
+                logger.exception("Failed to reconnect MCP server %s", label)
+                return False
+
     async def run(self) -> Any:
         """Execute the agent loop until DONE or max iterations."""
         if not self._setup_done:
@@ -542,12 +655,12 @@ class BaseAgent(abc.ABC):
                 )
             except Exception:
                 logger.warning("Shutdown hooks failed", exc_info=True)
-        for client, _label in self._mcp_clients:
+        for ref in self._mcp_clients:
             try:
-                if hasattr(client, "close"):
-                    await client.close()
-                elif hasattr(client, "disconnect"):
-                    await client.disconnect()
+                if hasattr(ref.client, "close"):
+                    await ref.client.close()
+                elif hasattr(ref.client, "disconnect"):
+                    await ref.client.disconnect()
             except Exception:
                 logger.warning(
                     "Error closing MCP client", exc_info=True
@@ -1211,10 +1324,11 @@ class BaseAgent(abc.ABC):
                                     break
 
                     # Pre-tool hook: can block execution via non-zero exit.
-                    if not _approval_handled and self.hooks:
+                    _hooks = getattr(self, "hooks", None)
+                    if not _approval_handled and _hooks:
                         import json as _hook_json
                         _base = self._base_dir or self._config_path.parent
-                        _pre_results = await self.hooks.fire(
+                        _pre_results = await _hooks.fire(
                             "pre_tool_use",
                             env_extra={
                                 "AGENT_NAME": self.config.agent.name,
@@ -1297,10 +1411,10 @@ class BaseAgent(abc.ABC):
                     )
 
                     # Post-tool hook (informational, cannot block).
-                    if self.hooks:
+                    if _hooks:
                         import json as _post_hook_json
                         _base = self._base_dir or self._config_path.parent
-                        await self.hooks.fire(
+                        await _hooks.fire(
                             "post_tool_use",
                             env_extra={
                                 "AGENT_NAME": self.config.agent.name,
@@ -1644,12 +1758,27 @@ class BaseAgent(abc.ABC):
             client = McpClient(transport)
             await client.__aenter__()
 
+            # Build the mutable client ref so tool closures can survive
+            # a reconnect without re-registration.
+            client_ref = _McpClientRef(
+                client=client,
+                label=label,
+                config=target if isinstance(target, McpServerConfig) else None,
+                header_templates=(
+                    getattr(target, "_header_templates", None)
+                    if isinstance(target, McpServerConfig) else None
+                ),
+            )
+
             # Discover tools from the server.
             tools_list = await client.list_tools()
             registered = 0
             for mcp_tool in tools_list:
                 # Wrap MCP tool as a local callable and register it.
-                _register_mcp_tool(self.tools, client, mcp_tool)
+                _register_mcp_tool(
+                    self.tools, client_ref, mcp_tool,
+                    reconnect_fn=self._refresh_mcp_auth,
+                )
                 registered += 1
 
             # Discover prompts.
@@ -1664,7 +1793,7 @@ class BaseAgent(abc.ABC):
                             pname, label,
                         )
                         continue
-                    self._mcp_prompts[pname] = (client, mcp_prompt)
+                    self._mcp_prompts[pname] = (client_ref, mcp_prompt)
                     prompt_count += 1
             except Exception:
                 logger.debug("MCP server %s does not expose prompts (or error listing them)", label, exc_info=True)
@@ -1681,7 +1810,7 @@ class BaseAgent(abc.ABC):
                             uri_str, label,
                         )
                         continue
-                    self._mcp_resources[uri_str] = (client, mcp_resource)
+                    self._mcp_resources[uri_str] = (client_ref, mcp_resource)
                     resource_count += 1
             except Exception:
                 logger.debug("MCP server %s does not expose resources (or error listing them)", label, exc_info=True)
@@ -1698,12 +1827,12 @@ class BaseAgent(abc.ABC):
                             tpl_str, label,
                         )
                         continue
-                    self._mcp_resource_templates[tpl_str] = (client, mcp_template)
+                    self._mcp_resource_templates[tpl_str] = (client_ref, mcp_template)
                     template_count += 1
             except Exception:
                 logger.debug("MCP server %s does not expose resource templates (or error listing them)", label, exc_info=True)
 
-            self._mcp_clients.append((client, label))
+            self._mcp_clients.append(client_ref)
             logger.info(
                 "Connected to MCP server %s — %d tool(s), %d prompt(s), %d resource(s), %d template(s)",
                 label, registered, prompt_count, resource_count, template_count,
@@ -1758,8 +1887,8 @@ class BaseAgent(abc.ABC):
                 f"MCP prompt {name!r} not found. "
                 f"Available: {sorted(self._mcp_prompts)}"
             )
-        client, _prompt_meta = self._mcp_prompts[name]
-        return await client.get_prompt(name, arguments=arguments)
+        client_ref, _prompt_meta = self._mcp_prompts[name]
+        return await client_ref.client.get_prompt(name, arguments=arguments)
 
     async def read_resource(self, uri: str) -> Any:
         """Read an MCP resource by URI.
@@ -1780,13 +1909,13 @@ class BaseAgent(abc.ABC):
                 f"MCP resource {uri!r} not found. "
                 f"Available: {sorted(self._mcp_resources)}"
             )
-        client, _resource_meta = self._mcp_resources[uri]
-        return await client.read_resource(uri)
+        client_ref, _resource_meta = self._mcp_resources[uri]
+        return await client_ref.client.read_resource(uri)
 
     def list_mcp_prompts(self) -> list[dict[str, Any]]:
         """Return metadata for all discovered MCP prompts."""
         result = []
-        for name, (_client, prompt) in sorted(self._mcp_prompts.items()):
+        for name, (_client_ref, prompt) in sorted(self._mcp_prompts.items()):
             args = getattr(prompt, "arguments", None) or []
             entry: dict[str, Any] = {
                 "name": prompt.name,
@@ -1806,7 +1935,7 @@ class BaseAgent(abc.ABC):
     def list_mcp_resources(self) -> list[dict[str, Any]]:
         """Return metadata for all discovered MCP resources."""
         result = []
-        for uri, (_client, resource) in sorted(self._mcp_resources.items()):
+        for uri, (_client_ref, resource) in sorted(self._mcp_resources.items()):
             result.append({
                 "uri": str(resource.uri),
                 "name": resource.name,
@@ -1818,7 +1947,7 @@ class BaseAgent(abc.ABC):
     def list_mcp_resource_templates(self) -> list[dict[str, Any]]:
         """Return metadata for all discovered MCP resource templates."""
         result = []
-        for tpl, (_client, template) in sorted(self._mcp_resource_templates.items()):
+        for tpl, (_client_ref, template) in sorted(self._mcp_resource_templates.items()):
             result.append({
                 "uriTemplate": template.uriTemplate,
                 "name": template.name,
@@ -1840,8 +1969,8 @@ class BaseAgent(abc.ABC):
         caps: list[Capability] = []
 
         # MCP server capabilities.
-        for _client, label in self._mcp_clients:
-            caps.append(Capability(name=f"mcp:{label}", value=1.0))
+        for ref in self._mcp_clients:
+            caps.append(Capability(name=f"mcp:{ref.label}", value=1.0))
 
         # Skill capabilities.
         for skill_name in self.skills._skills:
@@ -2104,9 +2233,17 @@ class BaseAgent(abc.ABC):
 
 
 def _register_mcp_tool(
-    registry: ToolRegistry, client: Any, mcp_tool: Any,
+    registry: ToolRegistry,
+    client_ref: _McpClientRef,
+    mcp_tool: Any,
+    *,
+    reconnect_fn: Any | None = None,
 ) -> None:
-    """Wrap an MCP tool as a local callable and register it (llm_only)."""
+    """Wrap an MCP tool as a local callable and register it (llm_only).
+
+    The closure captures *client_ref* (not the raw client), so that an
+    auth-refresh reconnect transparently updates all tool closures.
+    """
     from fipsagents.baseagent.tools import ToolMeta, _TOOL_MARKER
 
     tool_name = mcp_tool.name
@@ -2114,7 +2251,21 @@ def _register_mcp_tool(
     input_schema = getattr(mcp_tool, "inputSchema", None) or {}
 
     async def _call_mcp_tool(**kwargs: Any) -> str:
-        result = await client.call_tool(tool_name, kwargs)
+        try:
+            result = await client_ref.client.call_tool(tool_name, kwargs)
+        except Exception as exc:
+            if reconnect_fn is not None and _is_auth_error(exc):
+                logger.info(
+                    "Auth error on MCP tool %r (server=%s) — attempting refresh",
+                    tool_name, client_ref.label,
+                )
+                refreshed = await reconnect_fn(client_ref)
+                if refreshed:
+                    result = await client_ref.client.call_tool(tool_name, kwargs)
+                else:
+                    raise
+            else:
+                raise
         # Extract text from MCP CallToolResult content items.
         # Each item is typically TextContent with a .text attribute.
         parts = []
@@ -2146,6 +2297,16 @@ def _register_mcp_tool(
 # ---------------------------------------------------------------------------
 # String helpers
 # ---------------------------------------------------------------------------
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """Detect authentication/authorization errors from MCP transports."""
+    if hasattr(exc, "response") and hasattr(exc.response, "status_code"):
+        return exc.response.status_code in (401, 403)
+    if type(exc).__name__ == "AuthorizationError":
+        return True
+    msg = str(exc).lower()
+    return any(kw in msg for kw in ("401", "unauthorized", "403", "forbidden"))
 
 
 def _doom_loop_hash(tool_name: str, args: dict, mode: str = "structured") -> str:

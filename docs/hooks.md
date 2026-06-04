@@ -16,6 +16,7 @@ Hooks are configured in `agent.yaml` or auto-discovered from `hooks/*.yaml` file
 | `post_tool_use` | After tool execution | Logged only | — |
 | `pre_mcp_connect` | Before each MCP server connection | Logged only | Token acquisition, pre-flight checks |
 | `post_mcp_connect` | After MCP server connected + tools discovered | Logged only | Audit, validate expected tools |
+| `mcp_auth_refresh` | When an MCP tool call fails with 401/403 | Env vars updated from stdout `KEY=VALUE` lines | Token refresh, transparent retry |
 
 ## Environment variables
 
@@ -43,6 +44,10 @@ Post-connect events also receive:
 - `MCP_TOOLS_COUNT` — number of tools discovered
 - `MCP_PROMPTS_COUNT` — number of prompts discovered
 - `MCP_RESOURCES_COUNT` — number of resources discovered
+
+Auth refresh events also receive:
+
+- `MCP_SERVER_URL` — URL or label of the server that returned 401/403
 
 ## Configuration
 
@@ -241,6 +246,41 @@ exec python -m src.agent
 ```
 
 The `pre_mcp_connect` hook also fires before each connection, so it can refresh the token file for any server that connects after the initial startup.
+
+## Example: Auto-refresh expired MCP tokens
+
+When an MCP tool call fails with 401/403, the framework fires `mcp_auth_refresh`. The hook should acquire a fresh token and print `KEY=VALUE` lines to stdout — the framework updates `os.environ` from these before reconnecting.
+
+**hooks/refresh-token.yaml:**
+
+```yaml
+event: mcp_auth_refresh
+command: ./hooks/refresh-token.sh
+timeout: 10
+```
+
+**hooks/refresh-token.sh:**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+KEYCLOAK_URL="${KEYCLOAK_URL:-}"
+CLIENT_ID="${MCP_CLIENT_ID:-}"
+CLIENT_SECRET="${MCP_CLIENT_SECRET:-}"
+[ -n "$KEYCLOAK_URL" ] || exit 1
+
+TOKEN=$(curl -s -X POST "$KEYCLOAK_URL/protocol/openid-connect/token" \
+  -d "grant_type=client_credentials" \
+  -d "client_id=$CLIENT_ID" \
+  -d "client_secret=$CLIENT_SECRET" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Framework parses KEY=VALUE lines from stdout into os.environ
+echo "MCP_AUTH_TOKEN=$TOKEN"
+```
+
+The framework re-resolves `${MCP_AUTH_TOKEN}` in the header templates, creates a new MCP client, and retries the failed tool call once. If the retry also fails, the error reaches the LLM normally.
 
 ## Custom events
 

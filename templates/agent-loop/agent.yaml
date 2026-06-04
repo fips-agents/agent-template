@@ -587,6 +587,7 @@ memory:
 #   post_tool_use    -- after a tool executes (informational)
 #   pre_mcp_connect  -- before each MCP server connection (token acquisition)
 #   post_mcp_connect -- after MCP server connected + tools discovered (audit)
+#   mcp_auth_refresh -- on 401/403 from MCP tool call (stdout KEY=VALUE → env)
 #
 # Custom events: call self.hooks.fire("my_event") from agent code.
 #

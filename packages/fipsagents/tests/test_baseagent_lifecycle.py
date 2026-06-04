@@ -787,9 +787,12 @@ class TestMCPIntegration:
         agent = CountingAgent(config=config, base_dir=tmp_path)
         await agent.setup()
 
+        from fipsagents.baseagent.agent import _McpClientRef
+
         mock_client = AsyncMock()
         mock_client.close = AsyncMock()
-        agent._mcp_clients.append((mock_client, "test-server"))
+        ref = _McpClientRef(client=mock_client, label="test-server")
+        agent._mcp_clients.append(ref)
 
         await agent.shutdown()
 

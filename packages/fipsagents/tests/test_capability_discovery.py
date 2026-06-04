@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from fipsagents.baseagent.agent import _McpClientRef
 from fipsagents.baseagent.skills import Skill, SkillLoader
 from fipsagents.server.work_items import (
     Capability,
@@ -21,7 +22,7 @@ from fipsagents.server.work_items import (
 
 def _make_agent_stub(
     *,
-    mcp_clients: list[tuple] | None = None,
+    mcp_clients: list[_McpClientRef] | None = None,
     skills: dict[str, Skill] | None = None,
     config_capabilities: list[Capability] | None = None,
 ):
@@ -70,8 +71,8 @@ class TestDiscoverCapabilities:
     def test_mcp_capabilities(self):
         agent = _make_agent_stub(
             mcp_clients=[
-                (MagicMock(), "search"),
-                (MagicMock(), "memory"),
+                _McpClientRef(client=MagicMock(), label="search"),
+                _McpClientRef(client=MagicMock(), label="memory"),
             ],
         )
         agent._discover_capabilities()
@@ -95,7 +96,7 @@ class TestDiscoverCapabilities:
 
     def test_config_capabilities_merged(self):
         agent = _make_agent_stub(
-            mcp_clients=[(MagicMock(), "search")],
+            mcp_clients=[_McpClientRef(client=MagicMock(), label="search")],
             config_capabilities=[
                 Capability(name="python", value=0.9),
                 Capability(name="mcp:search", value=0.5),  # duplicate
@@ -122,7 +123,7 @@ class TestDiscoverCapabilities:
     def test_combined_mcp_and_skills(self):
         skills = {"analysis": Skill(name="analysis", description="Analyze code")}
         agent = _make_agent_stub(
-            mcp_clients=[(MagicMock(), "tavily")],
+            mcp_clients=[_McpClientRef(client=MagicMock(), label="tavily")],
             skills=skills,
         )
         agent._discover_capabilities()

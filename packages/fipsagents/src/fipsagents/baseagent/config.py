@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Union
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -140,6 +140,7 @@ class McpServerConfig(BaseModel):
     # HTTP transport
     url: str | None = None
     headers: dict[str, str] | None = None
+    _header_templates: dict[str, str] | None = PrivateAttr(default=None)
 
     # stdio transport
     command: str | None = None
@@ -1561,9 +1562,12 @@ def load_config(
     data = parse_yaml_with_env(raw, env=env, strict=strict)
 
     try:
-        return AgentConfig.model_validate(data)
+        config = AgentConfig.model_validate(data)
     except Exception as exc:
         raise ConfigError(f"Invalid agent configuration: {exc}") from exc
+
+    _stash_header_templates(config, raw)
+    return config
 
 
 def load_config_from_string(
@@ -1578,6 +1582,32 @@ def load_config_from_string(
     """
     data = parse_yaml_with_env(raw, env=env, strict=strict)
     try:
-        return AgentConfig.model_validate(data)
+        config = AgentConfig.model_validate(data)
     except Exception as exc:
         raise ConfigError(f"Invalid agent configuration: {exc}") from exc
+
+    _stash_header_templates(config, raw)
+    return config
+
+
+def _stash_header_templates(config: "AgentConfig", raw_yaml: str) -> None:
+    """Preserve raw header templates on MCP server configs for reconnection.
+
+    The raw YAML is parsed *without* env-var substitution so that header
+    values containing ``${VAR}`` patterns survive for later re-resolution
+    (e.g. after an ``mcp_auth_refresh`` hook updates the env var).
+    """
+    try:
+        raw_data = yaml.safe_load(raw_yaml)
+    except Exception:
+        return
+    if not isinstance(raw_data, dict):
+        return
+    servers = raw_data.get("mcp_servers")
+    if not isinstance(servers, list):
+        return
+    for i, entry in enumerate(servers):
+        if i >= len(config.mcp_servers):
+            break
+        if isinstance(entry, dict) and entry.get("headers"):
+            config.mcp_servers[i]._header_templates = entry["headers"]
