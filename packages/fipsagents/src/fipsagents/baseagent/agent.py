@@ -1624,6 +1624,19 @@ class BaseAgent(abc.ABC):
             label = getattr(target, "name", None) or type(target).__name__
             transport = target
 
+        # Pre-connect hook: token acquisition, validation, logging.
+        if self.hooks:
+            _base = self._base_dir or self._config_path.parent
+            await self.hooks.fire(
+                "pre_mcp_connect",
+                env_extra={
+                    "AGENT_NAME": self.config.agent.name,
+                    "AGENT_PROJECT_DIR": str(_base.resolve()),
+                    "MCP_SERVER_URL": label,
+                },
+                cwd=_base.resolve(),
+            )
+
         logger.info("Connecting to MCP server: %s", label)
         try:
             from fastmcp import Client as McpClient
@@ -1695,6 +1708,22 @@ class BaseAgent(abc.ABC):
                 "Connected to MCP server %s — %d tool(s), %d prompt(s), %d resource(s), %d template(s)",
                 label, registered, prompt_count, resource_count, template_count,
             )
+
+            # Post-connect hook: audit, validate expected tools, etc.
+            if self.hooks:
+                _base = self._base_dir or self._config_path.parent
+                await self.hooks.fire(
+                    "post_mcp_connect",
+                    env_extra={
+                        "AGENT_NAME": self.config.agent.name,
+                        "AGENT_PROJECT_DIR": str(_base.resolve()),
+                        "MCP_SERVER_URL": label,
+                        "MCP_TOOLS_COUNT": str(registered),
+                        "MCP_PROMPTS_COUNT": str(prompt_count),
+                        "MCP_RESOURCES_COUNT": str(resource_count),
+                    },
+                    cwd=_base.resolve(),
+                )
         except ImportError:
             logger.warning(
                 "fastmcp package not installed — cannot connect to MCP "

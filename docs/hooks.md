@@ -14,6 +14,8 @@ Hooks are configured in `agent.yaml` or auto-discovered from `hooks/*.yaml` file
 | `shutdown` | Before `shutdown()` cleanup | Logged only | — |
 | `pre_tool_use` | Before tool execution | Logged only | Non-zero exit blocks the tool call |
 | `post_tool_use` | After tool execution | Logged only | — |
+| `pre_mcp_connect` | Before each MCP server connection | Logged only | Token acquisition, pre-flight checks |
+| `post_mcp_connect` | After MCP server connected + tools discovered | Logged only | Audit, validate expected tools |
 
 ## Environment variables
 
@@ -31,6 +33,16 @@ Tool events (`pre_tool_use`, `post_tool_use`) add:
 Post-tool events also receive:
 
 - `TOOL_RESULT` — tool output (truncated to 4096 chars)
+
+MCP events (`pre_mcp_connect`, `post_mcp_connect`) add:
+
+- `MCP_SERVER_URL` — URL or label of the MCP server
+
+Post-connect events also receive:
+
+- `MCP_TOOLS_COUNT` — number of tools discovered
+- `MCP_PROMPTS_COUNT` — number of prompts discovered
+- `MCP_RESOURCES_COUNT` — number of resources discovered
 
 ## Configuration
 
@@ -177,6 +189,58 @@ curl -s -X POST "$AUDIT_ENDPOINT" \
 
 exit 0
 ```
+
+## Example: MCP gateway auth
+
+Acquire a Keycloak token before connecting to an authenticated MCP gateway.
+
+**hooks/mcp-auth.yaml:**
+
+```yaml
+event: pre_mcp_connect
+command: ./hooks/acquire-token.sh
+timeout: 5
+```
+
+**hooks/acquire-token.sh:**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+KEYCLOAK_URL="${KEYCLOAK_URL:-}"
+CLIENT_ID="${MCP_CLIENT_ID:-}"
+CLIENT_SECRET="${MCP_CLIENT_SECRET:-}"
+[ -n "$KEYCLOAK_URL" ] || exit 0
+
+TOKEN=$(curl -s -X POST "$KEYCLOAK_URL/protocol/openid-connect/token" \
+  -d "grant_type=client_credentials" \
+  -d "client_id=$CLIENT_ID" \
+  -d "client_secret=$CLIENT_SECRET" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null) || exit 0
+
+echo "$TOKEN" > /tmp/mcp-token
+```
+
+**agent.yaml:**
+
+```yaml
+mcp_servers:
+  - url: ${MCP_GATEWAY_URL}
+    headers:
+      Authorization: "Bearer ${MCP_AUTH_TOKEN}"
+```
+
+The startup script reads the token file and sets the env var before Python starts:
+
+```bash
+#!/bin/bash
+./hooks/acquire-token.sh
+export MCP_AUTH_TOKEN=$(cat /tmp/mcp-token 2>/dev/null)
+exec python -m src.agent
+```
+
+The `pre_mcp_connect` hook also fires before each connection, so it can refresh the token file for any server that connects after the initial startup.
 
 ## Custom events
 

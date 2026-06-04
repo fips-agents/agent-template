@@ -581,10 +581,12 @@ memory:
 # Hooks run as subprocesses with stdout captured.
 #
 # Built-in events:
-#   setup_complete  -- after setup() completes (stdout injected as context)
-#   shutdown        -- before shutdown() cleanup (informational)
-#   pre_tool_use    -- before a tool executes (non-zero exit blocks the call)
-#   post_tool_use   -- after a tool executes (informational)
+#   setup_complete   -- after setup() completes (stdout injected as context)
+#   shutdown         -- before shutdown() cleanup (informational)
+#   pre_tool_use     -- before a tool executes (non-zero exit blocks the call)
+#   post_tool_use    -- after a tool executes (informational)
+#   pre_mcp_connect  -- before each MCP server connection (token acquisition)
+#   post_mcp_connect -- after MCP server connected + tools discovered (audit)
 #
 # Custom events: call self.hooks.fire("my_event") from agent code.
 #
@@ -596,6 +598,8 @@ memory:
 #   AGENT_NAME, AGENT_PROJECT_DIR, HOOK_EVENT
 # Tool events additionally provide:
 #   TOOL_NAME, TOOL_ARGS (JSON), TOOL_RESULT (post only, max 4096 chars)
+# MCP events additionally provide:
+#   MCP_SERVER_URL, MCP_TOOLS_COUNT (post only), MCP_PROMPTS_COUNT (post only)
 #
 # hooks:
 #   - event: setup_complete
