@@ -127,7 +127,7 @@ class LLMConfig(BaseModel):
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
 
 
-class McpServerConfig(BaseModel):
+class McpServerConfig(BaseModel, extra="forbid"):
     """Connection details for a single MCP server.
 
     Exactly one transport must be specified:
@@ -135,6 +135,10 @@ class McpServerConfig(BaseModel):
     - **HTTP** (streamable-http): set ``url``.
     - **stdio** (subprocess): set ``command`` (and optionally ``args``,
       ``env``, ``cwd``).
+
+    Unknown fields are rejected (``extra="forbid"``) so that typos like
+    ``transport: streamable-http`` fail loudly instead of being silently
+    ignored.
     """
 
     # HTTP transport
