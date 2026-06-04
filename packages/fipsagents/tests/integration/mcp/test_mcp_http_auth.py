@@ -131,7 +131,7 @@ async def memoryhub_agent() -> AsyncIterator[BaseAgent]:
 
     # Authenticate — required before any other tool call.
     auth_result = await agent.tools.execute(
-        "register_session", api_key=_API_KEY,
+        "register_session", args={"api_key": _API_KEY}
     )
     if auth_result.is_error:
         await agent.shutdown()
@@ -191,7 +191,7 @@ class TestMemoryHubAuthentication:
         self, memoryhub_agent: BaseAgent,
     ) -> None:
         """After register_session, memory(status) confirms authenticated=true."""
-        result = await memoryhub_agent.tools.execute("memory", action="status")
+        result = await memoryhub_agent.tools.execute("memory", args={"action": "status"})
         assert not result.is_error, f"memory(status) error: {result.error}"
         assert "authenticated" in result.result
         assert "true" in result.result.lower() or "True" in result.result
@@ -199,7 +199,7 @@ class TestMemoryHubAuthentication:
     async def test_get_session_returns_user_id(
         self, memoryhub_agent: BaseAgent,
     ) -> None:
-        result = await memoryhub_agent.tools.execute("memory", action="status")
+        result = await memoryhub_agent.tools.execute("memory", args={"action": "status"})
         assert not result.is_error
         assert "user_id" in result.result
 
@@ -217,7 +217,7 @@ class TestMemoryHubToolExecution:
         self, memoryhub_agent: BaseAgent,
     ) -> None:
         result = await memoryhub_agent.tools.execute(
-            "memory", action="list_projects",
+            "memory", args={"action": "list_projects"}
         )
         assert not result.is_error, f"memory(list_projects) error: {result.error}"
         assert "projects" in result.result
@@ -227,7 +227,7 @@ class TestMemoryHubToolExecution:
     ) -> None:
         """memory(search) returns results (possibly empty) without error."""
         result = await memoryhub_agent.tools.execute(
-            "memory", action="search", query="test query that probably matches nothing",
+            "memory", args={"action": "search", "query": "test query that probably matches nothing"}
         )
         assert not result.is_error, f"memory(search) error: {result.error}"
         # Should return a results structure even if empty.
@@ -352,7 +352,7 @@ async def memoryhub_real_llm_agent() -> AsyncIterator[BaseAgent]:
 
     # Authenticate — required before any other tool call.
     auth_result = await agent.tools.execute(
-        "register_session", api_key=_API_KEY,
+        "register_session", args={"api_key": _API_KEY}
     )
     if auth_result.is_error:
         await agent.shutdown()

@@ -397,7 +397,7 @@ class TestToolRegistryExecute:
             return a + b
 
         registry.register(adder)
-        result = await registry.execute("adder", a=2, b=3)
+        result = await registry.execute("adder", args={"a": 2, "b": 3})
         assert result.is_error is False
         assert result.result == "5"
 
@@ -410,7 +410,7 @@ class TestToolRegistryExecute:
             return x * y
 
         registry.register(multiplier)
-        result = await registry.execute("multiplier", x=3, y=4)
+        result = await registry.execute("multiplier", args={"x": 3, "y": 4})
         assert result.is_error is False
         assert result.result == "12"
 
@@ -473,14 +473,14 @@ class TestToolRegistryExecute:
 
     @pytest.mark.asyncio
     async def test_execute_with_name_parameter(self):
-        """Verify that tools with a 'name' parameter don't collide with execute(name=...)."""
+        """Verify that tools with a 'name' parameter don't collide with execute(tool_name=...)."""
         @tool(description="Tool with name param", visibility="both")
         async def get_pod_logs(name: str, container: str = "main") -> str:
             return f"Logs for pod={name}, container={container}"
 
         registry = ToolRegistry()
         registry.register(get_pod_logs)
-        result = await registry.execute("get_pod_logs", name="my-pod", container="sidecar")
+        result = await registry.execute("get_pod_logs", args={"name": "my-pod", "container": "sidecar"})
         assert result.is_error is False
         assert result.result == "Logs for pod=my-pod, container=sidecar"
 

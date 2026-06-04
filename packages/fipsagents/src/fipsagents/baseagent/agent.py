@@ -1361,7 +1361,7 @@ class BaseAgent(abc.ABC):
                             )
                             continue
 
-                    result = await self.tools.execute(fn_name, **args)
+                    result = await self.tools.execute(fn_name, args)
 
                     # Drain subagent events emitted by delegate_to_agent
                     # (or any future tool that uses _subagent_events).
@@ -1585,14 +1585,15 @@ class BaseAgent(abc.ABC):
 
     # -- Tool dispatch -------------------------------------------------------
 
-    async def use_tool(self, tool_name: str, **kwargs: Any) -> ToolResult:
+    async def use_tool(self, tool_name: str, args: dict[str, Any] | None = None) -> ToolResult:
         """Call a tool through the registry.
 
         This is the single dispatch point for all agent-code tool calls
         (plane 1).  Logging is applied around the call.
         """
-        logger.info("Tool call: %s(%s)", tool_name, _summarise_kwargs(kwargs))
-        result = await self.tools.execute(tool_name, **kwargs)
+        args = args or {}
+        logger.info("Tool call: %s(%s)", tool_name, _summarise_kwargs(args))
+        result = await self.tools.execute(tool_name, args)
         if result.is_error:
             logger.warning("Tool %s failed: %s", tool_name, result.error)
         else:
@@ -1669,7 +1670,7 @@ class BaseAgent(abc.ABC):
                     args = {}
 
                 logger.info("run_tool_calls: executing %s", fn_name)
-                result = await self.tools.execute(fn_name, **args)
+                result = await self.tools.execute(fn_name, args)
                 content_str = (
                     result.result
                     if not result.is_error

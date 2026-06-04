@@ -272,7 +272,7 @@ class TestRegistryIntegration:
         registry.set_inspector(inspector, mode="enforce")
 
         result = await registry.execute(
-            "echo", text="AKIAIOSFODNN7EXAMPLE"
+            "echo", args={"text": "AKIAIOSFODNN7EXAMPLE"}
         )
         assert result.is_error
         assert "blocked by security inspection" in result.error
@@ -290,7 +290,7 @@ class TestRegistryIntegration:
         registry.set_inspector(inspector, mode="observe")
 
         result = await registry.execute(
-            "echo", text="AKIAIOSFODNN7EXAMPLE"
+            "echo", args={"text": "AKIAIOSFODNN7EXAMPLE"}
         )
         # Should execute despite the finding
         assert not result.is_error
@@ -309,7 +309,7 @@ class TestRegistryIntegration:
         registry.set_inspector(inspector, mode="observe")
 
         with caplog.at_level(logging.WARNING, logger="fipsagents.security.audit"):
-            await registry.execute("echo", text="AKIAIOSFODNN7EXAMPLE")
+            await registry.execute("echo", args={"text": "AKIAIOSFODNN7EXAMPLE"})
 
         assert any(
             "tool_inspection_finding" in record.message
@@ -327,7 +327,7 @@ class TestRegistryIntegration:
         registry.register(echo)
         # No inspector set -- should execute normally
         result = await registry.execute(
-            "echo", text="AKIAIOSFODNN7EXAMPLE"
+            "echo", args={"text": "AKIAIOSFODNN7EXAMPLE"}
         )
         assert not result.is_error
         assert result.result == "AKIAIOSFODNN7EXAMPLE"
@@ -345,7 +345,7 @@ class TestRegistryIntegration:
         registry.set_inspector(inspector, mode="enforce")
 
         result = await registry.execute(
-            "echo", text="hello world, this is clean"
+            "echo", args={"text": "hello world, this is clean"}
         )
         assert not result.is_error
         assert result.result == "hello world, this is clean"

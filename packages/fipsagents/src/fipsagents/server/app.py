@@ -1581,7 +1581,7 @@ class OpenAIChatServer:
                     "allow", "allowed", "yes", "approve", "approved",
                 )
                 if _approved and perm_tool and self._agent is not None:
-                    _result = await self._agent.tools.execute(perm_tool, **perm_args)
+                    _result = await self._agent.tools.execute(perm_tool, perm_args)
                     _content = (
                         _result.result if not _result.is_error
                         else f"ERROR: {_result.error}"

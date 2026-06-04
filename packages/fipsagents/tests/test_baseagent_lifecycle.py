@@ -422,7 +422,7 @@ class TestToolDispatch:
             return f"echo:{msg}"
 
         agent.tools.register(echo)
-        result = await agent.use_tool("echo", msg="hello")
+        result = await agent.use_tool("echo", args={"msg": "hello"})
 
         assert not result.is_error
         assert result.result == "echo:hello"

@@ -193,7 +193,7 @@ class TestDirectToolInvocation:
             await agent.setup()
 
             result = await agent.tools.execute(
-                "delegate_to_agent", agent_name="child", task="hello"
+                "delegate_to_agent", {"agent_name": "child", "task": "hello"}
             )
 
             assert not result.is_error, f"Expected success, got error: {result.error}"
@@ -217,7 +217,7 @@ class TestDirectToolInvocation:
             await agent.setup()
 
             result = await agent.tools.execute(
-                "delegate_to_agent", agent_name="child", task="hello"
+                "delegate_to_agent", {"agent_name": "child", "task": "hello"}
             )
             parsed = json.loads(result.result)
 
@@ -241,7 +241,7 @@ class TestDirectToolInvocation:
             await agent.setup()
 
             await agent.tools.execute(
-                "delegate_to_agent", agent_name="child", task="hello"
+                "delegate_to_agent", {"agent_name": "child", "task": "hello"}
             )
 
             assert len(agent._subagent_token_usage) == 1, (
@@ -271,7 +271,7 @@ class TestDirectToolInvocation:
             assert agent._subagent_events == []
 
             await agent.tools.execute(
-                "delegate_to_agent", agent_name="child", task="hello"
+                "delegate_to_agent", {"agent_name": "child", "task": "hello"}
             )
 
             # After direct execute(), events are in the buffer (not drained

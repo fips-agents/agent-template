@@ -101,12 +101,12 @@ class TestMcpInprocessToolExecution:
     """Execute in-process MCP tools directly through the registry."""
 
     async def test_add(self, mcp_inprocess_agent: BaseAgent) -> None:
-        result = await mcp_inprocess_agent.tools.execute("add", a=3, b=5)
+        result = await mcp_inprocess_agent.tools.execute("add", args={"a": 3, "b": 5})
         assert not result.is_error, f"Tool error: {result.error}"
         assert "8" in result.result
 
     async def test_multiply(self, mcp_inprocess_agent: BaseAgent) -> None:
-        result = await mcp_inprocess_agent.tools.execute("multiply", a=4, b=7)
+        result = await mcp_inprocess_agent.tools.execute("multiply", args={"a": 4, "b": 7})
         assert not result.is_error, f"Tool error: {result.error}"
         assert "28" in result.result
 

@@ -473,13 +473,14 @@ class ToolRegistry:
             schemas.append(_tool_meta_to_schema(meta))
         return schemas
 
-    async def execute(self, tool_name: str, **kwargs: Any) -> ToolResult:
+    async def execute(self, tool_name: str, args: dict[str, Any] | None = None) -> ToolResult:
         """Execute a tool by name — the central dispatch point.
 
         All tool calls flow through here so logging, RBAC, and retry
         hooks can be applied uniformly.
         """
         call_id = uuid.uuid4().hex[:12]
+        args = args or {}
 
         meta = self._tools.get(tool_name)
         if meta is None:
@@ -493,7 +494,7 @@ class ToolRegistry:
 
         # Pre-execution inspection
         if self._inspector is not None:
-            inspection = self._inspector.inspect(tool_name, kwargs)
+            inspection = self._inspector.inspect(tool_name, args)
             if not inspection.is_clean:
                 audit_logger = logging.getLogger("fipsagents.security.audit")
                 for finding in inspection.findings:
@@ -517,13 +518,13 @@ class ToolRegistry:
 
         try:
             if meta.is_async:
-                raw_result = await meta.fn(**kwargs)
+                raw_result = await meta.fn(**args)
             else:
                 # Run sync functions in the default executor to avoid blocking
                 # the event loop.
                 loop = asyncio.get_running_loop()
                 raw_result = await loop.run_in_executor(
-                    None, lambda: meta.fn(**kwargs)
+                    None, lambda: meta.fn(**args)
                 )
             return ToolResult(
                 call_id=call_id,

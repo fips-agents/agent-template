@@ -169,7 +169,7 @@ class TestKagentiToolExecution:
     ) -> None:
         """Calling a tool through the gateway should return a result."""
         result = await kagenti_agent.tools.execute(
-            "get_weather", city="London",
+            "get_weather", args={"city": "London"}
         )
         assert not result.is_error, f"Tool error: {result.error}"
         assert result.result, "Empty result from get_weather"

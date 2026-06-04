@@ -150,7 +150,7 @@ class TestMcpHttpToolExecution:
     async def test_evaluate_numeric(self, mcp_http_agent: BaseAgent) -> None:
         """evaluate_numeric computes 2 + 3 = 5."""
         result = await mcp_http_agent.tools.execute(
-            "evaluate_numeric", expression="2 + 3",
+            "evaluate_numeric", args={"expression": "2 + 3"}
         )
         assert not result.is_error, f"Tool error: {result.error}"
         assert "5" in result.result, (
@@ -160,7 +160,7 @@ class TestMcpHttpToolExecution:
     async def test_differentiate(self, mcp_http_agent: BaseAgent) -> None:
         """d/dx(x**2) = 2*x."""
         result = await mcp_http_agent.tools.execute(
-            "differentiate", expression="x**2", variables=["x"],
+            "differentiate", args={"expression": "x**2", "variables": ["x"]}
         )
         assert not result.is_error, f"Tool error: {result.error}"
         assert "2*x" in result.result or "2x" in result.result, (
@@ -171,8 +171,7 @@ class TestMcpHttpToolExecution:
         """sin(x)**2 + cos(x)**2 simplifies to 1."""
         result = await mcp_http_agent.tools.execute(
             "simplify_expression",
-            expression="sin(x)**2 + cos(x)**2",
-            form="simplify",
+            args={"expression": "sin(x)**2 + cos(x)**2", "form": "simplify"}
         )
         assert not result.is_error, f"Tool error: {result.error}"
         assert "1" in result.result, (
@@ -182,7 +181,7 @@ class TestMcpHttpToolExecution:
     async def test_integrate_basic(self, mcp_http_agent: BaseAgent) -> None:
         """Indefinite integral of 2*x is x**2."""
         result = await mcp_http_agent.tools.execute(
-            "integrate", expression="2*x", variable="x",
+            "integrate", args={"expression": "2*x", "variable": "x"}
         )
         assert not result.is_error, f"Tool error: {result.error}"
         assert "x**2" in result.result, (
@@ -192,7 +191,7 @@ class TestMcpHttpToolExecution:
     async def test_tool_error_on_invalid_input(self, mcp_http_agent: BaseAgent) -> None:
         """MCP server returns an error for nonsense input."""
         result = await mcp_http_agent.tools.execute(
-            "evaluate_numeric", expression="not_math ][][",
+            "evaluate_numeric", args={"expression": "not_math ][]["}
         )
         # The MCP server may return an error via is_error or as error text
         # in the result content — either is acceptable.

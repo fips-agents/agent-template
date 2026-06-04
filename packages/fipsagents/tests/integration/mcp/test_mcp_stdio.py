@@ -153,14 +153,14 @@ class TestMcpStdioToolExecution:
     """Execute MCP tools directly through the registry (no LLM)."""
 
     async def test_add(self, mcp_stdio_agent: BaseAgent) -> None:
-        result = await mcp_stdio_agent.tools.execute("add", a=3, b=5)
+        result = await mcp_stdio_agent.tools.execute("add", args={"a": 3, "b": 5})
         assert not result.is_error, f"Tool error: {result.error}"
         assert "8" in result.result, (
             f"Expected '8' in add result: {result.result!r}"
         )
 
     async def test_multiply(self, mcp_stdio_agent: BaseAgent) -> None:
-        result = await mcp_stdio_agent.tools.execute("multiply", a=4, b=7)
+        result = await mcp_stdio_agent.tools.execute("multiply", args={"a": 4, "b": 7})
         assert not result.is_error, f"Tool error: {result.error}"
         assert "28" in result.result, (
             f"Expected '28' in multiply result: {result.result!r}"
@@ -168,7 +168,7 @@ class TestMcpStdioToolExecution:
 
     async def test_float_precision(self, mcp_stdio_agent: BaseAgent) -> None:
         """Tool handles floats correctly."""
-        result = await mcp_stdio_agent.tools.execute("add", a=1.5, b=2.5)
+        result = await mcp_stdio_agent.tools.execute("add", args={"a": 1.5, "b": 2.5})
         assert not result.is_error, f"Tool error: {result.error}"
         assert "4" in result.result, (
             f"Expected '4' in float add result: {result.result!r}"
