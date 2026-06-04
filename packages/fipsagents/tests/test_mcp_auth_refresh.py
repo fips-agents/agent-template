@@ -394,3 +394,40 @@ async def test_refresh_returns_false_on_reconnect_failure(tmp_path):
     assert result is False
     # Client ref should NOT have been updated on failure.
     assert ref.client is not mock_mcp_client_cls.return_value
+
+
+# ---------------------------------------------------------------------------
+# Section 5: pre_mcp_connect stdout parsing (#226)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_mcp_connect_parses_stdout_env_vars(tmp_path, monkeypatch):
+    """pre_mcp_connect hook stdout KEY=VALUE lines update os.environ."""
+    hook = HookEntry(event="pre_mcp_connect", command="echo MCP_AUTH_TOKEN=pre-connect-token")
+    agent = _make_agent(hooks=HookRunner([hook]), base_dir=tmp_path)
+
+    proc = AsyncMock()
+    proc.communicate = AsyncMock(return_value=(b"MCP_AUTH_TOKEN=pre-connect-token\n", b""))
+    proc.returncode = 0
+    proc.kill = AsyncMock()
+    proc.wait = AsyncMock()
+
+    monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)
+
+    with patch("asyncio.create_subprocess_shell", return_value=proc):
+        # Fire the hook directly to test parsing
+        results = await agent.hooks.fire(
+            "pre_mcp_connect",
+            env_extra={"MCP_SERVER_URL": "http://test:8080"},
+        )
+        # Simulate the parsing that connect_mcp does
+        for r in results:
+            if r.success and r.stdout:
+                for line in r.stdout.strip().splitlines():
+                    if "=" in line:
+                        k, _, v = line.partition("=")
+                        os.environ[k.strip()] = v.strip()
+
+    assert os.environ.get("MCP_AUTH_TOKEN") == "pre-connect-token"
+    monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)

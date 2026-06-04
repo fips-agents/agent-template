@@ -1739,9 +1739,12 @@ class BaseAgent(abc.ABC):
             transport = target
 
         # Pre-connect hook: token acquisition, validation, logging.
+        # Stdout KEY=VALUE lines are parsed into os.environ (same as
+        # mcp_auth_refresh) so a single hook script can handle both
+        # initial token acquisition and mid-session refresh.
         if self.hooks:
             _base = self._base_dir or self._config_path.parent
-            await self.hooks.fire(
+            _pre_results = await self.hooks.fire(
                 "pre_mcp_connect",
                 env_extra={
                     "AGENT_NAME": self.config.agent.name,
@@ -1750,6 +1753,30 @@ class BaseAgent(abc.ABC):
                 },
                 cwd=_base.resolve(),
             )
+            for _r in _pre_results:
+                if _r.success and _r.stdout:
+                    for _line in _r.stdout.strip().splitlines():
+                        if "=" in _line:
+                            _k, _, _v = _line.partition("=")
+                            _os.environ[_k.strip()] = _v.strip()
+
+            # Re-resolve headers from templates if env vars were updated.
+            if (
+                isinstance(target, McpServerConfig)
+                and getattr(target, "_header_templates", None)
+            ):
+                from fipsagents.baseagent.config import substitute_env_vars
+                target.headers = {
+                    k: substitute_env_vars(v)
+                    for k, v in target._header_templates.items()
+                }
+                # Rebuild transport with fresh headers.
+                if target.headers:
+                    from fastmcp.client.transports import StreamableHttpTransport
+                    transport = StreamableHttpTransport(
+                        url=target.url,
+                        headers=target.headers,
+                    )
 
         logger.info("Connecting to MCP server: %s", label)
         try:

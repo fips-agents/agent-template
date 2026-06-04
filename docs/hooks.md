@@ -14,7 +14,7 @@ Hooks are configured in `agent.yaml` or auto-discovered from `hooks/*.yaml` file
 | `shutdown` | Before `shutdown()` cleanup | Logged only | — |
 | `pre_tool_use` | Before tool execution | Logged only | Non-zero exit blocks the tool call |
 | `post_tool_use` | After tool execution | Logged only | — |
-| `pre_mcp_connect` | Before each MCP server connection | Logged only | Token acquisition, pre-flight checks |
+| `pre_mcp_connect` | Before each MCP server connection | Env vars updated from stdout `KEY=VALUE` lines | Token acquisition, pre-flight checks |
 | `post_mcp_connect` | After MCP server connected + tools discovered | Logged only | Audit, validate expected tools |
 | `mcp_auth_refresh` | When an MCP tool call fails with 401/403 | Env vars updated from stdout `KEY=VALUE` lines | Token refresh, transparent retry |
 
@@ -224,7 +224,8 @@ TOKEN=$(curl -s -X POST "$KEYCLOAK_URL/protocol/openid-connect/token" \
   -d "client_secret=$CLIENT_SECRET" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null) || exit 0
 
-echo "$TOKEN" > /tmp/mcp-token
+# Framework parses KEY=VALUE lines from stdout into os.environ
+echo "MCP_AUTH_TOKEN=$TOKEN"
 ```
 
 **agent.yaml:**
@@ -236,16 +237,7 @@ mcp_servers:
       Authorization: "Bearer ${MCP_AUTH_TOKEN}"
 ```
 
-The startup script reads the token file and sets the env var before Python starts:
-
-```bash
-#!/bin/bash
-./hooks/acquire-token.sh
-export MCP_AUTH_TOKEN=$(cat /tmp/mcp-token 2>/dev/null)
-exec python -m src.agent
-```
-
-The `pre_mcp_connect` hook also fires before each connection, so it can refresh the token file for any server that connects after the initial startup.
+The `pre_mcp_connect` hook fires before each connection. It prints `MCP_AUTH_TOKEN=...` to stdout, which the framework parses into `os.environ` and re-resolves the header templates — so `${MCP_AUTH_TOKEN}` in the `Authorization` header picks up the fresh token. The same script can also serve as the `mcp_auth_refresh` hook for mid-session token renewal.
 
 ## Example: Auto-refresh expired MCP tokens
 
