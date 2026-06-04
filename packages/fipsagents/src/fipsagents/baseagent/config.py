@@ -139,6 +139,7 @@ class McpServerConfig(BaseModel):
 
     # HTTP transport
     url: str | None = None
+    headers: dict[str, str] | None = None
 
     # stdio transport
     command: str | None = None

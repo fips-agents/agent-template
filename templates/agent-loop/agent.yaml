@@ -111,6 +111,12 @@ platform:
 #     args: [--verbose]
 #     env: {API_KEY: "${SEARCH_API_KEY}"}
 #
+# For MCP servers behind an auth gateway, add `headers`:
+#
+#   - url: ${MCP_SERVER_URL:-}
+#     headers:
+#       Authorization: "Bearer ${MCP_AUTH_TOKEN}"
+#
 # Production env vars (example):
 #   MCP_SEARCH_URL  -- URL for a web-search MCP server
 #

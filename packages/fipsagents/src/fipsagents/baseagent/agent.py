@@ -1599,7 +1599,15 @@ class BaseAgent(abc.ABC):
         elif isinstance(target, McpServerConfig):
             if target.url:
                 label = target.url
-                transport = target.url
+                if target.headers:
+                    from fastmcp.client.transports import StreamableHttpTransport
+
+                    transport = StreamableHttpTransport(
+                        url=target.url,
+                        headers=target.headers,
+                    )
+                else:
+                    transport = target.url
             else:
                 label = f"stdio:{target.command}"
                 from fastmcp.client.transports import StdioTransport

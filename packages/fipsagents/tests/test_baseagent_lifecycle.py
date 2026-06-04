@@ -700,6 +700,87 @@ class TestMCPIntegration:
         await agent.shutdown()
 
     @pytest.mark.asyncio
+    async def test_connect_mcp_uses_streamable_http_transport_with_headers(
+        self, tmp_path: Path,
+    ):
+        """connect_mcp() creates StreamableHttpTransport when headers are set."""
+        from fipsagents.baseagent.config import McpServerConfig
+
+        config = _make_config()
+        agent = CountingAgent(config=config, base_dir=tmp_path)
+        await agent.setup()
+
+        mock_tool = SimpleNamespace(
+            name="authed_tool",
+            description="Requires auth",
+            inputSchema={"type": "object", "properties": {}},
+        )
+        mock_client = AsyncMock()
+        mock_client.list_tools = AsyncMock(return_value=[mock_tool])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client_cls = MagicMock(return_value=mock_client)
+        mock_transport_cls = MagicMock()
+
+        mcp_cfg = McpServerConfig(
+            url="http://gw:8080/mcp",
+            headers={"Authorization": "Bearer secret"},
+        )
+
+        with patch.dict("sys.modules", {
+            "fastmcp": MagicMock(Client=mock_client_cls),
+            "fastmcp.client": MagicMock(),
+            "fastmcp.client.transports": MagicMock(
+                StreamableHttpTransport=mock_transport_cls,
+            ),
+        }):
+            await agent.connect_mcp(mcp_cfg)
+
+        # StreamableHttpTransport should have been instantiated with url + headers.
+        mock_transport_cls.assert_called_once_with(
+            url="http://gw:8080/mcp",
+            headers={"Authorization": "Bearer secret"},
+        )
+        # The transport instance should have been passed to Client().
+        mock_client_cls.assert_called_once_with(mock_transport_cls.return_value)
+        assert agent.tools.get("authed_tool") is not None
+
+        await agent.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_connect_mcp_no_headers_uses_string_url(self, tmp_path: Path):
+        """connect_mcp() passes plain string URL when no headers are set."""
+        from fipsagents.baseagent.config import McpServerConfig
+
+        config = _make_config()
+        agent = CountingAgent(config=config, base_dir=tmp_path)
+        await agent.setup()
+
+        mock_tool = SimpleNamespace(
+            name="plain_tool",
+            description="No auth",
+            inputSchema={"type": "object", "properties": {}},
+        )
+        mock_client = AsyncMock()
+        mock_client.list_tools = AsyncMock(return_value=[mock_tool])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client_cls = MagicMock(return_value=mock_client)
+        mcp_cfg = McpServerConfig(url="http://plain:8080/mcp")
+
+        with patch.dict("sys.modules", {
+            "fastmcp": MagicMock(Client=mock_client_cls),
+        }):
+            await agent.connect_mcp(mcp_cfg)
+
+        # Client should receive the plain URL string, not a transport object.
+        mock_client_cls.assert_called_once_with("http://plain:8080/mcp")
+
+        await agent.shutdown()
+
+    @pytest.mark.asyncio
     async def test_shutdown_clears_mcp_clients(self, tmp_path: Path):
         """shutdown() closes MCP client connections."""
         config = _make_config()

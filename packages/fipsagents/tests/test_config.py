@@ -327,6 +327,17 @@ class TestMcpServerConfig:
         assert cfg.env == {"LOG_LEVEL": "debug"}
         assert cfg.cwd == "/tmp"
 
+    def test_headers_default_none(self):
+        cfg = McpServerConfig(url="http://mcp:8080/mcp")
+        assert cfg.headers is None
+
+    def test_headers_preserved(self):
+        cfg = McpServerConfig(
+            url="http://mcp:8080/mcp",
+            headers={"Authorization": "Bearer tok-123", "X-Custom": "val"},
+        )
+        assert cfg.headers == {"Authorization": "Bearer tok-123", "X-Custom": "val"}
+
 
 # ---------------------------------------------------------------------------
 # LLMConfig
