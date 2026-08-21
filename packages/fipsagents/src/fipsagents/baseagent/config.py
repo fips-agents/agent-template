@@ -122,7 +122,7 @@ class LLMConfig(BaseModel):
     provider: Literal[
         "litellm", "openai", "anthropic",
         "bedrock", "azure",
-    ] = "litellm"
+    ] = "openai"
     endpoint: str | None = None
     name: str = "meta-llama/Llama-3.3-70B-Instruct"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)

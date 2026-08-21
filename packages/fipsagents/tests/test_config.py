@@ -367,9 +367,9 @@ class TestLLMConfig:
         cfg = LLMConfig()
         assert "Llama" in cfg.name or cfg.name  # has some default
 
-    def test_default_provider_is_litellm(self):
+    def test_default_provider_is_openai(self):
         cfg = LLMConfig()
-        assert cfg.provider == "litellm"
+        assert cfg.provider == "openai"
 
     @pytest.mark.parametrize("provider", ["litellm", "openai", "anthropic", "bedrock", "azure"])
     def test_valid_providers(self, provider):
@@ -388,7 +388,7 @@ class TestLLMConfig:
 
     def test_provider_default_in_yaml(self):
         config = load_config_from_string("model:\n  name: test\n")
-        assert config.model.provider == "litellm"
+        assert config.model.provider == "openai"
 
 
 # ---------------------------------------------------------------------------
