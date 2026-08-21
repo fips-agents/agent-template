@@ -1,50 +1,45 @@
-# Session Summary — 2026-08-21 · multi-provider-llm · Add LiteLLM, native OpenAI, native Anthropic to BaseAgent
+# Session Summary — 2026-08-21 · multi-provider-llm · Multi-provider LLM client + fallback chain + releases
 
-**Plan:** GitHub issues #233, #234, #235, #194 + new multi-provider feature   **Commits:** none yet (prepare-and-ask)
-**Deployed:** none   **Model:** Claude Opus 4.6 (1M context)
+**Plan:** GitHub issues #233, #234, #235, #194 + new multi-provider feature   **Commits:** be41bf8..4c99688 (main)
+**Deployed:** PyPI fipsagents 0.32.0 + PyPI fips-agents-cli 0.17.1   **Model:** Claude Opus 4.6 (1M context)
 
 ## Plan vs. actual
-Planned: multi-provider LLM client (LiteLLM default, native OpenAI, native Anthropic) + fix scaffolding bugs #233/#234/#235. Shipped: all planned work complete. Slipped: none. #194 (fallback chain) is a design hook only as planned — the provider abstraction enables it as follow-on.
-Scope: stayed in scope; added CLI `--provider` flag as a natural extension.
+Planned: multi-provider LLM client + fix scaffolding bugs. Shipped: all planned work, plus live Anthropic integration tests, the `LLMConfig` default fix, #194 fallback chain, and both PyPI releases. Slipped: none.
+Scope: expanded to include fallback chain (#194), live testing, default-provider fix, and releases — all at user request during the session.
 
 ## Shipped
-- Provider ABC (`baseagent/providers/_base.py`) + factory (`__init__.py`) with three implementations
-- `OpenAIProvider` extracted from `LLMClient` — direct `AsyncOpenAI`
-- `LiteLLMProvider` — wraps `litellm.acompletion()`, OpenAI-compatible output
-- `AnthropicProvider` — full translation: messages, tools, streaming chunk normalization, extended thinking via `reasoning_content`, structured output via tool-use pattern
-- `LLMClient` refactored to delegate to provider; `astep_stream()` unchanged
-- `LLMConfig.provider` expanded: `litellm` (default) | `openai` | `anthropic` | `bedrock`/`azure` (deprecated with warnings)
-- New optional extras: `fipsagents[litellm]`, `fipsagents[anthropic]`
-- Test updates: mock targets updated for provider delegation (75 LLM tests, 44 spawn tests, 2 config tests)
-- **CLI repo**: `--provider` flag on `fips-agents create agent`, `customize_provider()` function
-- **CLI repo**: #235 fix (`repo.index.add(".")` for dotfiles), #234 fix (vendored deps from UPSTREAM.toml), #233 (version notice)
-- Documentation: template CLAUDE.md + repo CLAUDE.md updated
+- `be41bf8` Provider ABC + OpenAI/LiteLLM/Anthropic implementations, LLMClient refactor
+- `08c1a51` Test updates for provider delegation + 9 live Anthropic integration tests
+- `00bb288` Keep openai as LLMConfig default for backward compat (CLI sets litellm for new projects)
+- `9a23700` Bump fipsagents to 0.32.0 + sync `__init__.py` version
+- `4c99688` FallbackProvider — model fallback chain (#194)
+- **CLI repo**: #235 dotfile fix, #234/#233 vendored deps fix, `--provider` flag, black fix, released as 0.17.1
 
 ## Verification & confidence
-- fipsagents test suite: 2453 passed, 27 skipped, 0 failed
-- CLI test suite: 433 passed, 0 failed
-- Lint: ruff clean
-- Provider instantiation verified for all three backends + backward compat
-- Confidence: **high** for the provider abstraction and OpenAI/LiteLLM paths. **Medium** for the Anthropic provider — translation logic is well-referenced from the adapter sidecar, but it hasn't been exercised against a real Anthropic API endpoint in this session (mock-only). Extended thinking and structured output paths in particular need live testing.
+- fipsagents: 2472 passed, 27 skipped, 0 failed
+- CLI: 433 passed, 0 failed
+- Anthropic provider: 9/9 live API tests (completion, streaming, tools, multi-turn, structured output, system messages, extended thinking)
+- Fallback provider: 19 unit tests covering retriable/non-retriable classification, chain exhaustion, streaming fallback
+- Confidence: **high** — live-tested against real Anthropic API; fallback is mock-only but the logic is simple and well-covered
 
 ## Judgment calls & deviations
-- Default provider changed from `openai` to `litellm` per user direction. This is a backward-incompatible config change for anyone using `LLMConfig()` without specifying a provider.
-- Anthropic structured output uses tool-use pattern (force a tool call with the schema) rather than `response_format`, since Anthropic doesn't support OpenAI's `response_format` shape.
-- Kept the adapter sidecar path working for `bedrock`/`azure` with deprecation warnings rather than removing it.
-- `astep_stream()` was not modified — all providers normalize to OpenAI-compatible chunk shapes. This was a deliberate design choice to minimize blast radius.
+- Reverted `LLMConfig` default from `litellm` back to `openai` for backward compat. CLI scaffolder sets litellm for new projects.
+- Anthropic structured output uses tool-use pattern rather than `response_format`.
+- Streaming fallback only before first chunk — mid-stream errors propagate. Deliberate: mid-stream fallback would corrupt conversation history.
+- `_is_retriable()` defaults to `True` when it can't classify the cause — fail open into fallback rather than fail closed.
 
 ## Backlog delta
-Filed: none new. Closed: none (no commits yet). #194 (fallback chain) is enabled by the provider abstraction but not implemented. #231 (platform mode bypass) skipped per user direction.
+Closed: #194 (fallback chain). Fixed in CLI: #233, #234, #235. Skipped: #231 (platform mode bypass). Deferred: #233 deeper fix (source vendored code from PyPI sdist).
 
 ## Drift & forward-collisions
-- Backward: #194 (model fallback chain) is now straightforward to implement — the provider factory could return a chain. Still valid, scope unchanged.
+- Backward: #194 now-stale (shipped this session). #231 still valid, untouched.
 - Forward: none identified.
 
 ## For the reviewer
-- Sanity-check: the Anthropic provider's streaming chunk normalization (`_stream_as_openai_chunks`) synthesizes `SimpleNamespace` objects to duck-type as OpenAI chunks. Verify the attribute access patterns in `astep_stream()` are fully covered (content, reasoning_content, tool_calls, finish_reason, usage).
-- Thin verification: the Anthropic provider has not been tested against a real API. The LiteLLM provider was verified to instantiate but not to make real calls.
-- Wants guidance: should the default provider change from `litellm` to `openai` for backward compat, with LiteLLM set via the CLI `--provider` flag? Current: `litellm` is the default everywhere.
+- Sanity-check: the `_is_retriable()` default-to-True policy. Rationale: an unknown error is more likely transient than a permanent 4xx, and falling back is cheaper than crashing. Worth a second opinion.
+- Thin verification: FallbackProvider is mock-only. A live test with an intentionally-down endpoint would close the gap.
+- Wants guidance: none.
 
 ## Risks / watch-fors
-- The `litellm` default means existing projects that upgrade fipsagents and don't specify `provider: openai` in their `agent.yaml` will get litellm, which requires `pip install fipsagents[litellm]`. The env-var fallback `${MODEL_PROVIDER:-openai}` in agent.yaml templates mitigates this for scaffolded projects.
-- CLI changes span two repos (agent-template + fips-agents-cli) — they should be committed and released together to stay consistent.
+- The `__init__.py` version was at `0.9.0` for 32 releases. Now synced to `0.32.0`. Anything that reads `__version__` at runtime (unlikely) would see a jump.
+- CLI 0.17.0 tag exists on GitHub but the PyPI publish failed (black drift). 0.17.1 is the actual release. The 0.17.0 GitHub Release object still exists and could confuse users browsing releases.

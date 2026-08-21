@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, AsyncIterator
-from unittest.mock import AsyncMock
+from typing import Any
 
 import pytest
 
