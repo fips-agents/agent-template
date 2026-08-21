@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from fipsagents.baseagent.config import AgentConfig, SpawnConfig
+from fipsagents.baseagent.config import AgentConfig, LLMConfig, SpawnConfig
 from fipsagents.baseagent.events import (
     SpawnAgentCompleted,
     SpawnAgentFailed,
@@ -39,7 +39,10 @@ def _make_parent(
     tools: ToolRegistry | None = None,
     delegation_depth: int = 0,
 ) -> types.SimpleNamespace:
-    config = AgentConfig(spawn=spawn_config or SpawnConfig())
+    config = AgentConfig(
+        model=LLMConfig(provider="openai"),
+        spawn=spawn_config or SpawnConfig(),
+    )
     return types.SimpleNamespace(
         config=config, tools=tools or ToolRegistry(),
         _subagent_events=[], _subagent_token_usage=[],
@@ -99,7 +102,7 @@ def mock_openai(monkeypatch):
     inst = MagicMock()
     inst.chat.completions.create = AsyncMock(side_effect=fake_create)
     mock_cls.return_value = inst
-    monkeypatch.setattr("fipsagents.baseagent.llm.AsyncOpenAI", mock_cls)
+    monkeypatch.setattr("fipsagents.baseagent.providers._openai.AsyncOpenAI", mock_cls)
     return inst
 
 
@@ -339,7 +342,7 @@ class TestDefensive:
     @pytest.mark.asyncio
     async def test_no_crash_when_events_missing(self, mock_openai):
         agent = types.SimpleNamespace(
-            config=AgentConfig(), tools=ToolRegistry(),
+            config=AgentConfig(model=LLMConfig(provider="openai")), tools=ToolRegistry(),
             _subagent_token_usage=[], _delegation_depth=0,
         )
         r = json.loads(await _spawn(agent, role="helper", **{**_S, "max_iterations": 1}))
@@ -348,7 +351,7 @@ class TestDefensive:
     @pytest.mark.asyncio
     async def test_no_crash_when_token_usage_missing(self, mock_openai):
         agent = types.SimpleNamespace(
-            config=AgentConfig(), tools=ToolRegistry(),
+            config=AgentConfig(model=LLMConfig(provider="openai")), tools=ToolRegistry(),
             _subagent_events=[], _delegation_depth=0,
         )
         r = json.loads(await _spawn(agent, role="helper", **{**_S, "max_iterations": 1}))

@@ -60,7 +60,7 @@ class TestProviderEndpointRewriteIntegration:
                 update={"endpoint": _ADAPTER_ENDPOINT},
             )
         client = LLMClient(effective)
-        assert str(client._client.base_url) == "http://vllm:8000/v1/"
+        assert str(client._provider._client.base_url) == "http://vllm:8000/v1/"
 
     @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "azure"])
     def test_off_platform_provider_rewrites_endpoint(self, provider):
@@ -79,7 +79,7 @@ class TestProviderEndpointRewriteIntegration:
             )
         client = LLMClient(effective)
         # The base_url should be the adapter sidecar, not the original.
-        assert str(client._client.base_url) == "http://localhost:8081/v1/"
+        assert str(client._provider._client.base_url) == "http://localhost:8081/v1/"
         # Original config should be unchanged.
         assert config.model.endpoint == "http://should-be-ignored:8000/v1"
 
@@ -98,7 +98,7 @@ class TestProviderEndpointRewriteIntegration:
                 update={"endpoint": _ADAPTER_ENDPOINT},
             )
         client = LLMClient(effective)
-        assert str(client._client.base_url) == "http://localhost:8081/v1/"
+        assert str(client._provider._client.base_url) == "http://localhost:8081/v1/"
 
     def test_model_name_preserved_through_rewrite(self):
         """The model name must survive the endpoint rewrite."""
