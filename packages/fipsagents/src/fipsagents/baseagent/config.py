@@ -116,6 +116,19 @@ class LimitsConfig(BaseModel):
     max_cost_per_turn_usd: float | None = None
 
 
+class FallbackLLMConfig(BaseModel):
+    """A single fallback entry — fields override the parent LLMConfig."""
+
+    provider: Literal[
+        "litellm", "openai", "anthropic",
+        "bedrock", "azure",
+    ] | None = None
+    endpoint: str | None = None
+    name: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+
+
 class LLMConfig(BaseModel):
     """LLM provider and generation settings."""
 
@@ -128,6 +141,7 @@ class LLMConfig(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, gt=0)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    fallback: list[FallbackLLMConfig] = Field(default_factory=list)
 
 
 class McpServerConfig(BaseModel, extra="forbid"):

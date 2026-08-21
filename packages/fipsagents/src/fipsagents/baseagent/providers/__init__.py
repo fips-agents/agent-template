@@ -21,20 +21,8 @@ if TYPE_CHECKING:
 __all__ = ["LLMProvider", "create_provider"]
 
 
-def create_provider(config: LLMConfig) -> LLMProvider:
-    """Instantiate the provider backend for the given config.
-
-    The ``bedrock`` and ``azure`` provider values are deprecated — they
-    route through the OpenAI provider pointed at the adapter sidecar.
-    Use ``provider: litellm`` with LiteLLM's model-name prefixes instead.
-
-    Raises
-    ------
-    LLMError
-        If the provider's SDK is not installed.
-    ValueError
-        If ``config.provider`` is not recognized.
-    """
+def _create_single_provider(config: LLMConfig) -> LLMProvider:
+    """Create one provider backend from a config (no fallback handling)."""
     import warnings
 
     from fipsagents.baseagent.llm import LLMError
@@ -81,3 +69,33 @@ def create_provider(config: LLMConfig) -> LLMProvider:
         f"Unknown LLM provider: {provider!r}. "
         f"Valid values: litellm, openai, anthropic"
     )
+
+
+def create_provider(config: LLMConfig) -> LLMProvider:
+    """Instantiate the provider backend for the given config.
+
+    When ``config.fallback`` is non-empty, wraps the primary provider
+    and each fallback in a :class:`FallbackProvider` that tries them
+    in order on retriable failures.
+    """
+    primary = _create_single_provider(config)
+
+    if not config.fallback:
+        return primary
+
+    fallback_providers: list[LLMProvider] = []
+    for fb in config.fallback:
+        fb_config = config.model_copy(update={
+            k: v for k, v in {
+                "provider": fb.provider,
+                "endpoint": fb.endpoint,
+                "name": fb.name,
+                "temperature": fb.temperature,
+                "max_tokens": fb.max_tokens,
+            }.items() if v is not None
+        })
+        fb_config = fb_config.model_copy(update={"fallback": []})
+        fallback_providers.append(_create_single_provider(fb_config))
+
+    from fipsagents.baseagent.providers._fallback import FallbackProvider
+    return FallbackProvider(primary, fallback_providers)
