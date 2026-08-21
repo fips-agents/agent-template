@@ -258,9 +258,9 @@ class BaseAgent(abc.ABC):
         )
 
         # 3. LLM client
-        #    For off-platform providers, the adapter sidecar translates
-        #    requests from OpenAI wire format to the provider's native API.
-        #    Rewrite the endpoint to the sidecar before constructing the client.
+        #    Native providers (openai, litellm, anthropic) are handled
+        #    directly by the provider backend.  Legacy providers (bedrock,
+        #    azure) route through the adapter sidecar for backward compat.
         effective_model_cfg = self.config.model
         if self.config.model.provider in _OFF_PLATFORM_PROVIDERS:
             if self.config.model.endpoint is not None:
@@ -276,7 +276,7 @@ class BaseAgent(abc.ABC):
             )
             logger.info(
                 "Provider=%s — routing LLM traffic through adapter "
-                "sidecar at %s",
+                "sidecar at %s (deprecated: use provider=litellm instead)",
                 self.config.model.provider,
                 _ADAPTER_ENDPOINT,
             )

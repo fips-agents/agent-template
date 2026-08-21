@@ -1,18 +1,17 @@
-"""LLM client for BaseAgent — async wrappers around the OpenAI SDK.
+"""LLM client for BaseAgent — multi-provider async LLM communication.
 
-Two endpoint families are supported:
+Three provider backends are supported via ``model.provider`` in
+``agent.yaml``:
 
-- **Chat completions** (``/v1/chat/completions``) — the default. Provides
-  ``call_model``, ``call_model_json``, ``call_model_stream``, and
-  ``call_model_validated``.
-- **Responses** (``/v1/responses``) — opt-in via ``platform.enabled`` in
-  ``agent.yaml``. Provides ``call_model_responses``,
-  ``call_model_responses_stream``, and ``moderate``. Delegates MCP
-  orchestration, shield enforcement, and (optionally) moderation
-  classification to OGX (LlamaStack rebrand) server-side.
+- ``openai`` — direct ``AsyncOpenAI`` (vLLM, LlamaStack, llm-d, OpenAI)
+- ``litellm`` — LiteLLM proxy (100+ providers via one dependency)
+- ``anthropic`` — direct ``AsyncAnthropic`` (native Anthropic features)
 
-All methods are async.  All LLM communication goes through the OpenAI SDK.
-Any OpenAI-compatible endpoint (vLLM, LlamaStack, llm-d) works out of the box.
+Additionally, **platform mode** (``platform.enabled``) opts into OGX's
+``/v1/responses`` endpoint for server-side orchestration. Platform mode
+always uses the OpenAI SDK regardless of the chat-completions provider.
+
+All methods are async.
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from fipsagents.baseagent.config import LLMConfig, PlatformConfig, PlatformMcpServer
+from fipsagents.baseagent.providers._base import LLMProvider
 from fipsagents.baseagent.events import (
     ContentDelta,
     GuardrailFiredEvent,
@@ -293,7 +293,12 @@ class ModerationResult:
 
 
 class LLMClient:
-    """Async LLM client backed by the OpenAI SDK.
+    """Multi-provider async LLM client.
+
+    Delegates chat-completions work to a :class:`LLMProvider` backend
+    selected by ``config.provider`` (``openai``, ``litellm``, or
+    ``anthropic``).  Higher-level methods — validated retry, content-only
+    streaming, platform/responses — live here.
 
     Parameters
     ----------
@@ -304,8 +309,10 @@ class LLMClient:
         Optional :class:`PlatformConfig`. When set with
         ``platform.enabled=True``, the client lazily creates a second
         ``AsyncOpenAI`` pointed at ``platform.endpoint`` for the
-        Responses API and moderations methods. The chat-completions
-        client and endpoint are unchanged.
+        Responses API and moderations methods.
+    provider:
+        Optional pre-built provider.  When ``None`` (the default), one is
+        created via :func:`create_provider` from *config*.
     """
 
     def __init__(
@@ -313,14 +320,21 @@ class LLMClient:
         config: LLMConfig,
         *,
         platform: PlatformConfig | None = None,
+        provider: LLMProvider | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
-        self._client = AsyncOpenAI(
-            base_url=config.endpoint or None,
-            api_key=os.environ.get("OPENAI_API_KEY", "not-required"),
-        )
+        if provider is not None:
+            self._provider = provider
+        else:
+            from fipsagents.baseagent.providers import create_provider
+            self._provider = create_provider(config)
         self._platform_client: AsyncOpenAI | None = None
+
+    @property
+    def provider(self) -> LLMProvider:
+        """The active provider backend."""
+        return self._provider
 
     def _require_platform(self) -> AsyncOpenAI:
         """Return (lazily building) the AsyncOpenAI client for the platform endpoint."""
@@ -335,33 +349,6 @@ class LLMClient:
                 api_key=os.environ.get("OPENAI_API_KEY", "not-required"),
             )
         return self._platform_client
-
-    # -- internal helpers ---------------------------------------------------
-
-    def _base_kwargs(self, **overrides: Any) -> dict[str, Any]:
-        """Build the kwargs dict that every completion call starts from."""
-        # Strip legacy litellm provider prefixes (e.g. "openai/model" -> "model")
-        model_name = self._config.name
-        if "/" in model_name:
-            prefix = model_name.split("/", 1)[0].lower()
-            if prefix in ("openai", "vllm", "llamastack"):
-                model_name = model_name.split("/", 1)[1]
-        kwargs: dict[str, Any] = {
-            "model": model_name,
-            "temperature": self._config.temperature,
-            "max_tokens": self._config.max_tokens,
-        }
-        kwargs.update(overrides)
-        return kwargs
-
-    async def _acompletion(self, **kwargs: Any) -> Any:
-        """Call the OpenAI chat completions API and translate exceptions."""
-        try:
-            return await self._client.chat.completions.create(**kwargs)
-        except Exception as exc:
-            raise LLMError(
-                f"LLM call failed ({type(exc).__name__}): {exc}"
-            ) from exc
 
     # -- public API ---------------------------------------------------------
 
@@ -381,18 +368,14 @@ class LLMClient:
         tools:
             Optional list of tool schemas for function calling.
         **kwargs:
-            Extra keyword arguments forwarded to the chat completions API.
+            Extra keyword arguments forwarded to the provider.
 
         Returns
         -------
         ModelResponse:
             Wrapper with ``.content``, ``.tool_calls``, and ``.raw``.
         """
-        call_kwargs = self._base_kwargs(**kwargs)
-        call_kwargs["messages"] = messages
-        if tools is not None:
-            call_kwargs["tools"] = tools
-        raw = await self._acompletion(**call_kwargs)
+        raw = await self._provider.complete(messages, tools=tools, **kwargs)
         return ModelResponse(raw)
 
     async def call_model_json(
@@ -419,15 +402,11 @@ class LLMClient:
         tools:
             Optional tool schemas for function calling.
         **kwargs:
-            Extra keyword arguments forwarded to the chat completions API.
+            Extra keyword arguments forwarded to the provider.
         """
-        response_format = _schema_to_response_format(schema)
-        call_kwargs = self._base_kwargs(**kwargs)
-        call_kwargs["messages"] = messages
-        call_kwargs["response_format"] = response_format
-        if tools is not None:
-            call_kwargs["tools"] = tools
-        raw = await self._acompletion(**call_kwargs)
+        raw = await self._provider.complete_json(
+            messages, schema, tools=tools, **kwargs
+        )
         content = raw.choices[0].message.content
         if content is None:
             raise LLMError(
@@ -455,7 +434,7 @@ class LLMClient:
         tools:
             Optional tool schemas for function calling.
         **kwargs:
-            Extra keyword arguments forwarded to the chat completions API.
+            Extra keyword arguments forwarded to the provider.
         """
         async for chunk in self.call_model_stream_raw(
             messages, tools=tools, **kwargs
@@ -490,30 +469,12 @@ class LLMClient:
         tools:
             Optional tool schemas for function calling.
         **kwargs:
-            Extra keyword arguments forwarded to the chat completions API.
+            Extra keyword arguments forwarded to the provider.
         """
-        call_kwargs = self._base_kwargs(**kwargs)
-        call_kwargs["messages"] = messages
-        call_kwargs["stream"] = True
-        # Opt into vLLM/OpenAI usage chunk on the terminal stream event so
-        # the server's cost-tracking accumulator sees prompt/completion
-        # tokens. setdefault keeps caller-supplied stream_options intact.
-        call_kwargs.setdefault("stream_options", {"include_usage": True})
-        if tools is not None:
-            call_kwargs["tools"] = tools
-        try:
-            response = await self._client.chat.completions.create(**call_kwargs)
-        except Exception as exc:
-            raise LLMError(
-                f"LLM streaming call failed ({type(exc).__name__}): {exc}"
-            ) from exc
-        try:
-            async for chunk in response:
-                yield chunk
-        except Exception as exc:
-            raise LLMError(
-                f"Error during streaming iteration ({type(exc).__name__}): {exc}"
-            ) from exc
+        async for chunk in self._provider.stream_raw(
+            messages, tools=tools, **kwargs
+        ):
+            yield chunk
 
     async def call_model_validated(
         self,

@@ -310,9 +310,23 @@ To deploy a ClamAV sidecar for virus scanning, set `files.virusScanner.enabled=t
 
 To let the LLM deliberately re-read an upload (rather than relying on automatic injection), add a `tools/attached_file.py` with an `llm_only` `@tool` that takes a `file_id` and returns the extracted text. The framework's `FileStore.get_extracted_text(file_id)` is the canonical lookup; reach the configured store via `agent.config.server.files` (see [`fipsagents.server.files.create_file_store`](https://github.com/fips-agents/agent-template/blob/main/packages/fipsagents/src/fipsagents/server/files.py)).
 
+## LLM Provider Choice
+
+BaseAgent supports three LLM provider backends, selectable via `model.provider` in `agent.yaml`:
+
+| Provider | Install extra | Use when |
+|----------|--------------|----------|
+| `litellm` (default) | `fipsagents[litellm]` | 100+ providers via one dependency (Anthropic, Bedrock, Azure, Vertex, Ollama, etc.) |
+| `openai` | (core dep) | Direct `AsyncOpenAI` for any OpenAI-compatible endpoint (vLLM, LlamaStack, llm-d) |
+| `anthropic` | `fipsagents[anthropic]` | Direct `AsyncAnthropic` for native Anthropic features (extended thinking, prompt caching) |
+
+Legacy values `bedrock` and `azure` still work via the adapter sidecar but are deprecated; use `litellm` with provider-prefixed model names instead (e.g. `bedrock/anthropic.claude-3-sonnet`).
+
 ## Dependencies
 
-- **openai** -- LLM client (async SDK for OpenAI-compatible endpoints)
+- **openai** -- LLM client types and OpenAI provider
+- **litellm** (optional) -- multi-provider LLM routing (default provider backend)
+- **anthropic** (optional) -- native Anthropic SDK
 - **fastmcp** (v3) -- MCP client
 - **pydantic** -- Config validation and structured output schemas
 - **pyyaml** -- Config parsing

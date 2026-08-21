@@ -120,6 +120,12 @@ chunking = [
 graph = [
     "asyncpg>=0.29.0",
 ]
+litellm = [
+    "litellm>=1.83.0",
+]
+anthropic = [
+    "anthropic>=0.40",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
